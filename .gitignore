@@ -1,0 +1,42 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Runtime state and collected data
+data/
+accounts.json
+runtime_diagnostics.json
+notification_state.json
+notification_status.json
+popup_state.json
+notifier_status.json
+notifier_stop.json
+capacity_watch_status.json
+nightly_scan_status.json
+nightly_scan_stop.json
+notifications/
+reports/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+# Search snapshots contain real project paths; keep every SQLite sidecar private.
+search_index.db*
+*.log
+*.lock
+
+# Generated packages
+dist/
+build/
+*.egg-info/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

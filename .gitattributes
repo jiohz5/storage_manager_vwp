@@ -1,0 +1,9 @@
+* text=auto
+
+# Keep source and RHEL launchers portable when the repository is checked out on Windows.
+*.py text eol=lf
+*.csh text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
