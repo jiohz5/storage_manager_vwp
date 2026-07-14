@@ -272,7 +272,7 @@ git ls-files | Select-String -Pattern '\.(db|log|lock)$|notifications/'
 
 Expected: only source, tests, specs/plans, and docs are tracked; no runtime database, log, lock, or notification outbox file appears.
 
-- [ ] **Step 4: Commit documentation and push directly to main**
+- [x] **Step 4: Commit documentation and push directly to main**
 
 ```powershell
 git add README.md VWP_ACCEPTANCE.md docs/superpowers/plans/2026-07-15-explicit-full-exit.md
@@ -280,7 +280,7 @@ git commit -m "Document explicit full exit workflow"
 git push origin main
 ```
 
-- [ ] **Step 5: Verify remote and provide VS Code test commands**
+- [x] **Step 5: Verify remote and provide VS Code test commands**
 
 ```powershell
 git status -sb
