@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QHeaderView, QMessageBox
 
 from storage_manager.collector import DetailScanResult, StorageBackend, UsageSnapshot
@@ -42,6 +43,11 @@ class GuiI18nTests(unittest.TestCase):
                 return True
             time.sleep(0.01)
         return False
+
+    def dispose_window(self, window):
+        window._explicit_exit = True
+        window.close()
+        self.app.processEvents()
 
     def test_first_run_directory_selection_saves_global_pointer(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -139,6 +145,9 @@ class GuiI18nTests(unittest.TestCase):
             ):
                 window = MainWindow(data_dir, backend=backend)
             try:
+                self.assertEqual(window.file_menu.title(), "파일")
+                self.assertEqual(window.action_minimize.text(), "최소화")
+                self.assertEqual(window.action_full_exit.text(), "전체 종료")
                 self.assertEqual(window.tabs.tabText(0), "대시보드")
                 self.assertEqual(window.tabs.tabText(2), "추적")
                 self.assertTrue(window.action_ko.isChecked())
@@ -188,6 +197,9 @@ class GuiI18nTests(unittest.TestCase):
                 self.assertIn("project_b", [item.name for item in window.store.accounts])
 
                 window.change_language("en")
+                self.assertEqual(window.file_menu.title(), "File")
+                self.assertEqual(window.action_minimize.text(), "Minimize")
+                self.assertEqual(window.action_full_exit.text(), "Full Exit")
                 self.assertEqual(window.tabs.tabText(0), "Dashboard")
                 self.assertEqual(window.tabs.tabText(2), "Tracking")
                 self.assertEqual(window.btn_add.text(), "Add")
@@ -197,7 +209,7 @@ class GuiI18nTests(unittest.TestCase):
                 self.assertIn("Daily Report", window.report_text.toPlainText())
                 self.assertEqual(load_store(data_dir).settings.language, "en")
             finally:
-                window.close()
+                self.dispose_window(window)
 
     def test_account_autofill_inode_help_and_compact_tracking_layout(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -241,9 +253,9 @@ class GuiI18nTests(unittest.TestCase):
                 self.assertFalse(hasattr(window, "btn_tracking_restart"))
                 self.assertFalse(hasattr(window, "btn_notifier_restart"))
             finally:
-                window.close()
+                self.dispose_window(window)
 
-    def test_visible_window_close_explains_background_tray_and_cron(self):
+    def test_window_close_minimizes_without_exiting(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = Path(temp) / "data"
             save_store(data_dir, AccountStore(Settings(), []))
@@ -252,24 +264,17 @@ class GuiI18nTests(unittest.TestCase):
                 return_value=CronStatus(True, True),
             ):
                 window = MainWindow(data_dir)
-            window.show()
-            self.app.processEvents()
-            with patch(
-                "storage_manager.gui.read_notifier_status",
-                return_value={"state": "running", "pid": 123},
-            ), patch(
-                "storage_manager.gui.QMessageBox.information"
-            ) as information:
+            try:
+                self.assertTrue(window.windowFlags() & Qt.WindowMinimizeButtonHint)
+                self.assertFalse(window.windowFlags() & Qt.WindowCloseButtonHint)
+                window.show()
+                self.app.processEvents()
                 window.close()
-
-            self.assertTrue(information.called)
-            message = str(information.call_args.args[2])
-            self.assertIn("GUI만 종료", message)
-            self.assertIn("트레이", message)
-            self.assertIn("디스크 아이콘", message)
-            self.assertIn("다시 실행", message)
-            self.assertIn("cron", message)
-            self.assertIn("GUI 없이도 계속", message)
+                self.app.processEvents()
+                self.assertFalse(window._closing)
+                self.assertTrue(window.isMinimized())
+            finally:
+                self.dispose_window(window)
 
     def test_late_df_result_after_close_start_does_not_write_database(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -299,7 +304,7 @@ class GuiI18nTests(unittest.TestCase):
                     window.on_df_result("id-a", snapshot)
                 upsert.assert_not_called()
             finally:
-                window.close()
+                self.dispose_window(window)
 
     def test_admin_pin_reveals_and_hides_search_tab_for_current_session(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -337,7 +342,7 @@ class GuiI18nTests(unittest.TestCase):
                 window.lock_admin_mode()
                 self.assertEqual(window.tabs.indexOf(window.search_tab), -1)
             finally:
-                window.close()
+                self.dispose_window(window)
 
     def test_search_tab_shows_total_database_and_selected_account_size(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -401,7 +406,7 @@ class GuiI18nTests(unittest.TestCase):
                 finally:
                     index.close()
             finally:
-                window.close()
+                self.dispose_window(window)
 
     def test_search_status_refresh_is_dispatched_to_worker(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -422,7 +427,7 @@ class GuiI18nTests(unittest.TestCase):
                     "SearchStatusWorker",
                 )
             finally:
-                window.close()
+                self.dispose_window(window)
 
     def test_stale_or_locked_search_results_do_not_repopulate_table(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -452,7 +457,7 @@ class GuiI18nTests(unittest.TestCase):
                 window.on_search_results(4, "id-a", str(account_path), rows)
                 self.assertEqual(window.table_search.rowCount(), 0)
             finally:
-                window.close()
+                self.dispose_window(window)
 
 
 if __name__ == "__main__":

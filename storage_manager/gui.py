@@ -492,12 +492,15 @@ class MainWindow(QMainWindow):
         self.search_request_id = 0
         self.search_status_request_id = 0
         self._closing = False
+        self._explicit_exit = False
 
         for account in self.store.accounts:
             self.db.backfill_account(account.account_id, account.name, account.path)
 
+        self._configure_window_controls()
         self.resize(1280, 780)
         self._apply_style()
+        self._build_file_menu()
         self._build_language_menu()
         self._build_admin_menu()
 
@@ -569,6 +572,25 @@ class MainWindow(QMainWindow):
 
     def t(self, key: str, **values: object) -> str:
         return tr(self.language, key, **values)
+
+    def _configure_window_controls(self) -> None:
+        flags = self.windowFlags()
+        flags |= Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+        flags &= ~Qt.WindowCloseButtonHint
+        self.setWindowFlags(flags)
+
+    def _build_file_menu(self) -> None:
+        self.file_menu = self.menuBar().addMenu("")
+        self.action_minimize = QAction(self)
+        self.action_full_exit = QAction(self)
+        self.action_minimize.triggered.connect(self.minimize_window)
+        self.action_full_exit.triggered.connect(lambda: self.request_full_exit())
+        self.file_menu.addAction(self.action_minimize)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.action_full_exit)
+
+    def minimize_window(self) -> None:
+        self.showMinimized()
 
     def _build_language_menu(self) -> None:
         self.language_menu = self.menuBar().addMenu("")
@@ -858,29 +880,10 @@ class MainWindow(QMainWindow):
             self.lbl_search_results.setText(self.t("search.failed", error=error))
 
     def closeEvent(self, event) -> None:
-        if self.isVisible():
-            notifier_status = read_notifier_status(self.data_dir)
-            notifier_active = (
-                str(notifier_status.get("state") or "never")
-                in ACTIVE_NOTIFIER_STATES
-            )
-            cron_active = bool(
-                self.cron_status.installed
-                or self.cron_status.line
-                or self.cron_status.capacity_line
-                or self.cron_status.health_line
-            )
-            QMessageBox.information(
-                self,
-                self.t("close.title"),
-                self.t(
-                    "close.message",
-                    cron=self.t("close.cron_on" if cron_active else "close.cron_off"),
-                    tray=self.t(
-                        "close.tray_on" if notifier_active else "close.tray_off"
-                    ),
-                ),
-            )
+        if not self._explicit_exit:
+            event.ignore()
+            self.showMinimized()
+            return
         self._closing = True
         self.search_request_id += 1
         self.search_status_request_id += 1
@@ -1325,6 +1328,9 @@ class MainWindow(QMainWindow):
 
     def _retranslate_ui(self) -> None:
         self.setWindowTitle(self.t("app.title"))
+        self.file_menu.setTitle(self.t("menu.file"))
+        self.action_minimize.setText(self.t("menu.minimize"))
+        self.action_full_exit.setText(self.t("menu.full_exit"))
         self.language_menu.setTitle(self.t("menu.language"))
         self.action_ko.setText(self.t("language.ko"))
         self.action_en.setText(self.t("language.en"))
