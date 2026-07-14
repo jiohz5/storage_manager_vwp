@@ -276,6 +276,131 @@ class GuiI18nTests(unittest.TestCase):
             finally:
                 self.dispose_window(window)
 
+    def test_full_exit_cancel_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(True, True),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                with patch(
+                    "storage_manager.gui.QMessageBox.question",
+                    return_value=QMessageBox.No,
+                ), patch("storage_manager.gui.remove_cron") as remove_cron_mock, patch(
+                    "storage_manager.gui.remove_notifier_autostart"
+                ) as remove_autostart_mock, patch(
+                    "storage_manager.gui.request_notifier_stop"
+                ) as stop_notifier, patch(
+                    "storage_manager.gui.request_scan_stop"
+                ) as stop_scan:
+                    window.request_full_exit()
+
+                remove_cron_mock.assert_not_called()
+                remove_autostart_mock.assert_not_called()
+                stop_notifier.assert_not_called()
+                stop_scan.assert_not_called()
+                self.assertFalse(window._explicit_exit)
+                self.assertFalse(window._closing)
+            finally:
+                self.dispose_window(window)
+
+    def test_full_exit_stops_all_managed_background_activity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(True, True),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                with patch(
+                    "storage_manager.gui.QMessageBox.question",
+                    return_value=QMessageBox.Yes,
+                ), patch("storage_manager.gui.remove_cron") as remove_cron_mock, patch(
+                    "storage_manager.gui.remove_notifier_autostart"
+                ) as remove_autostart_mock, patch(
+                    "storage_manager.gui.read_notifier_status",
+                    return_value={"state": "running", "run_id": "notify-a"},
+                ), patch(
+                    "storage_manager.gui.request_notifier_stop",
+                    return_value=True,
+                ) as stop_notifier, patch(
+                    "storage_manager.gui.read_scan_status",
+                    return_value={"state": "running", "run_id": "scan-a"},
+                ), patch(
+                    "storage_manager.gui.request_scan_stop",
+                    return_value=True,
+                ) as stop_scan:
+                    window.request_full_exit()
+
+                remove_cron_mock.assert_called_once_with()
+                remove_autostart_mock.assert_called_once_with()
+                stop_notifier.assert_called_once_with(data_dir)
+                stop_scan.assert_called_once_with(data_dir)
+                self.assertTrue(window._explicit_exit)
+                self.assertTrue(window._closing)
+            finally:
+                if not window._closing:
+                    self.dispose_window(window)
+
+    def test_full_exit_failure_keeps_gui_open(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(True, True),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                with patch(
+                    "storage_manager.gui.QMessageBox.question",
+                    return_value=QMessageBox.Yes,
+                ), patch(
+                    "storage_manager.gui.remove_cron",
+                    side_effect=RuntimeError("crontab denied"),
+                ) as remove_cron_mock, patch(
+                    "storage_manager.gui.remove_notifier_autostart",
+                    return_value=True,
+                ) as remove_autostart_mock, patch(
+                    "storage_manager.gui.read_notifier_status",
+                    return_value={"state": "running", "run_id": "notify-a"},
+                ), patch(
+                    "storage_manager.gui.request_notifier_stop",
+                    side_effect=OSError("notifier stop denied"),
+                ) as stop_notifier, patch(
+                    "storage_manager.gui.read_scan_status",
+                    return_value={"state": "running", "run_id": "scan-a"},
+                ), patch(
+                    "storage_manager.gui.request_scan_stop",
+                    return_value=True,
+                ) as stop_scan, patch.object(
+                    window, "refresh_tracking"
+                ) as refresh_tracking, patch(
+                    "storage_manager.gui.QMessageBox.critical"
+                ) as critical:
+                    window.request_full_exit()
+
+                remove_cron_mock.assert_called_once_with()
+                remove_autostart_mock.assert_called_once_with()
+                stop_notifier.assert_called_once_with(data_dir)
+                stop_scan.assert_called_once_with(data_dir)
+                refresh_tracking.assert_called_once_with(check_cron=True)
+                self.assertTrue(critical.called)
+                message = str(critical.call_args.args[2])
+                self.assertIn("완료", message)
+                self.assertIn("실패", message)
+                self.assertIn("crontab denied", message)
+                self.assertIn("notifier stop denied", message)
+                self.assertFalse(window._explicit_exit)
+                self.assertFalse(window._closing)
+            finally:
+                self.dispose_window(window)
+
     def test_late_df_result_after_close_start_does_not_write_database(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

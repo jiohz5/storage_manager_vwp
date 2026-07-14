@@ -42,6 +42,30 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "menu.full_exit": {"ko": "전체 종료", "en": "Full Exit"},
     "menu.language": {"ko": "언어", "en": "Language"},
     "menu.admin": {"ko": "관리자", "en": "Administrator"},
+    "exit.title": {"ko": "스토리지 매니저 전체 종료", "en": "Full exit Storage Manager"},
+    "exit.confirm": {
+        "ko": "전체 종료하면 다음 동작이 모두 중지됩니다.\n\n- 15분 용량 감시 cron\n- 22시 야간 스캔 cron\n- 07시 건강 점검 cron\n- 로그인 시 팝업 알림 자동 시작\n- 현재 실행 중인 팝업 알림기 및 상세 스캔\n\n설정과 수집 데이터는 삭제되지 않습니다. 계속할까요?",
+        "en": "Full Exit stops all of the following:\n\n- 15-minute capacity cron\n- 22:00 nightly scan cron\n- 07:00 health-check cron\n- popup notifier login autostart\n- active popup notifier and detail scan\n\nSettings and collected data are not deleted. Continue?",
+    },
+    "exit.failed.title": {"ko": "전체 종료 미완료", "en": "Full exit incomplete"},
+    "exit.failed.message": {
+        "ko": "완료:\n{completed}\n\n실패:\n{failed}\n\n안전하게 종료되지 않았으므로 GUI를 유지합니다.",
+        "en": "Completed:\n{completed}\n\nFailed:\n{failed}\n\nThe GUI remains open because full exit did not complete safely.",
+    },
+    "exit.none": {"ko": "없음", "en": "none"},
+    "exit.step.cron": {"ko": "관리 cron 해제", "en": "Remove managed cron"},
+    "exit.step.autostart": {
+        "ko": "팝업 알림 자동 시작 해제",
+        "en": "Remove popup notifier autostart",
+    },
+    "exit.step.notifier": {
+        "ko": "팝업 알림기 안전 중지",
+        "en": "Safely stop popup notifier",
+    },
+    "exit.step.scan": {
+        "ko": "야간/상세 스캔 안전 중지",
+        "en": "Safely stop nightly/detail scan",
+    },
     "admin.title": {"ko": "관리자 모드", "en": "Administrator mode"},
     "admin.prompt": {"ko": "관리자 PIN을 입력하세요.", "en": "Enter the administrator PIN."},
     "admin.unlock": {"ko": "관리자 모드 열기", "en": "Unlock administrator mode"},
@@ -294,27 +318,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "tracking.notifier.autostart_installed": {"ko": "자동 시작을 설치했습니다: {path}", "en": "Autostart installed: {path}"},
     "tracking.notifier.autostart_removed": {"ko": "자동 시작을 해제했습니다.", "en": "Autostart removed."},
     "tracking.notifier.autostart_missing": {"ko": "설치된 자동 시작이 없습니다.", "en": "Autostart is not installed."},
-    "close.title": {"ko": "백그라운드 동작 안내", "en": "Background activity"},
-    "close.message": {
-        "ko": "X를 눌러 관리 GUI만 종료합니다.\n{cron}\n{tray}",
-        "en": "Closing with X exits only the management GUI.\n{cron}\n{tray}",
-    },
-    "close.cron_on": {
-        "ko": "등록된 cron 수집은 GUI 없이도 계속 실행됩니다.",
-        "en": "Installed cron collection continues without the GUI.",
-    },
-    "close.cron_off": {
-        "ko": "등록된 cron 수집은 없습니다.",
-        "en": "No managed cron collection is installed.",
-    },
-    "close.tray_on": {
-        "ko": "독립 트레이 팝업 알림기는 계속 실행됩니다. MATE 패널의 디스크 아이콘에서 확인할 수 있고, 관리 GUI는 run.csh로 다시 실행할 수 있습니다.",
-        "en": "The independent tray popup notifier keeps running. Check the disk icon in the MATE panel; run run.csh to open the management GUI again.",
-    },
-    "close.tray_off": {
-        "ko": "현재 실행 중인 트레이 팝업 알림기는 없어 팝업은 오지 않습니다. 관리 GUI는 run.csh로 다시 실행할 수 있습니다.",
-        "en": "The tray popup notifier is not running, so popup alerts will not appear. Run run.csh to open the management GUI again.",
-    },
     "trend.account": {"ko": "계정", "en": "Account"},
     "trend.largest": {"ko": "가장 큰 증가량: -", "en": "Largest growth: -"},
     "trend.waiting": {

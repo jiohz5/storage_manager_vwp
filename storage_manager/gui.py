@@ -592,6 +592,63 @@ class MainWindow(QMainWindow):
     def minimize_window(self) -> None:
         self.showMinimized()
 
+    def _run_full_exit_steps(self) -> Tuple[List[str], List[str]]:
+        completed: List[str] = []
+        failed: List[str] = []
+
+        def run_step(key, operation) -> None:
+            label = self.t(key)
+            try:
+                operation()
+                completed.append(label)
+            except Exception as exc:
+                failed.append(f"{label}: {exc}")
+
+        run_step("exit.step.cron", remove_cron)
+        run_step("exit.step.autostart", remove_notifier_autostart)
+
+        def stop_notifier_if_active() -> None:
+            status = read_notifier_status(self.data_dir)
+            if str(status.get("state") or "never") in ACTIVE_NOTIFIER_STATES:
+                request_notifier_stop(self.data_dir)
+
+        def stop_scan_if_active() -> None:
+            status = read_scan_status(self.data_dir)
+            if str(status.get("state") or "never") in ACTIVE_STATES:
+                request_scan_stop(self.data_dir)
+
+        run_step("exit.step.notifier", stop_notifier_if_active)
+        run_step("exit.step.scan", stop_scan_if_active)
+        return completed, failed
+
+    def request_full_exit(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            self.t("exit.title"),
+            self.t("exit.confirm"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        completed, failed = self._run_full_exit_steps()
+        if failed:
+            QMessageBox.critical(
+                self,
+                self.t("exit.failed.title"),
+                self.t(
+                    "exit.failed.message",
+                    completed="\n".join(completed) or self.t("exit.none"),
+                    failed="\n".join(failed),
+                ),
+            )
+            self.refresh_tracking(check_cron=True)
+            return
+
+        self._explicit_exit = True
+        self.close()
+
     def _build_language_menu(self) -> None:
         self.language_menu = self.menuBar().addMenu("")
         self.language_group = QActionGroup(self)
