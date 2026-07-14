@@ -266,6 +266,7 @@ class GuiI18nTests(unittest.TestCase):
                 window = MainWindow(data_dir)
             try:
                 self.assertTrue(window.windowFlags() & Qt.WindowMinimizeButtonHint)
+                self.assertTrue(window.windowFlags() & Qt.WindowMaximizeButtonHint)
                 self.assertFalse(window.windowFlags() & Qt.WindowCloseButtonHint)
                 window.show()
                 self.app.processEvents()
@@ -400,6 +401,94 @@ class GuiI18nTests(unittest.TestCase):
                 self.assertFalse(window._closing)
             finally:
                 self.dispose_window(window)
+
+    def test_full_exit_rejects_unrecorded_stop_requests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(True, True),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                with patch(
+                    "storage_manager.gui.QMessageBox.question",
+                    return_value=QMessageBox.Yes,
+                ), patch("storage_manager.gui.remove_cron"), patch(
+                    "storage_manager.gui.remove_notifier_autostart"
+                ), patch(
+                    "storage_manager.gui.read_notifier_status",
+                    return_value={"state": "running", "run_id": "notify-a"},
+                ), patch(
+                    "storage_manager.gui.request_notifier_stop",
+                    return_value=False,
+                ) as stop_notifier, patch(
+                    "storage_manager.gui.read_scan_status",
+                    return_value={"state": "running", "run_id": "scan-a"},
+                ), patch(
+                    "storage_manager.gui.request_scan_stop",
+                    return_value=False,
+                ) as stop_scan, patch.object(
+                    window, "refresh_tracking"
+                ), patch(
+                    "storage_manager.gui.QMessageBox.critical"
+                ) as critical:
+                    window.request_full_exit()
+
+                stop_notifier.assert_called_once_with(data_dir)
+                stop_scan.assert_called_once_with(data_dir)
+                self.assertTrue(critical.called)
+                self.assertIn("안전 중지 요청", str(critical.call_args.args[2]))
+                self.assertFalse(window._explicit_exit)
+                self.assertFalse(window._closing)
+            finally:
+                if not window._closing:
+                    self.dispose_window(window)
+
+    def test_full_exit_keeps_gui_open_while_scan_status_is_starting(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(True, True),
+            ):
+                window = MainWindow(data_dir)
+            window.launch_pending_pid = 4321
+            try:
+                with patch(
+                    "storage_manager.gui.QMessageBox.question",
+                    return_value=QMessageBox.Yes,
+                ), patch("storage_manager.gui.remove_cron"), patch(
+                    "storage_manager.gui.remove_notifier_autostart"
+                ), patch(
+                    "storage_manager.gui.read_notifier_status",
+                    return_value={"state": "never"},
+                ), patch(
+                    "storage_manager.gui.read_scan_status",
+                    return_value={"state": "never", "pid": 0, "run_id": ""},
+                ), patch(
+                    "storage_manager.gui.process_is_alive",
+                    return_value=True,
+                ), patch(
+                    "storage_manager.gui.request_scan_stop",
+                    return_value=False,
+                ) as stop_scan, patch.object(
+                    window, "refresh_tracking"
+                ), patch(
+                    "storage_manager.gui.QMessageBox.critical"
+                ) as critical:
+                    window.request_full_exit()
+
+                stop_scan.assert_called_once_with(data_dir)
+                self.assertTrue(critical.called)
+                self.assertIn("안전 중지 요청", str(critical.call_args.args[2]))
+                self.assertFalse(window._explicit_exit)
+                self.assertFalse(window._closing)
+            finally:
+                if not window._closing:
+                    self.dispose_window(window)
 
     def test_late_df_result_after_close_start_does_not_write_database(self):
         with tempfile.TemporaryDirectory() as temp:

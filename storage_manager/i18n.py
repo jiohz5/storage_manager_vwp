@@ -53,6 +53,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "en": "Completed:\n{completed}\n\nFailed:\n{failed}\n\nThe GUI remains open because full exit did not complete safely.",
     },
     "exit.none": {"ko": "없음", "en": "none"},
+    "exit.stop_request_failed": {
+        "ko": "안전 중지 요청을 기록하지 못했습니다. 잠시 후 다시 시도하세요.",
+        "en": "The safe-stop request could not be recorded. Try again shortly.",
+    },
     "exit.step.cron": {"ko": "관리 cron 해제", "en": "Remove managed cron"},
     "exit.step.autostart": {
         "ko": "팝업 알림 자동 시작 해제",

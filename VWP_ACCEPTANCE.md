@@ -182,12 +182,17 @@ data/reports/latest_cleanup.txt
 
 - MATE 트레이 팝업이 표시됨
 - `data/notifications/`에 같은 알림의 UTF-8 감사 JSON이 생성됨
-- 메인 GUI를 닫아도 notifier가 트레이에 남고 새 outbox 팝업을 표시함
+- 메인 GUI를 최소화해도 notifier가 독립적으로 새 outbox 팝업을 표시함
 - DCV 재접속 후 미확인 수가 유지되고 알림 센터 확인 후 0이 됨
 - 로그아웃 중 만든 outbox가 다음 로그인 때 요약 표시됨
 - `추적` 탭에서 상태형 notifier 시작·중지와 autostart 체크·해제가 동작함
-- X 종료 안내가 GUI만 종료되고 cron/notifier는 계속됨을 명확히 표시함
-- GUI를 닫은 상태에서 `health_check.py --data-dir "$STORAGE_MANAGER_DATA_DIR"`를 실행해도 경고가 쌓임
+- 제목 표시줄에 X 닫기 버튼이 없고 최소화/최대화 버튼은 표시됨
+- `File > Minimize`와 `Alt+F4`가 실제 종료 대신 창을 최소화함
+- `File > Full Exit` 확인 창에서 취소하면 cron/notifier/scan 상태가 바뀌지 않음
+- `File > Full Exit` 확인 시 Storage Manager의 15분/22시/07시 cron만 제거되고 다른 cron은 보존됨
+- `File > Full Exit` 확인 시 notifier 자동 시작이 제거되고 실행 중 notifier/scan이 안전 종료됨
+- `File > Full Exit` 후 기존 수집 데이터와 계정 설정이 그대로 남아 있음
+- GUI를 최소화한 상태에서 `health_check.py --data-dir "$STORAGE_MANAGER_DATA_DIR"`를 실행해도 경고가 쌓임
 
 ## 9. 관리자 검색 검사
 

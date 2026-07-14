@@ -1,6 +1,9 @@
+import io
 import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -18,6 +21,7 @@ from storage_manager.scheduler import (
     cron_line,
     health_cron_line,
     install_cron,
+    run_nightly_cli,
     run_nightly_scan,
 )
 from storage_manager.search_index import SearchIndex, run_full_index, search_db_file
@@ -25,6 +29,28 @@ from storage_manager.tracking import read_scan_status
 
 
 class ReportAndSchedulerTests(unittest.TestCase):
+    def test_install_cron_cli_reports_safe_read_failure_without_traceback(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(
+            sys,
+            "argv",
+            ["nightly_scan.py", "--data-dir", temp, "--install-cron"],
+        ), patch(
+            "storage_manager.scheduler.install_cron",
+            side_effect=RuntimeError("temporary crontab read failure"),
+        ):
+            stderr = io.StringIO()
+            try:
+                with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    run_nightly_cli()
+            except RuntimeError as exc:
+                self.fail(f"RuntimeError escaped the CLI boundary: {exc}")
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(
+            stderr.getvalue(),
+            "ERROR: temporary crontab read failure\n",
+        )
+
     def test_daily_report_contains_alert_and_growth(self):
         account = Account("project_a", "/user/project_a", account_id="id-a")
         report = AccountReport(

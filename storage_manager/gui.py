@@ -610,12 +610,20 @@ class MainWindow(QMainWindow):
         def stop_notifier_if_active() -> None:
             status = read_notifier_status(self.data_dir)
             if str(status.get("state") or "never") in ACTIVE_NOTIFIER_STATES:
-                request_notifier_stop(self.data_dir)
+                requested = request_notifier_stop(self.data_dir)
+                if not requested:
+                    latest = read_notifier_status(self.data_dir)
+                    if str(latest.get("state") or "never") in ACTIVE_NOTIFIER_STATES:
+                        raise RuntimeError(self.t("exit.stop_request_failed"))
 
         def stop_scan_if_active() -> None:
-            status = read_scan_status(self.data_dir)
+            status = self._tracking_runtime_status()
             if str(status.get("state") or "never") in ACTIVE_STATES:
-                request_scan_stop(self.data_dir)
+                requested = request_scan_stop(self.data_dir)
+                if not requested:
+                    latest = self._tracking_runtime_status()
+                    if str(latest.get("state") or "never") in ACTIVE_STATES:
+                        raise RuntimeError(self.t("exit.stop_request_failed"))
 
         run_step("exit.step.notifier", stop_notifier_if_active)
         run_step("exit.step.scan", stop_scan_if_active)

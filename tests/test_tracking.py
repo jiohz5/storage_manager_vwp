@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import storage_manager.tracking as tracking
-from storage_manager.scheduler import read_cron_status, remove_cron
+from storage_manager.scheduler import install_cron, read_cron_status, remove_cron
 from storage_manager.tracking import (
     clear_scan_stop,
     launch_background_scan,
@@ -132,6 +132,53 @@ class TrackingTests(unittest.TestCase):
         payload = run_mock.call_args_list[-1].kwargs["input"]
         self.assertIn("/other/job", payload)
         self.assertNotIn("storage-manager-vwp", payload)
+
+    def test_remove_cron_does_not_overwrite_when_reread_fails(self):
+        existing = (
+            "15 1 * * * /other/job\n"
+            "0 22 * * * managed # storage-manager-vwp nightly\n"
+        )
+        responses = [
+            subprocess.CompletedProcess(["crontab", "-l"], 0, existing, ""),
+            subprocess.CompletedProcess(
+                ["crontab", "-l"],
+                1,
+                "",
+                "temporary crontab read failure",
+            ),
+            subprocess.CompletedProcess(["crontab", "-"], 0, "", ""),
+        ]
+        with patch(
+            "storage_manager.scheduler.subprocess.run",
+            side_effect=responses,
+        ) as run_mock:
+            with self.assertRaisesRegex(RuntimeError, "temporary crontab read failure"):
+                remove_cron()
+
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertNotIn(
+            ["crontab", "-"],
+            [call.args[0] for call in run_mock.call_args_list],
+        )
+
+    def test_install_cron_does_not_overwrite_when_read_fails(self):
+        responses = [
+            subprocess.CompletedProcess(
+                ["crontab", "-l"],
+                1,
+                "",
+                "temporary crontab read failure",
+            ),
+            subprocess.CompletedProcess(["crontab", "-"], 0, "", ""),
+        ]
+        with tempfile.TemporaryDirectory() as temp, patch(
+            "storage_manager.scheduler.subprocess.run",
+            side_effect=responses,
+        ) as run_mock:
+            with self.assertRaisesRegex(RuntimeError, "temporary crontab read failure"):
+                install_cron(Path(temp), "/python/bin/python3")
+
+        self.assertEqual(run_mock.call_count, 1)
 
 
 if __name__ == "__main__":

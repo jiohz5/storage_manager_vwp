@@ -946,6 +946,15 @@ def read_cron_status() -> CronStatus:
     return CronStatus(True, False)
 
 
+def _existing_crontab(result) -> str:
+    if result.returncode == 0:
+        return result.stdout
+    error = result.stderr.strip()
+    if "no crontab" in error.lower():
+        return ""
+    raise RuntimeError(error or f"crontab -l failed with exit code {result.returncode}")
+
+
 def remove_cron() -> bool:
     status = read_cron_status()
     if not status.available:
@@ -956,7 +965,7 @@ def remove_cron() -> bool:
         text=True,
         timeout=5,
     )
-    existing = result.stdout if result.returncode == 0 else ""
+    existing = _existing_crontab(result)
     lines = [line for line in existing.splitlines() if CRON_MARKER not in line]
     payload = "\n".join(lines).rstrip()
     if payload:
@@ -978,7 +987,7 @@ def install_cron(data_dir: Path, python_bin: str) -> str:
         text=True,
         timeout=5,
     )
-    existing = existing_result.stdout if existing_result.returncode == 0 else ""
+    existing = _existing_crontab(existing_result)
     lines = [line for line in existing.splitlines() if CRON_MARKER not in line]
     line = cron_line(data_dir, python_bin)
     capacity_line = capacity_cron_line(data_dir, python_bin)
@@ -1039,6 +1048,12 @@ def run_nightly_cli() -> None:
             backend=RHEL_BACKEND,
             trigger=args.trigger,
         )
-    except (ConfigError, ScanAlreadyRunning, subprocess.SubprocessError, OSError) as exc:
+    except (
+        ConfigError,
+        RuntimeError,
+        ScanAlreadyRunning,
+        subprocess.SubprocessError,
+        OSError,
+    ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

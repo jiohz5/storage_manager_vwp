@@ -30,7 +30,7 @@
 - Produces: `MainWindow._configure_window_controls()`, `MainWindow._build_file_menu()`, `MainWindow.minimize_window()`, and `_explicit_exit: bool`.
 - Consumes: existing `MainWindow._retranslate_ui()` and `tr(language, key)`.
 
-- [ ] **Step 1: Write failing window/menu tests**
+- [x] **Step 1: Write failing window/menu tests**
 
 Add `Qt` to the test imports and replace the old X-exit test with assertions equivalent to:
 
@@ -61,13 +61,13 @@ def dispose_window(self, window):
 
 Use it in all existing `finally` blocks so minimize-first behavior does not leak test windows.
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 Run: `python -m unittest tests.test_gui_i18n.GuiI18nTests.test_language_menu_switches_ui_and_persists tests.test_gui_i18n.GuiI18nTests.test_window_close_minimizes_without_exiting -v`
 
 Expected: FAIL because `file_menu`, actions, window flags, and guarded close behavior do not exist.
 
-- [ ] **Step 3: Implement the minimal native window and menu behavior**
+- [x] **Step 3: Implement the minimal native window and menu behavior**
 
 Initialize and build controls before the existing language/admin menus:
 
@@ -107,13 +107,13 @@ if not self._explicit_exit:
 
 Add `menu.file`, `menu.minimize`, and `menu.full_exit` Korean/English keys and set all three labels in `_retranslate_ui()`.
 
-- [ ] **Step 4: Run focused GUI tests and confirm GREEN**
+- [x] **Step 4: Run focused GUI tests and confirm GREEN**
 
 Run: `python -m unittest tests.test_gui_i18n.GuiI18nTests.test_language_menu_switches_ui_and_persists tests.test_gui_i18n.GuiI18nTests.test_window_close_minimizes_without_exiting -v`
 
 Expected: 2 tests pass.
 
-- [ ] **Step 5: Commit the independently usable minimize-first UI**
+- [x] **Step 5: Commit the independently usable minimize-first UI**
 
 ```powershell
 git add storage_manager/gui.py storage_manager/i18n.py tests/test_gui_i18n.py
@@ -131,7 +131,7 @@ git commit -m "Add minimize-first window controls"
 - Produces: `MainWindow.request_full_exit() -> None` and `MainWindow._run_full_exit_steps() -> tuple[list[str], list[str]]`.
 - Consumes: `remove_cron()`, `remove_notifier_autostart()`, `read_notifier_status()`, `request_notifier_stop()`, `read_scan_status()`, `request_scan_stop()`, `ACTIVE_NOTIFIER_STATES`, and `ACTIVE_STATES`.
 
-- [ ] **Step 1: Write failing cancellation, success, and failure tests**
+- [x] **Step 1: Write failing cancellation, success, and failure tests**
 
 Cancellation must assert no background mutator runs. Success must patch active notifier/scan states and assert all four controls are called before `_closing` becomes true. Failure must raise from cron removal, allow the other independent steps to run, assert `QMessageBox.critical` contains completed and failed sections, and assert `_closing` remains false.
 
@@ -152,13 +152,13 @@ stop_scan.assert_called_once_with(data_dir)
 self.assertTrue(window._closing)
 ```
 
-- [ ] **Step 2: Run full-exit tests and confirm RED**
+- [x] **Step 2: Run full-exit tests and confirm RED**
 
 Run: `python -m unittest tests.test_gui_i18n.GuiI18nTests.test_full_exit_cancel_changes_nothing tests.test_gui_i18n.GuiI18nTests.test_full_exit_stops_all_managed_background_activity tests.test_gui_i18n.GuiI18nTests.test_full_exit_failure_keeps_gui_open -v`
 
 Expected: FAIL because `request_full_exit` and the step runner do not exist.
 
-- [ ] **Step 3: Implement independent shutdown steps and guarded explicit close**
+- [x] **Step 3: Implement independent shutdown steps and guarded explicit close**
 
 The step runner records translated completion labels and exception messages:
 
@@ -223,13 +223,13 @@ def request_full_exit(self) -> None:
 
 Add bilingual keys for the confirmation, completed/failed headings, step names, and failure dialog. Remove the obsolete X-exit informational copy.
 
-- [ ] **Step 4: Run all GUI tests and confirm GREEN**
+- [x] **Step 4: Run all GUI tests and confirm GREEN**
 
 Run: `python -m unittest tests.test_gui_i18n -v`
 
 Expected: all GUI tests pass with no leaked window or closed-database callback.
 
-- [ ] **Step 5: Commit the full-exit workflow**
+- [x] **Step 5: Commit the full-exit workflow**
 
 ```powershell
 git add storage_manager/gui.py storage_manager/i18n.py tests/test_gui_i18n.py
@@ -247,11 +247,11 @@ git commit -m "Add explicit full background shutdown"
 - Consumes: final GUI and background shutdown behavior from Tasks 1 and 2.
 - Produces: operator guidance and verified `main` delivery.
 
-- [ ] **Step 1: Update operator and acceptance documentation**
+- [x] **Step 1: Update operator and acceptance documentation**
 
 Document that the title bar has no X, normal close requests minimize, and `File > Full Exit` removes managed cron and notifier autostart, sends safe-stop requests, preserves data, and requires explicit re-enabling on next launch. Add an RHEL/MATE acceptance item to visually confirm native title-bar hints.
 
-- [ ] **Step 2: Run complete verification**
+- [x] **Step 2: Run complete verification**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -262,7 +262,7 @@ git diff --check
 
 Expected: all discovered tests pass; the two Windows symlink tests may remain skipped. Compilation, runtime checks, and diff checks exit 0.
 
-- [ ] **Step 3: Review the complete diff and runtime-state exclusions**
+- [x] **Step 3: Review the complete diff and runtime-state exclusions**
 
 ```powershell
 git status -sb
