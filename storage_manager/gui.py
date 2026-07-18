@@ -464,6 +464,29 @@ class TrendChartWidget(QWidget):
             painter.drawText(left + plot_width - 88, top + plot_height + 23, coordinates[-1][2])
 
 
+class SortableTableWidgetItem(QTableWidgetItem):
+    def __init__(self, text: str, sort_key: object):
+        super().__init__(text)
+        self.sort_key = sort_key
+
+    def __lt__(self, other) -> bool:
+        if isinstance(other, SortableTableWidgetItem):
+            return self.sort_key < other.sort_key
+        return super().__lt__(other)
+
+
+def dashboard_status_rank(use_pct: int, alert_threshold: int) -> int:
+    if use_pct >= 100:
+        return 5
+    if use_pct >= 98:
+        return 4
+    if use_pct >= alert_threshold:
+        return 3
+    if use_pct >= 90:
+        return 2
+    return 1
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -484,6 +507,8 @@ class MainWindow(QMainWindow):
         self.refresh_alerts: List[str] = []
         self.alerted_accounts = set()
         self.current_snapshots: Dict[str, UsageSnapshot] = {}
+        self.dashboard_sort_column: Optional[int] = None
+        self.dashboard_sort_order = Qt.AscendingOrder
         self.cron_status = CronStatus(False, False, error="not checked")
         self.restart_pending = False
         self.notifier_restart_pending = False
@@ -961,6 +986,33 @@ class MainWindow(QMainWindow):
         self.db.close()
         super().closeEvent(event)
 
+    def sort_dashboard(self, column: int) -> None:
+        if self.dashboard_sort_column == column:
+            self.dashboard_sort_order = (
+                Qt.DescendingOrder
+                if self.dashboard_sort_order == Qt.AscendingOrder
+                else Qt.AscendingOrder
+            )
+        else:
+            self.dashboard_sort_column = column
+            self.dashboard_sort_order = Qt.AscendingOrder
+        self._apply_dashboard_sort()
+
+    def _apply_dashboard_sort(self) -> None:
+        header = self.table_usage.horizontalHeader()
+        if self.dashboard_sort_column is None:
+            header.setSortIndicatorShown(False)
+            return
+        header.setSortIndicator(
+            self.dashboard_sort_column,
+            self.dashboard_sort_order,
+        )
+        header.setSortIndicatorShown(True)
+        self.table_usage.sortItems(
+            self.dashboard_sort_column,
+            self.dashboard_sort_order,
+        )
+
     def _build_dashboard_tab(self) -> None:
         layout = QVBoxLayout(self.dashboard_tab)
         controls = QHBoxLayout()
@@ -978,8 +1030,13 @@ class MainWindow(QMainWindow):
         self.table_usage = QTableWidget(0, 9)
         self.table_usage.setAlternatingRowColors(True)
         self.table_usage.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table_usage.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table_usage.horizontalHeader().setSectionResizeMode(8, QHeaderView.Stretch)
+        self.table_usage.setSortingEnabled(False)
+        header = self.table_usage.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
+        header.sectionClicked.connect(self.sort_dashboard)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
         layout.addWidget(self.table_usage)
 
     def _build_accounts_tab(self) -> None:

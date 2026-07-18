@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QHeaderView, QMessageBox
 
+import storage_manager.gui as gui
 from storage_manager.collector import DetailScanResult, StorageBackend, UsageSnapshot
 from storage_manager.config import (
     Account,
@@ -252,6 +253,77 @@ class GuiI18nTests(unittest.TestCase):
                 )
                 self.assertFalse(hasattr(window, "btn_tracking_restart"))
                 self.assertFalse(hasattr(window, "btn_notifier_restart"))
+            finally:
+                self.dispose_window(window)
+
+    def test_dashboard_headers_toggle_numeric_and_status_sorting(self):
+        item_type = getattr(gui, "SortableTableWidgetItem", None)
+        ranker = getattr(gui, "dashboard_status_rank", None)
+        self.assertTrue(callable(item_type))
+        self.assertTrue(callable(ranker))
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(False, False, error="not available"),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                window.initial_refresh_timer.stop()
+                header = window.table_usage.horizontalHeader()
+                self.assertTrue(header.sectionsClickable())
+                self.assertFalse(header.isSortIndicatorShown())
+
+                rows = [
+                    ("nine", "9%", 9, "정상", 1),
+                    ("one_hundred", "100%", 100, "FULL", 5),
+                    ("eighty", "80%", 80, "주의", 2),
+                ]
+                window.table_usage.setRowCount(len(rows))
+                for row, values in enumerate(rows):
+                    name, use_text, use_key, status_text, status_key = values
+                    window.table_usage.setItem(
+                        row,
+                        0,
+                        item_type(name, name.casefold()),
+                    )
+                    window.table_usage.setItem(
+                        row,
+                        2,
+                        item_type(use_text, use_key),
+                    )
+                    window.table_usage.setItem(
+                        row,
+                        8,
+                        item_type(status_text, status_key),
+                    )
+
+                header.sectionClicked.emit(2)
+                self.assertEqual(window.dashboard_sort_column, 2)
+                self.assertEqual(window.dashboard_sort_order, Qt.AscendingOrder)
+                self.assertEqual(
+                    [
+                        window.table_usage.item(row, 0).text()
+                        for row in range(3)
+                    ],
+                    ["nine", "eighty", "one_hundred"],
+                )
+                self.assertTrue(header.isSortIndicatorShown())
+                self.assertEqual(header.sortIndicatorSection(), 2)
+
+                header.sectionClicked.emit(2)
+                self.assertEqual(window.dashboard_sort_order, Qt.DescendingOrder)
+                self.assertEqual(
+                    window.table_usage.item(0, 0).text(),
+                    "one_hundred",
+                )
+
+                header.sectionClicked.emit(8)
+                self.assertEqual(window.dashboard_sort_order, Qt.AscendingOrder)
+                self.assertEqual(window.table_usage.item(0, 0).text(), "nine")
+                self.assertEqual(ranker(100, 95), 5)
+                self.assertGreater(ranker(98, 95), ranker(95, 95))
             finally:
                 self.dispose_window(window)
 

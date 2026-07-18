@@ -31,7 +31,7 @@
 - Produces: `SortableTableWidgetItem(text: str, sort_key: object)`, `dashboard_status_rank(use_pct: int, alert_threshold: int) -> int`, `MainWindow.sort_dashboard(column: int) -> None`, and `MainWindow._apply_dashboard_sort() -> None`.
 - Consumes: `Qt.AscendingOrder`, `Qt.DescendingOrder`, `QHeaderView`, and the existing dashboard `QTableWidget`.
 
-- [ ] **Step 1: Write failing item and header tests**
+- [x] **Step 1: Write failing item and header tests**
 
 Import `storage_manager.gui as gui` so the missing interfaces produce a clear assertion failure instead of an import error. Add a GUI test that creates a no-account window, stops its initial refresh timer, inserts rows whose display text would sort incorrectly as strings, and exercises the connected header signal:
 
@@ -98,7 +98,7 @@ def test_dashboard_headers_toggle_numeric_and_status_sorting(self):
             self.dispose_window(window)
 ```
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run:
 
@@ -108,7 +108,7 @@ python -m unittest tests.test_gui_i18n.GuiI18nTests.test_dashboard_headers_toggl
 
 Expected: FAIL on `callable(item_type)` because the sortable item and related interfaces do not exist.
 
-- [ ] **Step 3: Implement explicit sort keys and session sort state**
+- [x] **Step 3: Implement explicit sort keys and session sort state**
 
 Add the item and severity helper above `MainWindow`:
 
@@ -184,11 +184,11 @@ def _apply_dashboard_sort(self) -> None:
     )
 ```
 
-- [ ] **Step 4: Run the focused test and confirm GREEN**
+- [x] **Step 4: Run the focused test and confirm GREEN**
 
 Run the command from Step 2. Expected: 1 test passes.
 
-- [ ] **Step 5: Commit the independently testable sorting infrastructure**
+- [x] **Step 5: Commit the independently testable sorting infrastructure**
 
 ```powershell
 git add storage_manager/gui.py tests/test_gui_i18n.py
