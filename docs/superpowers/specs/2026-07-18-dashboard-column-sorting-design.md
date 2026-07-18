@@ -38,7 +38,7 @@ control numeric ordering.
 | Used | Raw used KiB |
 | Total | Raw total KiB |
 | Filesystem | Case-folded filesystem name |
-| Status | Severity rank: checking/error, OK, WARN, ALERT, EMERGENCY, FULL |
+| Status | Displayed severity rank: checking/error, OK, WARN, ALERT |
 
 Unavailable numeric values (`-` or `ERR`) receive a key lower than valid
 measurements. They therefore appear before measurements in ascending order and
@@ -91,4 +91,3 @@ PyQt unit tests will verify:
 
 Actual header rendering and indicator appearance remain part of the RHEL/MATE
 acceptance pass because the native window theme is not available on Windows.
-

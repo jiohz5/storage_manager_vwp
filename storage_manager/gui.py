@@ -476,10 +476,6 @@ class SortableTableWidgetItem(QTableWidgetItem):
 
 
 def dashboard_status_rank(use_pct: int, alert_threshold: int) -> int:
-    if use_pct >= 100:
-        return 5
-    if use_pct >= 98:
-        return 4
     if use_pct >= alert_threshold:
         return 3
     if use_pct >= 90:

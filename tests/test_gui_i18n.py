@@ -277,7 +277,7 @@ class GuiI18nTests(unittest.TestCase):
 
                 rows = [
                     ("nine", "9%", 9, "정상", 1),
-                    ("one_hundred", "100%", 100, "FULL", 5),
+                    ("one_hundred", "100%", 100, "경고", 3),
                     ("eighty", "80%", 80, "주의", 2),
                 ]
                 window.table_usage.setRowCount(len(rows))
@@ -322,8 +322,9 @@ class GuiI18nTests(unittest.TestCase):
                 header.sectionClicked.emit(8)
                 self.assertEqual(window.dashboard_sort_order, Qt.AscendingOrder)
                 self.assertEqual(window.table_usage.item(0, 0).text(), "nine")
-                self.assertEqual(ranker(100, 95), 5)
-                self.assertGreater(ranker(98, 95), ranker(95, 95))
+                self.assertEqual(ranker(100, 95), 3)
+                self.assertEqual(ranker(98, 100), 2)
+                self.assertEqual(ranker(89, 95), 1)
             finally:
                 self.dispose_window(window)
 
@@ -362,7 +363,20 @@ class GuiI18nTests(unittest.TestCase):
 
                 window.on_df_result(
                     "id-z",
-                    UsageSnapshot("fs-z", 1000, 950, 50, 95),
+                    UsageSnapshot(
+                        "fs-z",
+                        2048,
+                        1536,
+                        512,
+                        75,
+                        total_inodes=1000,
+                        used_inodes=900,
+                        avail_inodes=100,
+                        inode_use_pct=90,
+                        quota_used_kb=800,
+                        quota_limit_kb=1000,
+                        quota_use_pct=80,
+                    ),
                 )
                 self.assertTrue(
                     callable(getattr(window, "_dashboard_row", None))
@@ -375,12 +389,29 @@ class GuiI18nTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     window.table_usage.item(zeta_row, 2).text(),
-                    "95%",
+                    "75%",
                 )
                 self.assertEqual(
                     window.table_usage.item(zeta_row, 7).text(),
                     "fs-z",
                 )
+
+                window.on_df_result(
+                    "id-a",
+                    UsageSnapshot("fs-a", 4096, 900, 3196, 22),
+                )
+                window.sort_dashboard(5)
+                self.assertEqual(window.table_usage.item(0, 0).text(), "alpha")
+                self.assertEqual(window.table_usage.item(1, 0).text(), "zeta")
+
+                window.on_df_error("id-a", "permission denied")
+                alpha_row = window._dashboard_row("id-a")
+                zeta_row = window._dashboard_row("id-z")
+                self.assertIn(
+                    "permission denied",
+                    window.table_usage.item(alpha_row, 8).text(),
+                )
+                self.assertEqual(window.table_usage.item(zeta_row, 2).text(), "75%")
 
                 window.sort_dashboard(2)
                 self.assertEqual(window.dashboard_sort_column, 2)
@@ -391,6 +422,19 @@ class GuiI18nTests(unittest.TestCase):
                 window.refresh_pending = 0
                 with patch.object(window.thread_pool, "start"):
                     window.refresh_dashboard()
+                self.assertEqual(window.dashboard_sort_column, 2)
+                self.assertEqual(
+                    window.dashboard_sort_order,
+                    Qt.AscendingOrder,
+                )
+                self.assertEqual(
+                    window.table_usage.horizontalHeader().sortIndicatorSection(),
+                    2,
+                )
+
+                window.refresh_pending = 0
+                with patch.object(window.thread_pool, "start"):
+                    window.change_language("en")
                 self.assertEqual(window.dashboard_sort_column, 2)
                 self.assertEqual(
                     window.dashboard_sort_order,
