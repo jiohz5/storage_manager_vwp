@@ -205,7 +205,7 @@ git commit -m "Add dashboard header sorting"
 - Consumes: `SortableTableWidgetItem`, `dashboard_status_rank()`, `MainWindow._apply_dashboard_sort()`, `UsageSnapshot`, and `Account.account_id`.
 - Produces: `DASHBOARD_ACCOUNT_ID_ROLE`, `MainWindow._dashboard_item()`, and `MainWindow._dashboard_row(account_id: str) -> Optional[int]`.
 
-- [ ] **Step 1: Write a failing sorted-row asynchronous update test**
+- [x] **Step 1: Write a failing sorted-row asynchronous update test**
 
 Add a test with configured order `zeta`, then `alpha`. Suppress worker execution, sort account names, deliver results by account ID, then refresh again:
 
@@ -267,7 +267,7 @@ def test_dashboard_sort_routes_results_by_account_and_survives_refresh(self):
             self.dispose_window(window)
 ```
 
-- [ ] **Step 2: Run the asynchronous test and confirm RED**
+- [x] **Step 2: Run the asynchronous test and confirm RED**
 
 Run:
 
@@ -277,7 +277,7 @@ python -m unittest tests.test_gui_i18n.GuiI18nTests.test_dashboard_sort_routes_r
 
 Expected: FAIL on the `_dashboard_row` callable assertion because sorted rows still use `row_by_account_id` and the current-row resolver does not exist.
 
-- [ ] **Step 3: Add account identity and keyed item helpers**
+- [x] **Step 3: Add account identity and keyed item helpers**
 
 Add a dedicated role and helpers:
 
@@ -368,7 +368,7 @@ values_and_keys = [
 
 Use `_dashboard_item()` for every value, attach the account ID to column zero, then call `self._apply_dashboard_sort()`. In `on_df_error()`, resolve the row by account ID, replace columns 2/3/4 and 8 with unavailable keyed items, retain failure colors, and reapply the active sort.
 
-- [ ] **Step 4: Run both dashboard sorting tests and confirm GREEN**
+- [x] **Step 4: Run both dashboard sorting tests and confirm GREEN**
 
 Run:
 
@@ -378,7 +378,7 @@ python -m unittest tests.test_gui_i18n.GuiI18nTests.test_dashboard_headers_toggl
 
 Expected: 2 tests pass with no row misrouting or closed-database callback.
 
-- [ ] **Step 5: Run all GUI tests and commit the refresh-safe integration**
+- [x] **Step 5: Run all GUI tests and commit the refresh-safe integration**
 
 ```powershell
 python -m unittest tests.test_gui_i18n -v

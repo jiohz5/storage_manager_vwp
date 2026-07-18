@@ -327,6 +327,82 @@ class GuiI18nTests(unittest.TestCase):
             finally:
                 self.dispose_window(window)
 
+    def test_dashboard_sort_routes_results_by_account_and_survives_refresh(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            data_dir = root / "data"
+            account_root = root / "user"
+            zeta_path = account_root / "zeta"
+            alpha_path = account_root / "alpha"
+            zeta_path.mkdir(parents=True)
+            alpha_path.mkdir()
+            accounts = [
+                Account("zeta", str(zeta_path), account_id="id-z"),
+                Account("alpha", str(alpha_path), account_id="id-a"),
+            ]
+            save_store(
+                data_dir,
+                AccountStore(
+                    Settings(monitored_roots=[str(account_root)]),
+                    accounts,
+                ),
+            )
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(False, False, error="not available"),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                window.initial_refresh_timer.stop()
+                with patch.object(window.thread_pool, "start"):
+                    window.refresh_dashboard()
+
+                window.sort_dashboard(0)
+                self.assertEqual(window.table_usage.item(0, 0).text(), "alpha")
+
+                window.on_df_result(
+                    "id-z",
+                    UsageSnapshot("fs-z", 1000, 950, 50, 95),
+                )
+                self.assertTrue(
+                    callable(getattr(window, "_dashboard_row", None))
+                )
+                zeta_row = window._dashboard_row("id-z")
+                self.assertIsNotNone(zeta_row)
+                self.assertEqual(
+                    window.table_usage.item(zeta_row, 0).text(),
+                    "zeta",
+                )
+                self.assertEqual(
+                    window.table_usage.item(zeta_row, 2).text(),
+                    "95%",
+                )
+                self.assertEqual(
+                    window.table_usage.item(zeta_row, 7).text(),
+                    "fs-z",
+                )
+
+                window.sort_dashboard(2)
+                self.assertEqual(window.dashboard_sort_column, 2)
+                self.assertEqual(
+                    window.dashboard_sort_order,
+                    Qt.AscendingOrder,
+                )
+                window.refresh_pending = 0
+                with patch.object(window.thread_pool, "start"):
+                    window.refresh_dashboard()
+                self.assertEqual(window.dashboard_sort_column, 2)
+                self.assertEqual(
+                    window.dashboard_sort_order,
+                    Qt.AscendingOrder,
+                )
+                self.assertEqual(
+                    window.table_usage.horizontalHeader().sortIndicatorSection(),
+                    2,
+                )
+            finally:
+                self.dispose_window(window)
+
     def test_window_close_minimizes_without_exiting(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = Path(temp) / "data"
@@ -583,7 +659,6 @@ class GuiI18nTests(unittest.TestCase):
                 window = MainWindow(data_dir)
             try:
                 window._closing = True
-                window.row_by_account_id = {"id-a": 0}
                 window.table_usage.setRowCount(1)
                 snapshot = UsageSnapshot("fs", 1000, 500, 500, 50)
                 with patch.object(window.db, "upsert_snapshot") as upsert:

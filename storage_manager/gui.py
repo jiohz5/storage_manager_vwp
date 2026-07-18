@@ -487,6 +487,10 @@ def dashboard_status_rank(use_pct: int, alert_threshold: int) -> int:
     return 1
 
 
+DASHBOARD_ACCOUNT_ID_ROLE = Qt.UserRole + 1
+DASHBOARD_UNAVAILABLE_SORT_KEY = -1
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -501,7 +505,6 @@ class MainWindow(QMainWindow):
         self.db = Database(db_file(data_dir))
         self.thread_pool = QThreadPool(self)
         self.thread_pool.setMaxThreadCount(4)
-        self.row_by_account_id: Dict[str, int] = {}
         self.refresh_pending = 0
         self.refresh_again = False
         self.refresh_alerts: List[str] = []
@@ -1012,6 +1015,27 @@ class MainWindow(QMainWindow):
             self.dashboard_sort_column,
             self.dashboard_sort_order,
         )
+
+    def _dashboard_item(
+        self,
+        text: str,
+        sort_key: object,
+        account_id: Optional[str] = None,
+    ) -> SortableTableWidgetItem:
+        item = SortableTableWidgetItem(text, sort_key)
+        if account_id is not None:
+            item.setData(DASHBOARD_ACCOUNT_ID_ROLE, account_id)
+        return item
+
+    def _dashboard_row(self, account_id: str) -> Optional[int]:
+        for row in range(self.table_usage.rowCount()):
+            item = self.table_usage.item(row, 0)
+            if (
+                item is not None
+                and item.data(DASHBOARD_ACCOUNT_ID_ROLE) == account_id
+            ):
+                return row
+        return None
 
     def _build_dashboard_tab(self) -> None:
         layout = QVBoxLayout(self.dashboard_tab)
@@ -2463,7 +2487,6 @@ class MainWindow(QMainWindow):
         self.refresh_again = False
         accounts = [account for account in self.store.accounts if account.enabled]
         self.table_usage.setRowCount(len(accounts))
-        self.row_by_account_id = {}
         self.refresh_alerts = []
         self.current_snapshots = {}
         self.refresh_pending = len(accounts)
@@ -2475,24 +2498,33 @@ class MainWindow(QMainWindow):
             return
 
         for row, account in enumerate(accounts):
-            self.row_by_account_id[account.account_id] = row
-            values = [
-                account.name,
-                account.path,
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                "-",
-                self.t("status.checking"),
+            values_and_keys = [
+                (account.name, account.name.casefold()),
+                (account.path, account.path.casefold()),
+                ("-", DASHBOARD_UNAVAILABLE_SORT_KEY),
+                ("-", DASHBOARD_UNAVAILABLE_SORT_KEY),
+                ("-", DASHBOARD_UNAVAILABLE_SORT_KEY),
+                ("-", DASHBOARD_UNAVAILABLE_SORT_KEY),
+                ("-", DASHBOARD_UNAVAILABLE_SORT_KEY),
+                ("-", ""),
+                (
+                    self.t("status.checking"),
+                    DASHBOARD_UNAVAILABLE_SORT_KEY,
+                ),
             ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
+            for column, (value, sort_key) in enumerate(values_and_keys):
+                item = self._dashboard_item(
+                    value,
+                    sort_key,
+                    account.account_id if column == 0 else None,
+                )
                 if column in (2, 3, 4):
                     item.setBackground(QColor(usage_color(0, failed=True)))
                 self.table_usage.setItem(row, column, item)
 
+        self._apply_dashboard_sort()
+
+        for account in accounts:
             try:
                 normalized = normalize_account_path(
                     account.path,
@@ -2526,7 +2558,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         account = find_account(self.store, account_id)
-        row = self.row_by_account_id.get(account_id)
+        row = self._dashboard_row(account_id)
         if account is None or row is None:
             return
         now = datetime.now()
@@ -2577,23 +2609,45 @@ class MainWindow(QMainWindow):
                 completed=completed,
                 total=total,
             )
-        values = [
-            account.name,
-            account.path,
-            f"{snapshot.use_pct}%",
-            "-" if snapshot.inode_use_pct is None else f"{snapshot.inode_use_pct}%",
-            "ERR"
-            if snapshot.quota_error
-            else "-"
-            if snapshot.quota_use_pct is None
-            else f"{snapshot.quota_use_pct}%",
-            human_kb(snapshot.used_kb),
-            human_kb(snapshot.total_kb),
-            snapshot.fs_name,
-            status_text,
+        values_and_keys = [
+            (account.name, account.name.casefold()),
+            (account.path, account.path.casefold()),
+            (f"{snapshot.use_pct}%", snapshot.use_pct),
+            (
+                "-"
+                if snapshot.inode_use_pct is None
+                else f"{snapshot.inode_use_pct}%",
+                DASHBOARD_UNAVAILABLE_SORT_KEY
+                if snapshot.inode_use_pct is None
+                else snapshot.inode_use_pct,
+            ),
+            (
+                "ERR"
+                if snapshot.quota_error
+                else "-"
+                if snapshot.quota_use_pct is None
+                else f"{snapshot.quota_use_pct}%",
+                DASHBOARD_UNAVAILABLE_SORT_KEY
+                if snapshot.quota_error or snapshot.quota_use_pct is None
+                else snapshot.quota_use_pct,
+            ),
+            (human_kb(snapshot.used_kb), snapshot.used_kb),
+            (human_kb(snapshot.total_kb), snapshot.total_kb),
+            (snapshot.fs_name, snapshot.fs_name.casefold()),
+            (
+                status_text,
+                dashboard_status_rank(
+                    effective_pct,
+                    self.store.settings.alert_threshold,
+                ),
+            ),
         ]
-        for column, value in enumerate(values):
-            item = QTableWidgetItem(value)
+        for column, (value, sort_key) in enumerate(values_and_keys):
+            item = self._dashboard_item(
+                value,
+                sort_key,
+                account.account_id if column == 0 else None,
+            )
             if column in (2, 3, 4):
                 metric_pct = {
                     2: snapshot.use_pct,
@@ -2610,6 +2664,7 @@ class MainWindow(QMainWindow):
                     )
                 )
             self.table_usage.setItem(row, column, item)
+        self._apply_dashboard_sort()
         self.current_snapshots[account_id] = snapshot
 
         if effective_pct >= self.store.settings.alert_threshold:
@@ -2628,18 +2683,25 @@ class MainWindow(QMainWindow):
     def on_df_error(self, account_id: str, message: str) -> None:
         if self._closing:
             return
-        row = self.row_by_account_id.get(account_id)
+        row = self._dashboard_row(account_id)
         if row is None:
             return
-        percent_item = QTableWidgetItem("-")
-        percent_item.setBackground(QColor(usage_color(0, failed=True)))
         for column in (2, 3, 4):
-            self.table_usage.setItem(row, column, QTableWidgetItem(percent_item))
+            percent_item = self._dashboard_item(
+                "-",
+                DASHBOARD_UNAVAILABLE_SORT_KEY,
+            )
+            percent_item.setBackground(QColor(usage_color(0, failed=True)))
+            self.table_usage.setItem(row, column, percent_item)
         self.table_usage.setItem(
             row,
             8,
-            QTableWidgetItem(self.t("status.error", error=message)),
+            self._dashboard_item(
+                self.t("status.error", error=message),
+                DASHBOARD_UNAVAILABLE_SORT_KEY,
+            ),
         )
+        self._apply_dashboard_sort()
         self.alerted_accounts.discard(account_id)
 
     @pyqtSlot()
