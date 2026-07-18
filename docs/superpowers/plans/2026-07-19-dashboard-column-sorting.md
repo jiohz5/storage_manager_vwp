@@ -57,7 +57,7 @@ def test_dashboard_headers_toggle_numeric_and_status_sorting(self):
 
             rows = [
                 ("nine", "9%", 9, "정상", 1),
-                ("one_hundred", "100%", 100, "FULL", 5),
+                ("one_hundred", "100%", 100, "ALERT", 3),
                 ("eighty", "80%", 80, "주의", 2),
             ]
             window.table_usage.setRowCount(len(rows))
@@ -89,11 +89,9 @@ def test_dashboard_headers_toggle_numeric_and_status_sorting(self):
             header.sectionClicked.emit(8)
             self.assertEqual(window.dashboard_sort_order, Qt.AscendingOrder)
             self.assertEqual(window.table_usage.item(0, 0).text(), "nine")
-            self.assertEqual(ranker(100, 95), 5)
-            self.assertGreater(
-                ranker(98, 95),
-                ranker(95, 95),
-            )
+            self.assertEqual(ranker(100, 95), 3)
+            self.assertEqual(ranker(98, 100), 2)
+            self.assertEqual(ranker(89, 95), 1)
         finally:
             self.dispose_window(window)
 ```
@@ -125,10 +123,6 @@ class SortableTableWidgetItem(QTableWidgetItem):
 
 
 def dashboard_status_rank(use_pct: int, alert_threshold: int) -> int:
-    if use_pct >= 100:
-        return 5
-    if use_pct >= 98:
-        return 4
     if use_pct >= alert_threshold:
         return 3
     if use_pct >= 90:
@@ -399,11 +393,11 @@ Expected: all GUI tests pass.
 - Consumes: final dashboard sorting behavior from Tasks 1 and 2.
 - Produces: operator guidance, RHEL/MATE acceptance coverage, and verified GitHub delivery.
 
-- [ ] **Step 1: Document sorting behavior and acceptance checks**
+- [x] **Step 1: Document sorting behavior and acceptance checks**
 
 Add a README feature bullet stating that all dashboard headers support numeric/text sorting and retain the active order across refreshes. Add VWP acceptance bullets that verify header arrows, ascending/descending toggling, numeric `9% < 80% < 100%` behavior, and correct account updates while refresh results arrive.
 
-- [ ] **Step 2: Run complete verification**
+- [x] **Step 2: Run complete verification**
 
 ```powershell
 python -m unittest discover -s tests -v
@@ -414,7 +408,7 @@ git diff --check
 
 Expected: all discovered tests pass; the two Windows symlink tests may remain skipped. Compilation, runtime, and diff checks exit 0.
 
-- [ ] **Step 3: Review scope and runtime-state exclusions**
+- [x] **Step 3: Review scope and runtime-state exclusions**
 
 ```powershell
 git status -sb
@@ -424,7 +418,7 @@ git ls-files | Select-String -Pattern '\.(db|log|lock)$|(^|/)notifications/'
 
 Expected: only source, tests, design/plan, and operator documentation changed; no runtime database, log, lock, or notification outbox is tracked.
 
-- [ ] **Step 4: Commit documentation and completed plan state**
+- [x] **Step 4: Commit documentation and completed plan state**
 
 ```powershell
 git add README.md VWP_ACCEPTANCE.md docs/superpowers/plans/2026-07-19-dashboard-column-sorting.md
