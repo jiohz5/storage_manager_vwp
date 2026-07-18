@@ -425,7 +425,7 @@ git add README.md VWP_ACCEPTANCE.md docs/superpowers/plans/2026-07-19-dashboard-
 git commit -m "Document dashboard column sorting"
 ```
 
-- [ ] **Step 5: Push directly to GitHub main and verify equality**
+- [x] **Step 5: Push directly to GitHub main and verify equality**
 
 ```powershell
 git push origin main
