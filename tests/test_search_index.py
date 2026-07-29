@@ -220,6 +220,131 @@ class SearchIndexTests(unittest.TestCase):
             finally:
                 index.close()
 
+    def test_full_and_incremental_index_exclude_only_root_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            account = root / "account"
+            root_snapshot = account / ".snapshot"
+            nested_snapshot = account / "results" / ".snapshot"
+            root_snapshot.mkdir(parents=True)
+            nested_snapshot.mkdir(parents=True)
+            (root_snapshot / "old.dat").write_text("old", encoding="ascii")
+            (nested_snapshot / "current.dat").write_text(
+                "new",
+                encoding="ascii",
+            )
+            index = SearchIndex(search_db_file(root / "data"))
+            try:
+                result = run_full_index(index, "id-a", account, force=True)
+                self.assertTrue(result.complete)
+                self.assertEqual(
+                    index.search("id-a", "old.dat", mode="exact"),
+                    [],
+                )
+                self.assertEqual(
+                    [
+                        row.relative_path
+                        for row in index.search(
+                            "id-a",
+                            "current.dat",
+                            mode="exact",
+                        )
+                    ],
+                    ["results/.snapshot/current.dat"],
+                )
+
+                inserted = index.upsert_changed_files(
+                    "id-a",
+                    account,
+                    [
+                        (
+                            str(root_snapshot / "incremental.bin"),
+                            1,
+                            1.0,
+                        ),
+                        (
+                            str(nested_snapshot / "incremental.bin"),
+                            1,
+                            1.0,
+                        ),
+                    ],
+                )
+                self.assertGreater(inserted, 0)
+                self.assertEqual(
+                    [
+                        row.relative_path
+                        for row in index.search(
+                            "id-a",
+                            "incremental.bin",
+                            mode="exact",
+                        )
+                    ],
+                    ["results/.snapshot/incremental.bin"],
+                )
+            finally:
+                index.close()
+
+    def test_prune_excluded_paths_removes_legacy_rows_and_tasks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            account = root / "account"
+            account.mkdir()
+            (account / "keep.dat").write_text("keep", encoding="ascii")
+            index = SearchIndex(search_db_file(root / "data"))
+            try:
+                run_full_index(index, "id-a", account, force=True)
+                generation = str(
+                    index.account_status("id-a")["generation"]
+                )
+                with index.conn:
+                    index.conn.execute(
+                        """
+                        INSERT INTO search_entries(
+                          account_id, relative_path, basename, extension,
+                          entry_type, generation
+                        ) VALUES(?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "id-a",
+                            ".snapshot/legacy.dat",
+                            "legacy.dat",
+                            "dat",
+                            "file",
+                            generation,
+                        ),
+                    )
+                    index.conn.execute(
+                        """
+                        INSERT INTO search_scan_tasks(
+                          account_id, generation, relative_dir, status
+                        ) VALUES(?, ?, ?, 'pending')
+                        """,
+                        ("id-a", generation, ".snapshot"),
+                    )
+
+                removed = index.prune_excluded_paths("id-a")
+
+                self.assertEqual(removed, 1)
+                self.assertEqual(
+                    index.search("id-a", "legacy.dat", mode="exact"),
+                    [],
+                )
+                self.assertEqual(
+                    index.conn.execute(
+                        """
+                        SELECT COUNT(*) FROM search_scan_tasks
+                        WHERE account_id = ?
+                        """,
+                        ("id-a",),
+                    ).fetchone()[0],
+                    0,
+                )
+                status = index.account_status("id-a")
+                self.assertEqual(status["files_indexed"], 1)
+                self.assertEqual(status["dirs_indexed"], 0)
+            finally:
+                index.close()
+
     def test_remove_and_prune_accounts_clear_entries_state_and_tasks(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -10,6 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from storage_manager.path_policy import (
+    SNAPSHOT_ROOT_NAME,
+    is_excluded_account_path,
+    is_excluded_relative_path,
+)
+
 
 SEARCH_DB_FILENAME = "search_index.db"
 SEARCH_SIDECAR_SUFFIXES = ("", "-journal", "-wal", "-shm")
@@ -245,6 +251,50 @@ class SearchIndex:
             self.remove_account(account_id)
             removed.append(account_id)
         return removed
+
+    def prune_excluded_paths(self, account_id: str) -> int:
+        exact = SNAPSHOT_ROOT_NAME
+        descendants = f"{SNAPSHOT_ROOT_NAME}/*"
+        with self.conn:
+            removed = self.conn.execute(
+                """
+                DELETE FROM search_entries
+                WHERE account_id = ?
+                  AND (relative_path = ? OR relative_path GLOB ?)
+                """,
+                (account_id, exact, descendants),
+            ).rowcount
+            self.conn.execute(
+                """
+                DELETE FROM search_scan_tasks
+                WHERE account_id = ?
+                  AND (relative_dir = ? OR relative_dir GLOB ?)
+                """,
+                (account_id, exact, descendants),
+            )
+            files = self.conn.execute(
+                """
+                SELECT COUNT(*) FROM search_entries
+                WHERE account_id = ? AND entry_type <> 'directory'
+                """,
+                (account_id,),
+            ).fetchone()[0]
+            directories = self.conn.execute(
+                """
+                SELECT COUNT(*) FROM search_entries
+                WHERE account_id = ? AND entry_type = 'directory'
+                """,
+                (account_id,),
+            ).fetchone()[0]
+            self.conn.execute(
+                """
+                UPDATE search_scan_state
+                SET files_indexed = ?, dirs_indexed = ?
+                WHERE account_id = ?
+                """,
+                (int(files), int(directories), account_id),
+            )
+        return max(0, int(removed))
 
     def summary(self) -> Dict[str, object]:
         row = self.conn.execute(
@@ -623,6 +673,8 @@ class SearchIndex:
         entries: Dict[str, Tuple[str, str, str]] = {}
         for file_path, _size_bytes, _modified_at in records:
             candidate = Path(file_path).expanduser().absolute()
+            if is_excluded_account_path(root, candidate):
+                continue
             try:
                 relative = candidate.relative_to(root)
             except ValueError:
@@ -714,6 +766,7 @@ def run_full_index(
     except OSError as exc:
         return IndexRunResult(False, False, False, 0, 0, str(exc))
 
+    index.prune_excluded_paths(account_id)
     generation, skipped = index._begin_full_scan(
         account_id,
         root,
@@ -797,6 +850,8 @@ def run_full_index(
                     raw_relative_path = (
                         f"{relative_dir}/{raw_name}" if relative_dir else raw_name
                     )
+                    if is_excluded_relative_path(raw_relative_path):
+                        continue
                     relative_path = _safe_relative_path(raw_relative_path)
                     try:
                         if entry.is_symlink():

@@ -578,6 +578,55 @@ class ReportAndSchedulerTests(unittest.TestCase):
             finally:
                 index.close()
 
+    def test_scheduler_prunes_excluded_search_paths_when_index_opens(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            root = Path(temp) / "user"
+            account_path = root / "project_a"
+            account_path.mkdir(parents=True)
+            account = Account(
+                "project_a",
+                str(account_path),
+                account_id="id-a",
+                search_enabled=True,
+            )
+            save_store(
+                data_dir,
+                AccountStore(
+                    Settings(monitored_roots=[str(root)]),
+                    [account],
+                ),
+            )
+            backend = StorageBackend(
+                name="test",
+                read_usage=Mock(
+                    return_value=UsageSnapshot(
+                        "fs",
+                        1000,
+                        500,
+                        500,
+                        50,
+                    )
+                ),
+                scan_detail=Mock(
+                    return_value=DetailScanResult([], True, 0.1)
+                ),
+                test_mode=True,
+            )
+            with patch.object(
+                SearchIndex,
+                "prune_excluded_paths",
+                autospec=True,
+                return_value=0,
+            ) as prune, patch(
+                "storage_manager.scheduler.run_full_index",
+                return_value=Mock(cancelled=False),
+            ):
+                run_nightly_scan(data_dir, backend=backend)
+
+            prune.assert_called_once()
+            self.assertEqual(prune.call_args.args[1], "id-a")
+
     def test_production_detail_scan_is_not_skipped_after_morning_cutoff(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = Path(temp) / "data"

@@ -328,6 +328,11 @@ def run_nightly_scan(
                             if account.search_enabled
                         }
                     )
+                    for account in enabled_accounts:
+                        if account.search_enabled:
+                            search_index.prune_excluded_paths(
+                                account.account_id
+                            )
                 except Exception as exc:
                     print(f"[WARN] search index unavailable: {exc}", file=sys.stderr)
                     if search_index is not None:
