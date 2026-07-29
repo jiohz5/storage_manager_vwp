@@ -5,6 +5,127 @@
 선택한 전용 디렉터리를 제외하면 모니터링 대상 계정에는 파일을 쓰거나 삭제하지
 않습니다.
 
+## 처음 설치: 다운로드부터 실행까지
+
+소스 코드나 `run.csh` 안의 경로를 직접 수정할 필요는 없습니다. 압축을 해제한 뒤
+csh에서 Python 실행 파일과 데이터 저장 경로를 환경변수로 지정합니다. cron에는
+소스 디렉터리의 절대경로가 기록되므로, 먼저 소스를 계속 유지할 최종 위치에 둔 뒤
+진행합니다.
+
+### 1. Windows에서 다운로드
+
+GitHub에 접속할 수 있는 Windows/OA PC에서
+[storage_manager_vwp 저장소](https://github.com/jiohz5/storage_manager_vwp)를 엽니다.
+`main` 브랜치에서 `Code` 버튼을 누르고 `Download ZIP`을 선택하면 최신
+`storage_manager_vwp-main.zip`을 받을 수 있습니다. 그 파일 하나를 승인된 사내 반입
+절차로 VWP/RHEL에 옮깁니다.
+
+RHEL에서 `unzip`을 사용할 수 없다면
+[main tar.gz](https://github.com/jiohz5/storage_manager_vwp/archive/refs/heads/main.tar.gz)를
+대신 내려받아 옮깁니다. Git을 사용할 수 있는 외부 테스트 환경에서는 다음 방법도
+가능합니다.
+
+```sh
+git clone --depth 1 https://github.com/jiohz5/storage_manager_vwp.git
+cd storage_manager_vwp
+```
+
+### 2. RHEL에서 압축 해제
+
+ZIP을 받은 경우 다음과 같이 실행합니다.
+
+```csh
+cd /path/to/transfer-directory
+unzip storage_manager_vwp-main.zip
+cd storage_manager_vwp-main
+ls run.csh app.py
+```
+
+tar.gz를 받은 경우에는 다음과 같이 실행합니다.
+
+```csh
+cd /path/to/transfer-directory
+tar -xzf storage_manager_vwp-main.tar.gz
+cd storage_manager_vwp-main
+ls run.csh app.py
+```
+
+마지막 `ls`에서 두 파일이 보이면 올바른 디렉터리입니다. 폴더 이름을 바꾸거나 다른
+위치로 옮길 계획이라면 cron을 등록하기 전에 옮깁니다.
+
+### 3. 수정할 값 지정
+
+앱 파일을 편집하지 않고 현재 csh 터미널에서 아래 값만 실제 사내 경로로 바꿔
+실행합니다.
+
+```csh
+# 권장: Python 실행 파일 자체를 정확히 지정
+setenv STORAGE_MANAGER_PYTHON_BIN /installed/python/3.10.9/bin/python3
+
+# 위 BIN 대신 설치 prefix를 지정하려면 다음 한 줄만 사용
+# setenv STORAGE_MANAGER_PYTHON_HOME /installed/python/3.10.9
+
+# PYTHONHOME은 이 앱의 Python 선택 변수가 아님
+if ($?PYTHONHOME) unsetenv PYTHONHOME
+
+# DB, 검색 인덱스, 보고서, 알림을 저장할 여유 있는 전용 경로
+setenv STORAGE_MANAGER_DATA_DIR /large/private/path/storage-manager-data
+mkdir -p "$STORAGE_MANAGER_DATA_DIR"
+chmod 700 "$STORAGE_MANAGER_DATA_DIR"
+```
+
+`STORAGE_MANAGER_PYTHON_BIN`과 `STORAGE_MANAGER_PYTHON_HOME` 중 하나만 사용합니다.
+`STORAGE_MANAGER_PYTHON_HOME`에는 Python 실행 파일이 아니라 그 아래에
+`bin/python3`가 있는 설치 prefix를 넣습니다. 표준 라이브러리 위치를 바꾸는 예약
+변수 `PYTHONHOME`을 대신 사용하면 `json` 같은 기본 모듈을 찾지 못할 수 있습니다.
+
+`STORAGE_MANAGER_DATA_DIR`은 반드시 현재 사용자와 cron이 쓸 수 있어야 합니다.
+모니터링 대상 계정과 다른 여유 있는 파일시스템을 권장하며, 대상 파일시스템이
+FULL이어도 DB와 경고를 기록할 수 있는 위치가 가장 안전합니다. 이 변수를 생략하면
+최초 GUI 실행 때 저장 경로를 한 번 묻습니다.
+
+### 4. 진단 후 GUI 실행
+
+```csh
+chmod +x run.csh setup_cron.csh
+./run.csh --diagnose
+./run.csh
+```
+
+진단 결과에서 Python `3.10` 이상, `json`, SQLite, PyQt5가 모두 선택한 Python
+설치 경로에서 `OK`인지 먼저 확인합니다. `./run.csh`는 선택된 Python 실행 파일과
+데이터 경로를 시작할 때마다 터미널에 출력하므로 경로 문제를 바로 확인할 수 있습니다.
+
+GUI가 열리면 `Accounts` 탭에서 계정명과 실제 경로를 등록합니다. 예를 들어 계정명이
+`project_a`이고 경로가 `/user/project_a`라면 두 값을 그대로 입력합니다.
+
+### 5. 자동 수집과 팝업 활성화
+
+계정 등록과 대시보드 확인이 끝난 뒤 `추적` 탭에서 `자동 수집 켜기`를 누르거나 다음
+명령을 한 번 실행합니다.
+
+```csh
+./setup_cron.csh
+crontab -l | grep storage-manager-vwp
+```
+
+`추적` 탭에서 `로그인 시 팝업 알림 자동 시작`도 체크합니다. 창의 X 버튼은 앱을
+종료하지 않고 최소화합니다. cron과 알림까지 완전히 종료하려면
+`File > Full Exit`를 사용합니다.
+
+### 6. 다음 로그인에도 같은 경로 사용
+
+진단과 GUI 실행이 정상임을 확인한 뒤 개인 `~/.cshrc`에 실제 환경에 맞는 두 줄을
+추가하면 로그인할 때마다 다시 입력하지 않아도 됩니다.
+
+```csh
+setenv STORAGE_MANAGER_PYTHON_BIN /installed/python/3.10.9/bin/python3
+setenv STORAGE_MANAGER_DATA_DIR /large/private/path/storage-manager-data
+```
+
+`PYTHONHOME`은 `.cshrc`에 추가하지 않습니다. 소스 폴더를 나중에 옮기면 기존 cron은
+이전 절대경로를 계속 가리키므로 새 위치에서 `./setup_cron.csh`를 다시 실행합니다.
+
 ## 주요 기능
 
 - 여러 프로젝트 계정 추가, 수정, 비활성화 및 삭제
@@ -33,22 +154,12 @@
 - 별도 `search_index.db`의 실제 크기와 인덱스 항목 수 표시
 - SQLite, JSON, 텍스트 보고서만 사용하는 로컬 저장
 
-## 폐쇄망 반입
+## 데이터 저장 경로와 권한
 
 애플리케이션 소스에는 Python 런타임이나 wheel을 포함하지 않습니다. 따라서
 압축 파일이 작고, 사내에 이미 설치된 Python 3.10과 PyQt5를 그대로 사용합니다.
-
-RHEL에서 압축을 해제한 뒤 csh에서 Python 실행 파일 또는 설치 prefix를 지정합니다.
-Python 설치 경로는 읽기 전용이어도 됩니다. `PYTHONHOME`은 표준 라이브러리 검색을
-바꾸는 Python 예약 변수이므로 Storage Manager 선택기로 사용하지 않으며, 실행
-스크립트는 상속된 값을 경고 후 제거합니다.
-
-```csh
-setenv STORAGE_MANAGER_PYTHON_HOME /path/to/python-3.10
-# 또는: setenv STORAGE_MANAGER_PYTHON_BIN /path/to/python3
-chmod +x run.csh setup_cron.csh
-./run.csh
-```
+Python 설치 경로는 읽기 전용이어도 되지만 데이터 저장 경로는 쓰기가 가능해야
+합니다. 실행 스크립트는 상속된 `PYTHONHOME`을 경고 후 제거합니다.
 
 개인 계정은 quota가 제한될 수 있으므로 소스 디렉터리를 기본 데이터 위치로 사용하지
 않고, 충분한 여유가 있는 별도 위치를 선택하는 것을 권장합니다.
@@ -89,10 +200,23 @@ rm /user/project_account/.storage-manager-vwp/write_test
 ./run.csh --diagnose
 ```
 
-저장 경로를 명령으로 지정하고 검증할 수도 있습니다.
+아래의 수동 Python 명령을 사용할 때는 현재 터미널에서 실행 파일을 한 번 선택합니다.
+이 변수는 앱 설정이 아니라 README의 긴 명령을 간단히 적기 위한 csh 변수입니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 runtime_check.py \
+if ($?STORAGE_MANAGER_PYTHON_BIN) then
+    set SM_PYTHON = "$STORAGE_MANAGER_PYTHON_BIN"
+else if ($?STORAGE_MANAGER_PYTHON_HOME) then
+    set SM_PYTHON = "$STORAGE_MANAGER_PYTHON_HOME/bin/python3"
+else
+    set SM_PYTHON = "python3"
+endif
+```
+
+이후 저장 경로를 명령으로 지정하고 검증할 수도 있습니다.
+
+```csh
+"$SM_PYTHON" runtime_check.py \
   --set-data-dir /large/path/storage-manager-data
 ```
 
@@ -144,7 +268,7 @@ PyQt5 자체 그리기를 사용합니다.
 직접 실행하려면 다음과 같습니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 app.py \
+"$SM_PYTHON" app.py \
   --data-dir /large/path/storage-manager-data
 ```
 
@@ -172,14 +296,14 @@ GUI의 `추적` 탭에서 `자동 수집 켜기`를 누르거나 다음 명령�
 등록될 내용을 먼저 확인하려면 다음 명령을 사용합니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 nightly_scan.py \
+"$SM_PYTHON" nightly_scan.py \
   --data-dir /large/path/storage-manager-data --print-cron
 ```
 
 야간 작업을 수동으로 가볍게 확인할 때는 `du`를 생략할 수 있습니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 nightly_scan.py \
+"$SM_PYTHON" nightly_scan.py \
   --data-dir /large/path/storage-manager-data --skip-detail
 ```
 
@@ -193,7 +317,7 @@ $STORAGE_MANAGER_PYTHON_HOME/bin/python3 nightly_scan.py \
 파일시스템의 유효 표본이 두 번 쌓인 뒤 계산됩니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 capacity_watch.py \
+"$SM_PYTHON" capacity_watch.py \
   --data-dir /large/path/storage-manager-data
 ```
 
@@ -208,16 +332,16 @@ $STORAGE_MANAGER_PYTHON_HOME/bin/python3 capacity_watch.py \
 방법을 권장합니다. 명령으로 로그인 자동 시작을 설치할 수도 있습니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 storage_notifier.py \
+"$SM_PYTHON" storage_notifier.py \
   --data-dir /large/path/storage-manager-data --install-autostart
 ```
 
 상태 확인과 자동 시작 해제는 다음과 같습니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 storage_notifier.py \
+"$SM_PYTHON" storage_notifier.py \
   --data-dir /large/path/storage-manager-data --status
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 storage_notifier.py \
+"$SM_PYTHON" storage_notifier.py \
   --data-dir /large/path/storage-manager-data --remove-autostart
 ```
 
@@ -419,12 +543,13 @@ Python의 요일 기준으로 월요일 0부터 일요일 6까지입니다.
 
 ## 테스트
 
-```bash
-python -m unittest discover -s tests -v
+```csh
+"$SM_PYTHON" -m unittest discover -s tests -v
 ```
 
 배포용 source tar에도 `tests/test_*.py`가 포함되므로 사내 Python에서 같은 회귀
-테스트를 실행할 수 있습니다. 실제 운영 DB·계정 경로·로그는 포함되지 않습니다.
+테스트를 실행할 수 있습니다. 새 터미널에서는 위 `SM_PYTHON` 선택 블록을 먼저
+실행합니다. 실제 운영 DB·계정 경로·로그는 포함되지 않습니다.
 
 현재 설계 검토 내용과 남은 운영 고려사항은 [REVIEW.md](REVIEW.md), 기능 확장
 우선순위는 [FEATURE_ROADMAP.md](FEATURE_ROADMAP.md)에 있습니다.
