@@ -35,6 +35,9 @@ dist/
 build/
 *.egg-info/
 
+# Internal implementation notes
+docs/superpowers/
+
 # Editor and operating-system files
 .idea/
 .vscode/
