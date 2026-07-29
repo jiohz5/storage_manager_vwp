@@ -184,8 +184,8 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "button.delete": {"ko": "선택 항목 삭제", "en": "Delete selected"},
     "button.clear": {"ko": "입력 지우기", "en": "Clear form"},
     "tracking.info": {
-        "ko": "cron은 15분마다 가벼운 df 감시, 22시 상세 스캔, 07시 건강 점검을 실행합니다. 22시 작업은 완료될 때까지 계속되며 안전 중지는 수동으로 할 수 있습니다. 메인 창과 별도인 트레이 알림기도 여기서 관리합니다.",
-        "en": "Cron runs a lightweight df watch every 15 minutes, the 22:00 detail scan, and the 07:00 health check. The 22:00 job runs to completion and can be stopped safely by hand. The independent tray notifier is managed here.",
+        "ko": "cron은 15분마다 가벼운 df 감시, 22시 상세 스캔, 07시 건강 점검을 실행합니다. 상세 작업은 22:00~06:00에만 실행되고 06:00에 안전하게 저장·중지되며 다음 22:00에 이어서 진행합니다. 메인 창과 별도인 트레이 알림기도 여기서 관리합니다.",
+        "en": "Cron runs a lightweight df watch every 15 minutes, the 22:00 detail scan, and the 07:00 health check. Detail work runs only from 22:00 to 06:00, then saves safely and resumes after the next 22:00 start. The independent tray notifier is managed here.",
     },
     "tracking.cron": {"ko": "cron 등록", "en": "Cron registration"},
     "tracking.next": {"ko": "다음 예약", "en": "Next scheduled"},
@@ -215,6 +215,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "tracking.state.stop_requested": {"ko": "안전 중지 요청됨", "en": "Safe stop requested"},
     "tracking.state.succeeded": {"ko": "완료", "en": "Succeeded"},
     "tracking.state.stopped": {"ko": "사용자 중지", "en": "Stopped by user"},
+    "tracking.state.paused": {
+        "ko": "시간창 종료로 일시 정지",
+        "en": "Paused at scan-window end",
+    },
     "tracking.state.failed": {"ko": "실패", "en": "Failed"},
     "tracking.state.interrupted": {"ko": "비정상 종료 감지", "en": "Interrupted"},
     "tracking.trigger.command": {"ko": "명령행", "en": "command line"},
@@ -234,6 +238,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
     },
     "tracking.last.value": {"ko": "{time} | {message}", "en": "{time} | {message}"},
     "tracking.message.stopped": {"ko": "사용자 요청으로 안전 중지", "en": "safely stopped by user"},
+    "tracking.message.window_paused": {
+        "ko": "06:00에 상세 스캔을 안전하게 일시 정지했습니다. 다음 22:00 실행에서 이어서 진행합니다.",
+        "en": "Detail scan safely paused at 06:00; resumes after 22:00",
+    },
     "tracking.message.succeeded": {"ko": "일간 보고서 생성 완료", "en": "daily report generated"},
     "tracking.message.interrupted": {
         "ko": "완료 기록 없이 프로세스가 종료됨",
@@ -397,10 +405,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
     },
     "settings.python": {"ko": "파이썬", "en": "Python"},
     "settings.collector": {"ko": "수집기", "en": "Collector"},
-    "settings.scan_window": {"ko": "상세 스캔 시작", "en": "Detail scan start"},
+    "settings.scan_window": {"ko": "상세 스캔 시간", "en": "Detail scan window"},
     "settings.scan_window_value": {
-        "ko": "{start:02d}:00 시작 (완료까지 실행, 수동 안전 중지 가능)",
-        "en": "Starts at {start:02d}:00 (runs to completion; manual safe stop available)",
+        "ko": "{start:02d}:00~{end:02d}:00 상세 작업; 종료 시 저장 후 다음 밤 재개",
+        "en": "Detail work {start:02d}:00-{end:02d}:00; saves and resumes next night",
     },
     "settings.notification_mode": {"ko": "cron 알림 모드", "en": "Cron notification mode"},
     "settings.notification_target": {"ko": "알림 대상", "en": "Notification target"},
@@ -568,6 +576,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
     "scan.stop_requested": {
         "ko": "사용자 요청으로 안전 중지됨",
         "en": "safely stopped by user request",
+    },
+    "scan.window_closed": {
+        "ko": "06:00 상세 스캔 시간 종료로 저장 후 일시 정지됨",
+        "en": "saved and paused at the 06:00 scan-window end",
     },
     "scan.failed": {
         "ko": "{seconds:.1f}초 후 실패: {error}",

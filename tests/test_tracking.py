@@ -94,6 +94,26 @@ class TrackingTests(unittest.TestCase):
             )
             self.assertEqual(read_scan_status(data_dir)["state"], "interrupted")
 
+    def test_paused_window_status_is_terminal_and_complete(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp)
+            write_scan_status(
+                data_dir,
+                {
+                    "state": "paused",
+                    "run_id": "run-a",
+                    "pid": 123,
+                    "phase": "idle",
+                    "message": "scan window closed",
+                },
+            )
+
+            status = read_scan_status(data_dir)
+
+            self.assertEqual(status["state"], "paused")
+            self.assertEqual(status["phase"], "complete")
+            self.assertEqual(status["message"], "scan window closed")
+
     def test_next_schedule_rolls_to_tomorrow_after_22(self):
         before = next_scheduled_run(22, datetime(2026, 7, 12, 21, 0, 0))
         after = next_scheduled_run(22, datetime(2026, 7, 12, 22, 1, 0))

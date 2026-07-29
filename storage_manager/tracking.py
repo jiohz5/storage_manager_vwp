@@ -153,7 +153,7 @@ def read_scan_status(data_dir: Path) -> Dict[str, object]:
     status.update(_read_json(status_file(data_dir)))
     state = str(status.get("state", "never"))
     if status.get("phase") == "idle":
-        if state in {"succeeded", "stopped"}:
+        if state in {"succeeded", "stopped", "paused"}:
             status["phase"] = "complete"
         elif state in {"failed", "interrupted"}:
             status["phase"] = "failed"

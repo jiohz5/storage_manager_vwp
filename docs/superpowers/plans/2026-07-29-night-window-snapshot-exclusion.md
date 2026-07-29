@@ -38,7 +38,7 @@
 - Produces: `SNAPSHOT_ROOT_NAME: str`, `is_excluded_account_path(account_root: PathLike, candidate: PathLike) -> bool`, and `is_excluded_relative_path(relative_path: str) -> bool`.
 - Consumes: existing `Database.reconcile_detail_scan_roots()`, `run_resumable_baseline()`, `scan_changed_file_activity()`, and `collect_top_level_sizes()` interfaces without changing their public call signatures.
 
-- [ ] **Step 1: Write failing root-policy and resumable-baseline tests**
+- [x] **Step 1: Write failing root-policy and resumable-baseline tests**
 
 Add imports and tests in `tests/test_resumable_activity.py`:
 
@@ -108,7 +108,7 @@ def test_resumable_baseline_excludes_root_snapshot_and_legacy_checkpoint(self):
             db.close()
 ```
 
-- [ ] **Step 2: Run the policy/baseline tests and confirm RED**
+- [x] **Step 2: Run the policy/baseline tests and confirm RED**
 
 Run:
 
@@ -118,7 +118,7 @@ python -m unittest tests.test_resumable_activity.ResumableAndActivityTests.test_
 
 Expected: import failure because `storage_manager.path_policy` does not exist.
 
-- [ ] **Step 3: Implement the shared path policy and baseline reconciliation**
+- [x] **Step 3: Implement the shared path policy and baseline reconciliation**
 
 Create `storage_manager/path_policy.py`:
 
@@ -176,7 +176,7 @@ else:
     )
 ```
 
-- [ ] **Step 4: Write failing changed-file and legacy collector tests**
+- [x] **Step 4: Write failing changed-file and legacy collector tests**
 
 Add to `tests/test_resumable_activity.py`:
 
@@ -236,7 +236,7 @@ def test_top_level_collection_excludes_root_snapshot(self, run_mock):
     self.assertIn(f"--exclude={base / '.snapshot'}", command)
 ```
 
-- [ ] **Step 5: Run the scanner tests and confirm RED**
+- [x] **Step 5: Run the scanner tests and confirm RED**
 
 Run:
 
@@ -246,7 +246,7 @@ python -m unittest tests.test_resumable_activity.ResumableAndActivityTests.test_
 
 Expected: root `.snapshot` appears in parsed activity/collector results and the `find`/`du` commands lack prune/exclude arguments.
 
-- [ ] **Step 6: Implement `find` pruning and defensive collector filtering**
+- [x] **Step 6: Implement `find` pruning and defensive collector filtering**
 
 In `activity_scan.scan_changed_file_activity()`, place this expression before the file predicate:
 
@@ -282,7 +282,7 @@ items = [
 ]
 ```
 
-- [ ] **Step 7: Run focused and module tests and confirm GREEN**
+- [x] **Step 7: Run focused and module tests and confirm GREEN**
 
 Run:
 
@@ -292,7 +292,7 @@ python -m unittest tests.test_resumable_activity tests.test_collector -v
 
 Expected: all resumable, activity, and collector tests pass.
 
-- [ ] **Step 8: Commit the detailed-scanner exclusion**
+- [x] **Step 8: Commit the detailed-scanner exclusion**
 
 ```powershell
 git add storage_manager/path_policy.py storage_manager/resumable_scan.py storage_manager/activity_scan.py storage_manager/collector.py tests/test_resumable_activity.py tests/test_collector.py
@@ -313,7 +313,7 @@ git commit -m "Exclude snapshots from detail scans"
 - Consumes: `is_excluded_account_path()` and `is_excluded_relative_path()` from Task 1.
 - Produces: `SearchIndex.prune_excluded_paths(account_id: str) -> int` and exclusion-safe `upsert_changed_files()` / `run_full_index()` behavior.
 
-- [ ] **Step 1: Write failing full and incremental index tests**
+- [x] **Step 1: Write failing full and incremental index tests**
 
 Add to `tests/test_search_index.py`:
 
@@ -412,7 +412,7 @@ def test_prune_excluded_paths_removes_legacy_rows_and_tasks(self):
             index.close()
 ```
 
-- [ ] **Step 2: Run the search tests and confirm RED**
+- [x] **Step 2: Run the search tests and confirm RED**
 
 Run:
 
@@ -422,7 +422,7 @@ python -m unittest tests.test_search_index.SearchIndexTests.test_full_and_increm
 
 Expected: the full/incremental index returns root snapshot rows and `prune_excluded_paths` is missing.
 
-- [ ] **Step 3: Implement index filtering and cleanup**
+- [x] **Step 3: Implement index filtering and cleanup**
 
 Import the Task 1 helpers. Add this method to `SearchIndex`:
 
@@ -478,7 +478,7 @@ if is_excluded_relative_path(raw_relative_path):
 
 After `scheduler.py` opens and prunes the search database, call `prune_excluded_paths()` once for every enabled search account. This cleans legacy rows before incremental batches without adding one cleanup transaction per batch.
 
-- [ ] **Step 4: Add scheduler cleanup coverage**
+- [x] **Step 4: Add scheduler cleanup coverage**
 
 Add this scheduler test; patching `run_full_index` prevents its direct cleanup call from obscuring the scheduler-open cleanup assertion:
 
@@ -522,7 +522,7 @@ def test_scheduler_prunes_excluded_search_paths_when_index_opens(self):
         self.assertEqual(prune.call_args.args[1], "id-a")
 ```
 
-- [ ] **Step 5: Run search and scheduler tests and confirm GREEN**
+- [x] **Step 5: Run search and scheduler tests and confirm GREEN**
 
 Run:
 
@@ -532,7 +532,7 @@ python -m unittest tests.test_search_index tests.test_reports_scheduler -v
 
 Expected: all search-index and scheduler tests pass, including resumed/paused index tests.
 
-- [ ] **Step 6: Commit search-index exclusion**
+- [x] **Step 6: Commit search-index exclusion**
 
 ```powershell
 git add storage_manager/search_index.py storage_manager/scheduler.py tests/test_search_index.py tests/test_reports_scheduler.py
@@ -560,7 +560,7 @@ git commit -m "Exclude snapshots from search index"
 - Changes: `run_nightly_scan(..., clock: Optional[Callable[[], datetime]] = None) -> Path` for deterministic cutoff tests while preserving every existing caller.
 - Consumes: existing cooperative `stop_requested` callbacks in resumable `du`, changed-file `find`, and `run_full_index()`.
 
-- [ ] **Step 1: Write failing pure window-policy tests**
+- [x] **Step 1: Write failing pure window-policy tests**
 
 Create `tests/test_scan_window.py`:
 
@@ -596,7 +596,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run policy tests and confirm RED**
+- [x] **Step 2: Run policy tests and confirm RED**
 
 Run:
 
@@ -606,7 +606,7 @@ python -m unittest tests.test_scan_window -v
 
 Expected: import failure because `storage_manager.scan_window` does not exist.
 
-- [ ] **Step 3: Implement the pure window policy**
+- [x] **Step 3: Implement the pure window policy**
 
 Create `storage_manager/scan_window.py`:
 
@@ -643,7 +643,7 @@ def managed_scan_window_closed(
     )
 ```
 
-- [ ] **Step 4: Run policy tests and confirm GREEN**
+- [x] **Step 4: Run policy tests and confirm GREEN**
 
 Run:
 
@@ -653,7 +653,7 @@ python -m unittest tests.test_scan_window -v
 
 Expected: both tests pass.
 
-- [ ] **Step 5: Write failing scheduler integration tests**
+- [x] **Step 5: Write failing scheduler integration tests**
 
 Replace the old noon behavior test with these explicit trigger tests and add the mid-account cutoff test in `tests/test_reports_scheduler.py`:
 
@@ -774,7 +774,7 @@ def test_window_closing_during_baseline_pauses_before_next_account(self):
         self.assertEqual(read_scan_status(data_dir)["state"], "paused")
 ```
 
-- [ ] **Step 6: Run scheduler integration tests and confirm RED**
+- [x] **Step 6: Run scheduler integration tests and confirm RED**
 
 Run:
 
@@ -784,7 +784,7 @@ python -m unittest tests.test_reports_scheduler.ReportAndSchedulerTests.test_man
 
 Expected: `run_nightly_scan()` rejects the `clock` argument or executes managed daytime detail work.
 
-- [ ] **Step 7: Implement sticky scheduler stop reasons**
+- [x] **Step 7: Implement sticky scheduler stop reasons**
 
 Add the optional clock without changing positional arguments:
 
@@ -848,7 +848,7 @@ else:
     runtime_message = str(daily_path)
 ```
 
-- [ ] **Step 8: Add paused tracking and bilingual GUI coverage**
+- [x] **Step 8: Add paused tracking and bilingual GUI coverage**
 
 Add to `tests/test_tracking.py`:
 
@@ -931,7 +931,7 @@ def test_tracking_translates_automatic_window_pause(self):
             self.dispose_window(window)
 ```
 
-- [ ] **Step 9: Implement paused status and UI text**
+- [x] **Step 9: Implement paused status and UI text**
 
 In `tracking.read_scan_status()`, normalize `paused` as complete:
 
@@ -968,7 +968,7 @@ elif result_message == "scan window closed":
     result_message = self.t("tracking.message.window_paused")
 ```
 
-- [ ] **Step 10: Run all window, scheduler, tracking, i18n, and GUI tests**
+- [x] **Step 10: Run all window, scheduler, tracking, i18n, and GUI tests**
 
 Run:
 

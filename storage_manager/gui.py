@@ -2082,6 +2082,8 @@ class MainWindow(QMainWindow):
         result_message = raw_result_message
         if result_message == "stop requested by user":
             result_message = self.t("tracking.message.stopped")
+        elif result_message == "scan window closed":
+            result_message = self.t("tracking.message.window_paused")
         elif result_message == "process ended without a completion record":
             result_message = self.t("tracking.message.interrupted")
         elif state == "succeeded" and result_message != "-":

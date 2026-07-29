@@ -469,6 +469,52 @@ class GuiI18nTests(unittest.TestCase):
             finally:
                 self.dispose_window(window)
 
+    def test_tracking_translates_automatic_window_pause(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            save_store(data_dir, AccountStore(Settings(), []))
+            paused = {
+                "state": "paused",
+                "run_id": "run-a",
+                "pid": 0,
+                "trigger": "cron",
+                "started_at": "2026-07-29 22:00:00",
+                "updated_at": "2026-07-30 06:00:00",
+                "finished_at": "2026-07-30 06:00:00",
+                "current_account": "project_a",
+                "phase": "complete",
+                "accounts_processed": 1,
+                "accounts_total": 2,
+                "message": "scan window closed",
+            }
+            with patch(
+                "storage_manager.gui.read_cron_status",
+                return_value=CronStatus(False, False, error="not available"),
+            ):
+                window = MainWindow(data_dir)
+            try:
+                with patch.object(
+                    window,
+                    "_tracking_runtime_status",
+                    return_value=paused,
+                ):
+                    window.refresh_tracking()
+                    self.assertIn(
+                        "06:00",
+                        window.lbl_tracking_last_value.text(),
+                    )
+                    self.assertNotIn(
+                        "scan window closed",
+                        window.lbl_tracking_last_value.text(),
+                    )
+                    window.change_language("en")
+                    self.assertIn(
+                        "resumes",
+                        window.lbl_tracking_last_value.text(),
+                    )
+            finally:
+                self.dispose_window(window)
+
     def test_full_exit_cancel_changes_nothing(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = Path(temp) / "data"

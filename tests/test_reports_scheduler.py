@@ -627,7 +627,55 @@ class ReportAndSchedulerTests(unittest.TestCase):
             prune.assert_called_once()
             self.assertEqual(prune.call_args.args[1], "id-a")
 
-    def test_production_detail_scan_is_not_skipped_after_morning_cutoff(self):
+    def test_managed_daytime_run_collects_df_but_pauses_detail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            root = Path(temp) / "user"
+            account_path = root / "project_a"
+            account_path.mkdir(parents=True)
+            account = Account(
+                "project_a",
+                str(account_path),
+                account_id="id-a",
+            )
+            save_store(
+                data_dir,
+                AccountStore(
+                    Settings(monitored_roots=[str(root)]),
+                    [account],
+                ),
+            )
+            backend = StorageBackend(
+                name="test",
+                read_usage=Mock(
+                    return_value=UsageSnapshot(
+                        "fs",
+                        1000,
+                        500,
+                        500,
+                        50,
+                    )
+                ),
+                scan_detail=Mock(
+                    return_value=DetailScanResult([], True, 0.1)
+                ),
+                test_mode=True,
+            )
+
+            run_nightly_scan(
+                data_dir,
+                backend=backend,
+                trigger="cron",
+                clock=lambda: datetime(2026, 7, 29, 12, 0),
+            )
+
+            backend.read_usage.assert_called_once()
+            backend.scan_detail.assert_not_called()
+            status = read_scan_status(data_dir)
+            self.assertEqual(status["state"], "paused")
+            self.assertEqual(status["message"], "scan window closed")
+
+    def test_direct_daytime_run_can_execute_detail(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = Path(temp) / "data"
             root = Path(temp) / "user"
@@ -659,6 +707,8 @@ class ReportAndSchedulerTests(unittest.TestCase):
                     data_dir,
                     backend=backend,
                     now_override=datetime(2026, 7, 15, 12, 0, 0),
+                    trigger="direct",
+                    clock=lambda: datetime(2026, 7, 15, 12, 0, 0),
                 )
 
             baseline.assert_called_once()
@@ -666,6 +716,81 @@ class ReportAndSchedulerTests(unittest.TestCase):
             self.assertEqual(
                 baseline.call_args.kwargs["task_timeout_seconds"],
                 900,
+            )
+
+    def test_window_closing_during_baseline_pauses_before_next_account(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            root = Path(temp) / "user"
+            accounts = []
+            for account_id, name in (
+                ("id-a", "project_a"),
+                ("id-b", "project_b"),
+            ):
+                account_path = root / name
+                account_path.mkdir(parents=True)
+                accounts.append(
+                    Account(
+                        name,
+                        str(account_path),
+                        account_id=account_id,
+                    )
+                )
+            save_store(
+                data_dir,
+                AccountStore(
+                    Settings(monitored_roots=[str(root)]),
+                    accounts,
+                ),
+            )
+            backend = StorageBackend(
+                name="production-like",
+                read_usage=Mock(
+                    return_value=UsageSnapshot(
+                        "fs",
+                        1000,
+                        500,
+                        500,
+                        50,
+                    )
+                ),
+                scan_detail=Mock(
+                    side_effect=AssertionError(
+                        "legacy detail should not run"
+                    )
+                ),
+                test_mode=False,
+            )
+            current = [datetime(2026, 7, 29, 22, 0)]
+
+            def baseline(*args, **kwargs):
+                self.assertFalse(kwargs["stop_requested"]())
+                current[0] = datetime(2026, 7, 30, 6, 0)
+                self.assertTrue(kwargs["stop_requested"]())
+                return DetailScanResult(
+                    [],
+                    False,
+                    0.1,
+                    "stop requested",
+                    resumable=True,
+                    cancelled=True,
+                )
+
+            with patch(
+                "storage_manager.scheduler.run_resumable_baseline",
+                side_effect=baseline,
+            ) as run:
+                run_nightly_scan(
+                    data_dir,
+                    backend=backend,
+                    trigger="cron",
+                    clock=lambda: current[0],
+                )
+
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(
+                read_scan_status(data_dir)["state"],
+                "paused",
             )
 
     def test_search_index_failure_does_not_fail_nightly_report(self):

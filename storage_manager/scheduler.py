@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from storage_manager.activity_scan import scan_changed_file_activity
 from storage_manager.analytics import capacity_forecast, detect_growth_anomaly
@@ -44,6 +44,7 @@ from storage_manager.reports import (
 )
 from storage_manager.quota import collect_quota
 from storage_manager.resumable_scan import run_resumable_baseline
+from storage_manager.scan_window import managed_scan_window_closed
 from storage_manager.search_index import SearchIndex, run_full_index, search_db_file
 from storage_manager.tracking import (
     clear_scan_stop,
@@ -285,6 +286,7 @@ def run_nightly_scan(
     backend: StorageBackend = RHEL_BACKEND,
     now_override: Optional[datetime] = None,
     trigger: str = "direct",
+    clock: Optional[Callable[[], datetime]] = None,
 ) -> Path:
     store = load_store(data_dir)
     with ProcessLock(lock_file(data_dir)):
@@ -292,7 +294,33 @@ def run_nightly_scan(
         runtime_state = "failed"
         runtime_message = ""
         stopped = False
+        stop_reason: Optional[str] = None
+        read_clock = clock or datetime.now
         enabled_accounts = [account for account in store.accounts if account.enabled]
+
+        def requested_stop_reason() -> Optional[str]:
+            nonlocal stop_reason
+            if stop_reason is not None:
+                return stop_reason
+            if scan_stop_requested(data_dir, run_id):
+                stop_reason = "user"
+            elif managed_scan_window_closed(
+                trigger,
+                read_clock(),
+                store.settings.scan_window_start_hour,
+                store.settings.scan_window_end_hour,
+            ):
+                stop_reason = "window"
+            return stop_reason
+
+        def should_stop() -> bool:
+            return requested_stop_reason() is not None
+
+        def stop_status_key() -> str:
+            if stop_reason == "window":
+                return "scan.window_closed"
+            return "scan.stop_requested"
+
         write_scan_status(
             data_dir,
             {
@@ -460,6 +488,7 @@ def run_nightly_scan(
                 )
 
             if scan_stop_requested(data_dir, run_id):
+                stop_reason = "user"
                 stopped = True
                 for report in reports:
                     if report.detail_status == tr(store.settings.language, "scan.not_run"):
@@ -468,6 +497,14 @@ def run_nightly_scan(
                 for report in reports:
                     if report.detail_status == tr(store.settings.language, "scan.not_run"):
                         report.detail_status = tr(store.settings.language, "scan.skip_option")
+            elif requested_stop_reason():
+                stopped = True
+                for report in reports:
+                    if report.detail_status == tr(store.settings.language, "scan.not_run"):
+                        report.detail_status = tr(
+                            store.settings.language,
+                            stop_status_key(),
+                        )
             else:
                 update_scan_status(data_dir, run_id, phase="detail")
                 candidates = [
@@ -492,12 +529,12 @@ def run_nightly_scan(
                     )
 
                 for index, account in enumerate(candidates):
-                    if scan_stop_requested(data_dir, run_id):
+                    if requested_stop_reason():
                         stopped = True
                         for skipped in candidates[index:]:
                             report_by_id[skipped.account_id].detail_status = tr(
                                 store.settings.language,
-                                "scan.stop_requested",
+                                stop_status_key(),
                             )
                         break
                     report = report_by_id[account.account_id]
@@ -552,19 +589,19 @@ def run_nightly_scan(
                             validated_paths[account.account_id],
                             since,
                             timeout_seconds,
-                            stop_requested=lambda: scan_stop_requested(data_dir, run_id),
+                            stop_requested=should_stop,
                             record_batch=record_batch,
                         )
                         if activity.cancelled:
                             report.detail_status = tr(
                                 store.settings.language,
-                                "scan.stop_requested",
+                                stop_status_key(),
                             )
                             stopped = True
                             for skipped in candidates[index + 1 :]:
                                 report_by_id[skipped.account_id].detail_status = tr(
                                     store.settings.language,
-                                    "scan.stop_requested",
+                                    stop_status_key(),
                                 )
                             break
                         if activity.complete:
@@ -631,18 +668,18 @@ def run_nightly_scan(
                                     timeout_seconds,
                                 )
                             ),
-                            stop_requested=lambda: scan_stop_requested(data_dir, run_id),
+                            stop_requested=should_stop,
                         )
                     if detail.cancelled:
                         report.detail_status = tr(
                             store.settings.language,
-                            "scan.stop_requested",
+                            stop_status_key(),
                         )
                         stopped = True
                         for skipped in candidates[index + 1 :]:
                             report_by_id[skipped.account_id].detail_status = tr(
                                 store.settings.language,
-                                "scan.stop_requested",
+                                stop_status_key(),
                             )
                         break
                     if not detail.complete:
@@ -793,7 +830,7 @@ def run_nightly_scan(
                     normalized = validated_paths.get(account.account_id)
                     if not normalized:
                         continue
-                    if scan_stop_requested(data_dir, run_id):
+                    if requested_stop_reason():
                         stopped = True
                         break
                     update_scan_status(
@@ -806,7 +843,7 @@ def run_nightly_scan(
                             search_index,
                             account.account_id,
                             Path(normalized),
-                            stop_requested=lambda: scan_stop_requested(data_dir, run_id),
+                            stop_requested=should_stop,
                             now=now,
                             force=force_weekly,
                         )
@@ -825,8 +862,15 @@ def run_nightly_scan(
             purge_notification_outbox(data_dir, store.settings.history_days, now)
             db.checkpoint()
             print(f"[INFO] daily report: {daily_path}")
-            runtime_state = "stopped" if stopped else "succeeded"
-            runtime_message = "stop requested by user" if stopped else str(daily_path)
+            if stop_reason == "window":
+                runtime_state = "paused"
+                runtime_message = "scan window closed"
+            elif stopped:
+                runtime_state = "stopped"
+                runtime_message = "stop requested by user"
+            else:
+                runtime_state = "succeeded"
+                runtime_message = str(daily_path)
             return daily_path
         except Exception as exc:
             runtime_message = str(exc)
