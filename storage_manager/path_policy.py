@@ -9,7 +9,7 @@ SNAPSHOT_ROOT_NAME = ".snapshot"
 
 
 def is_excluded_relative_path(relative_path: str) -> bool:
-    normalized = str(relative_path).replace("\\", "/").lstrip("/")
+    normalized = str(relative_path).lstrip("/")
     return normalized == SNAPSHOT_ROOT_NAME or normalized.startswith(
         f"{SNAPSHOT_ROOT_NAME}/"
     )

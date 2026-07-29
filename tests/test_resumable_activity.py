@@ -10,7 +10,12 @@ from storage_manager.path_policy import (
     is_excluded_account_path,
     is_excluded_relative_path,
 )
-from storage_manager.resumable_scan import TaskTimeout, run_resumable_baseline
+from storage_manager.resumable_scan import (
+    TaskCancelled,
+    TaskTimeout,
+    initial_tasks,
+    run_resumable_baseline,
+)
 
 
 class FakeFindProcess:
@@ -26,6 +31,70 @@ class FakeFindProcess:
 
 
 class ResumableAndActivityTests(unittest.TestCase):
+    def test_initial_task_enumeration_honors_stop_callback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            account = Path(temp) / "account"
+            first = account / "first"
+            second = account / "second"
+            first.mkdir(parents=True)
+            second.mkdir()
+            stopped = False
+
+            def children():
+                nonlocal stopped
+                yield first
+                stopped = True
+                yield second
+
+            with patch.object(Path, "iterdir", side_effect=children):
+                with self.assertRaises(TaskCancelled):
+                    initial_tasks(
+                        str(account),
+                        stop_requested=lambda: stopped,
+                    )
+
+    def test_stop_during_timeout_split_preserves_original_task(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            account = root / "account"
+            top = account / "results"
+            (top / "child").mkdir(parents=True)
+            db = Database(root / "test.db")
+            split_started = False
+
+            def timeout_then_stop(path, timeout):
+                nonlocal split_started
+                split_started = True
+                raise TaskTimeout(path)
+
+            try:
+                result = run_resumable_baseline(
+                    db,
+                    "account-id",
+                    str(account),
+                    30,
+                    du_runner=timeout_then_stop,
+                    stop_requested=lambda: split_started,
+                )
+
+                self.assertTrue(result.cancelled)
+                self.assertFalse(result.complete)
+                tasks = db.conn.execute(
+                    """
+                    SELECT task_path, depth, status
+                    FROM detail_scan_tasks
+                    WHERE account_id = ?
+                    ORDER BY id
+                    """,
+                    ("account-id",),
+                ).fetchall()
+                self.assertEqual(
+                    [tuple(row) for row in tasks],
+                    [(str(top), 0, "pending")],
+                )
+            finally:
+                db.close()
+
     def test_root_snapshot_policy_does_not_exclude_nested_name(self):
         with tempfile.TemporaryDirectory() as temp:
             account = Path(temp) / "account"
@@ -36,6 +105,9 @@ class ResumableAndActivityTests(unittest.TestCase):
                 )
             )
             self.assertTrue(is_excluded_relative_path(".snapshot/old.dat"))
+            self.assertFalse(
+                is_excluded_relative_path(r".snapshot\ordinary")
+            )
             self.assertFalse(
                 is_excluded_account_path(
                     account,

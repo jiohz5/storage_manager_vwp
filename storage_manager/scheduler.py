@@ -339,33 +339,6 @@ def run_nightly_scan(
         try:
             rotate_cron_log(data_dir)
             db = Database(db_file(data_dir))
-            search_path = search_db_file(data_dir)
-            if (
-                any(account.search_enabled for account in enabled_accounts)
-                or search_path.exists()
-            ):
-                try:
-                    search_index = SearchIndex(
-                        search_path,
-                        timeout_seconds=1.0,
-                    )
-                    search_index.prune_accounts(
-                        {
-                            account.account_id: account.path
-                            for account in enabled_accounts
-                            if account.search_enabled
-                        }
-                    )
-                    for account in enabled_accounts:
-                        if account.search_enabled:
-                            search_index.prune_excluded_paths(
-                                account.account_id
-                            )
-                except Exception as exc:
-                    print(f"[WARN] search index unavailable: {exc}", file=sys.stderr)
-                    if search_index is not None:
-                        search_index.close()
-                        search_index = None
             now = now_override or datetime.now()
             ts = now.strftime("%Y-%m-%d %H:%M:%S")
             day = now.strftime("%Y-%m-%d")
@@ -506,6 +479,50 @@ def run_nightly_scan(
                             stop_status_key(),
                         )
             else:
+                search_path = search_db_file(data_dir)
+                if (
+                    any(account.search_enabled for account in enabled_accounts)
+                    or search_path.exists()
+                ):
+                    try:
+                        search_index = SearchIndex(
+                            search_path,
+                            timeout_seconds=1.0,
+                        )
+                        search_index.prune_accounts(
+                            {
+                                account.account_id: account.path
+                                for account in enabled_accounts
+                                if account.search_enabled
+                            },
+                            stop_requested=should_stop,
+                        )
+                        for account in enabled_accounts:
+                            if requested_stop_reason():
+                                break
+                            if account.search_enabled:
+                                search_index.prune_excluded_paths(
+                                    account.account_id
+                                )
+                    except Exception as exc:
+                        print(
+                            f"[WARN] search index unavailable: {exc}",
+                            file=sys.stderr,
+                        )
+                        if search_index is not None:
+                            search_index.close()
+                            search_index = None
+                if requested_stop_reason():
+                    stopped = True
+                    for report in reports:
+                        if report.detail_status == tr(
+                            store.settings.language,
+                            "scan.not_run",
+                        ):
+                            report.detail_status = tr(
+                                store.settings.language,
+                                stop_status_key(),
+                            )
                 update_scan_status(data_dir, run_id, phase="detail")
                 candidates = [
                     account for account in enabled_accounts if account.account_id in validated_paths
@@ -846,6 +863,7 @@ def run_nightly_scan(
                             stop_requested=should_stop,
                             now=now,
                             force=force_weekly,
+                            prune_excluded=False,
                         )
                     except Exception as exc:
                         print(

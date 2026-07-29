@@ -32,10 +32,15 @@ def _allocated_kb(path: Path) -> int:
     return max(1, (int(stat.st_size) + 1023) // 1024)
 
 
-def initial_tasks(account_path: str) -> List[Task]:
+def initial_tasks(
+    account_path: str,
+    stop_requested: Callable[[], bool] = lambda: False,
+) -> List[Task]:
     base = Path(account_path)
     tasks: List[Task] = []
     for child in base.iterdir():
+        if stop_requested():
+            raise TaskCancelled(account_path)
         if is_excluded_account_path(base, child):
             continue
         child_path = str(child)
@@ -55,11 +60,20 @@ def initial_tasks(account_path: str) -> List[Task]:
     return tasks
 
 
-def split_directory_task(task_path: str, top_path: str, depth: int) -> List[Task]:
+def split_directory_task(
+    task_path: str,
+    top_path: str,
+    depth: int,
+    stop_requested: Callable[[], bool] = lambda: False,
+) -> List[Task]:
+    if stop_requested():
+        raise TaskCancelled(task_path)
     directory = Path(task_path)
     direct_size_kb = _allocated_kb(directory)
     child_tasks: List[Task] = []
     for child in directory.iterdir():
+        if stop_requested():
+            raise TaskCancelled(task_path)
         if child.is_dir() and not child.is_symlink():
             child_tasks.append(
                 (top_path, str(child), "scan", depth + 1, "pending", 0)
@@ -137,7 +151,23 @@ def run_resumable_baseline(
     if state is None or state[0] != account_path:
         cycle_id = uuid.uuid4().hex
         try:
-            tasks = initial_tasks(account_path)
+            tasks = initial_tasks(account_path, stop_requested)
+        except TaskCancelled:
+            db.begin_detail_scan(
+                account_id,
+                account_path,
+                cycle_id,
+                timestamp,
+                [],
+            )
+            return DetailScanResult(
+                [],
+                False,
+                time.monotonic() - started,
+                "stop requested",
+                resumable=True,
+                cancelled=True,
+            )
         except OSError as exc:
             return DetailScanResult([], False, 0.0, str(exc), resumable=True)
         db.begin_detail_scan(
@@ -150,7 +180,19 @@ def run_resumable_baseline(
     else:
         cycle_id = str(state[1])
         try:
-            current_tasks = initial_tasks(account_path)
+            current_tasks = initial_tasks(account_path, stop_requested)
+        except TaskCancelled:
+            completed, total = db.detail_scan_progress(account_id, cycle_id)
+            return DetailScanResult(
+                db.detail_scan_items(account_id, cycle_id),
+                False,
+                time.monotonic() - started,
+                "stop requested",
+                completed,
+                total,
+                True,
+                True,
+            )
         except OSError as exc:
             return DetailScanResult([], False, 0.0, str(exc), resumable=True)
         db.reconcile_detail_scan_roots(
@@ -191,7 +233,18 @@ def run_resumable_baseline(
 
         if task is None:
             try:
-                current_tasks = initial_tasks(account_path)
+                current_tasks = initial_tasks(account_path, stop_requested)
+            except TaskCancelled:
+                return DetailScanResult(
+                    db.detail_scan_items(account_id, cycle_id),
+                    False,
+                    time.monotonic() - started,
+                    "stop requested",
+                    completed,
+                    total,
+                    True,
+                    True,
+                )
             except OSError as exc:
                 return DetailScanResult(
                     db.detail_scan_items(account_id, cycle_id),
@@ -257,6 +310,18 @@ def run_resumable_baseline(
                     str(task_path),
                     str(top_path),
                     int(depth),
+                    stop_requested,
+                )
+            except TaskCancelled:
+                return DetailScanResult(
+                    db.detail_scan_items(account_id, cycle_id),
+                    False,
+                    time.monotonic() - started,
+                    "stop requested",
+                    completed,
+                    total,
+                    True,
+                    True,
                 )
             except FileNotFoundError:
                 db.complete_detail_task(

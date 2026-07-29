@@ -225,7 +225,11 @@ class SearchIndex:
                 (account_id,),
             )
 
-    def prune_accounts(self, valid_accounts: Dict[str, str]) -> List[str]:
+    def prune_accounts(
+        self,
+        valid_accounts: Dict[str, str],
+        stop_requested: Callable[[], bool] = lambda: False,
+    ) -> List[str]:
         account_ids = {
             str(row[0])
             for row in self.conn.execute(
@@ -240,6 +244,8 @@ class SearchIndex:
         }
         removed = []
         for account_id in sorted(account_ids):
+            if stop_requested():
+                break
             expected = valid_accounts.get(account_id)
             stored = stored_paths.get(account_id, "")
             if expected is not None and (
@@ -254,46 +260,69 @@ class SearchIndex:
 
     def prune_excluded_paths(self, account_id: str) -> int:
         exact = SNAPSHOT_ROOT_NAME
-        descendants = f"{SNAPSHOT_ROOT_NAME}/*"
+        descendant_start = f"{SNAPSHOT_ROOT_NAME}/"
+        descendant_end = f"{SNAPSHOT_ROOT_NAME}0"
+        exact_task = os.fsencode(SNAPSHOT_ROOT_NAME)
+        task_prefix = os.fsencode(f"{SNAPSHOT_ROOT_NAME}/")
         with self.conn:
-            removed = self.conn.execute(
+            removed_exact = self.conn.execute(
                 """
                 DELETE FROM search_entries
                 WHERE account_id = ?
-                  AND (relative_path = ? OR relative_path GLOB ?)
+                  AND relative_path = ?
                 """,
-                (account_id, exact, descendants),
+                (account_id, exact),
             ).rowcount
+            removed_descendants = self.conn.execute(
+                """
+                DELETE FROM search_entries
+                WHERE account_id = ?
+                  AND relative_path >= ?
+                  AND relative_path < ?
+                """,
+                (account_id, descendant_start, descendant_end),
+            ).rowcount
+            removed = removed_exact + removed_descendants
             self.conn.execute(
                 """
                 DELETE FROM search_scan_tasks
                 WHERE account_id = ?
-                  AND (relative_dir = ? OR relative_dir GLOB ?)
+                  AND (
+                    CAST(relative_dir AS BLOB) = ?
+                    OR substr(CAST(relative_dir AS BLOB), 1, ?) = ?
+                  )
                 """,
-                (account_id, exact, descendants),
+                (
+                    account_id,
+                    exact_task,
+                    len(task_prefix),
+                    task_prefix,
+                ),
             )
-            files = self.conn.execute(
-                """
-                SELECT COUNT(*) FROM search_entries
-                WHERE account_id = ? AND entry_type <> 'directory'
-                """,
-                (account_id,),
-            ).fetchone()[0]
-            directories = self.conn.execute(
-                """
-                SELECT COUNT(*) FROM search_entries
-                WHERE account_id = ? AND entry_type = 'directory'
-                """,
-                (account_id,),
-            ).fetchone()[0]
-            self.conn.execute(
-                """
-                UPDATE search_scan_state
-                SET files_indexed = ?, dirs_indexed = ?
-                WHERE account_id = ?
-                """,
-                (int(files), int(directories), account_id),
-            )
+            if removed:
+                files, directories = self.conn.execute(
+                    """
+                    SELECT
+                      COALESCE(SUM(entry_type <> 'directory'), 0),
+                      COALESCE(SUM(entry_type = 'directory'), 0)
+                    FROM search_entries
+                    WHERE account_id = ?
+                      AND generation = (
+                        SELECT generation
+                        FROM search_scan_state
+                        WHERE account_id = ?
+                      )
+                    """,
+                    (account_id, account_id),
+                ).fetchone()
+                self.conn.execute(
+                    """
+                    UPDATE search_scan_state
+                    SET files_indexed = ?, dirs_indexed = ?
+                    WHERE account_id = ?
+                    """,
+                    (int(files), int(directories), account_id),
+                )
         return max(0, int(removed))
 
     def summary(self) -> Dict[str, object]:
@@ -756,6 +785,7 @@ def run_full_index(
     force: bool = False,
     full_scan_days: int = 7,
     entry_batch_size: int = INDEX_ENTRY_BATCH_SIZE,
+    prune_excluded: bool = True,
 ) -> IndexRunResult:
     started = now or datetime.now()
     root = Path(account_path).expanduser().resolve()
@@ -766,7 +796,8 @@ def run_full_index(
     except OSError as exc:
         return IndexRunResult(False, False, False, 0, 0, str(exc))
 
-    index.prune_excluded_paths(account_id)
+    if prune_excluded:
+        index.prune_excluded_paths(account_id)
     generation, skipped = index._begin_full_scan(
         account_id,
         root,

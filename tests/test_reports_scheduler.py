@@ -578,7 +578,7 @@ class ReportAndSchedulerTests(unittest.TestCase):
             finally:
                 index.close()
 
-    def test_scheduler_prunes_excluded_search_paths_when_index_opens(self):
+    def test_scheduler_prunes_after_window_before_full_index(self):
         with tempfile.TemporaryDirectory() as temp:
             data_dir = Path(temp) / "data"
             root = Path(temp) / "user"
@@ -621,11 +621,80 @@ class ReportAndSchedulerTests(unittest.TestCase):
             ) as prune, patch(
                 "storage_manager.scheduler.run_full_index",
                 return_value=Mock(cancelled=False),
-            ):
+            ) as full_index:
                 run_nightly_scan(data_dir, backend=backend)
 
             prune.assert_called_once()
             self.assertEqual(prune.call_args.args[1], "id-a")
+            full_index.assert_called_once()
+            self.assertFalse(
+                full_index.call_args.kwargs["prune_excluded"],
+            )
+
+    def test_window_closing_during_search_cleanup_skips_next_account(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "data"
+            root = Path(temp) / "user"
+            accounts = []
+            for account_id, name in (
+                ("id-a", "project_a"),
+                ("id-b", "project_b"),
+            ):
+                account_path = root / name
+                account_path.mkdir(parents=True)
+                accounts.append(
+                    Account(
+                        name,
+                        str(account_path),
+                        account_id=account_id,
+                        search_enabled=True,
+                    )
+                )
+            save_store(
+                data_dir,
+                AccountStore(
+                    Settings(monitored_roots=[str(root)]),
+                    accounts,
+                ),
+            )
+            backend = StorageBackend(
+                name="test",
+                read_usage=Mock(
+                    return_value=UsageSnapshot(
+                        "fs",
+                        1000,
+                        500,
+                        500,
+                        50,
+                    )
+                ),
+                scan_detail=Mock(
+                    return_value=DetailScanResult([], True, 0.1)
+                ),
+                test_mode=True,
+            )
+            current = [datetime(2026, 7, 29, 22, 0)]
+
+            def close_window_after_first_cleanup(_index, _account_id):
+                current[0] = datetime(2026, 7, 30, 6, 0)
+                return 0
+
+            with patch.object(
+                SearchIndex,
+                "prune_excluded_paths",
+                autospec=True,
+                side_effect=close_window_after_first_cleanup,
+            ) as prune:
+                run_nightly_scan(
+                    data_dir,
+                    backend=backend,
+                    trigger="cron",
+                    clock=lambda: current[0],
+                )
+
+            self.assertEqual(prune.call_count, 1)
+            backend.scan_detail.assert_not_called()
+            self.assertEqual(read_scan_status(data_dir)["state"], "paused")
 
     def test_managed_daytime_run_collects_df_but_pauses_detail(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -637,6 +706,7 @@ class ReportAndSchedulerTests(unittest.TestCase):
                 "project_a",
                 str(account_path),
                 account_id="id-a",
+                search_enabled=True,
             )
             save_store(
                 data_dir,
@@ -662,15 +732,19 @@ class ReportAndSchedulerTests(unittest.TestCase):
                 test_mode=True,
             )
 
-            run_nightly_scan(
-                data_dir,
-                backend=backend,
-                trigger="cron",
-                clock=lambda: datetime(2026, 7, 29, 12, 0),
-            )
+            with patch(
+                "storage_manager.scheduler.SearchIndex",
+            ) as search_index:
+                run_nightly_scan(
+                    data_dir,
+                    backend=backend,
+                    trigger="cron",
+                    clock=lambda: datetime(2026, 7, 29, 12, 0),
+                )
 
             backend.read_usage.assert_called_once()
             backend.scan_detail.assert_not_called()
+            search_index.assert_not_called()
             status = read_scan_status(data_dir)
             self.assertEqual(status["state"], "paused")
             self.assertEqual(status["message"], "scan window closed")

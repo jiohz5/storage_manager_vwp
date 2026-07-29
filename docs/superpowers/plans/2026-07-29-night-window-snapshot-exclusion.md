@@ -978,7 +978,7 @@ python -m unittest tests.test_scan_window tests.test_reports_scheduler tests.tes
 
 Expected: all selected tests pass, including existing manual-stop and process-interruption coverage.
 
-- [ ] **Step 11: Commit managed window behavior**
+- [x] **Step 11: Commit managed window behavior**
 
 ```powershell
 git add storage_manager/scan_window.py storage_manager/scheduler.py storage_manager/tracking.py storage_manager/gui.py storage_manager/i18n.py tests/test_scan_window.py tests/test_reports_scheduler.py tests/test_tracking.py tests/test_gui_i18n.py tests/test_i18n.py
@@ -998,7 +998,7 @@ git commit -m "Pause managed scans outside night window"
 - Consumes: final `.snapshot` policy and managed pause behavior from Tasks 1-3.
 - Produces: deployment guidance and executable RHEL/MATE acceptance checks.
 
-- [ ] **Step 1: Update operator documentation**
+- [x] **Step 1: Update operator documentation**
 
 Replace claims that the nightly job runs indefinitely with these exact operational facts:
 
@@ -1009,7 +1009,7 @@ Replace claims that the nightly job runs indefinitely with these exact operation
 - `nice`/`ionice` are priorities, not hard bandwidth limits;
 - `<account>/.snapshot` is excluded from `du`, changed-file `find`, and search index, while `df` remains filesystem-level.
 
-- [ ] **Step 2: Add RHEL/MATE acceptance checks**
+- [x] **Step 2: Add RHEL/MATE acceptance checks**
 
 Add steps that create a disposable account with:
 
@@ -1020,7 +1020,7 @@ Add steps that create a disposable account with:
 
 Run a direct detail scan and search index, then verify only `included.dat` appears. Add a managed daytime invocation check that records `paused` after the df pass, a 22:00 run check, and a 06:00 cutoff check using a disposable tree rather than production accounts. Confirm the 15-minute `capacity_watch.py` cron line remains installed.
 
-- [ ] **Step 3: Run complete verification**
+- [x] **Step 3: Run complete verification**
 
 Run:
 
@@ -1033,7 +1033,7 @@ git diff --check
 
 Expected: all tests pass; the two Windows symlink tests may remain skipped because creating symlinks requires extra privileges. Compilation, Python 3.10 runtime diagnostics, and diff checks exit 0.
 
-- [ ] **Step 4: Review scope and runtime-state exclusions**
+- [x] **Step 4: Review scope and runtime-state exclusions**
 
 Run:
 
@@ -1045,7 +1045,7 @@ git ls-files | Select-String -Pattern '\.(db|db-wal|db-shm|log|lock)$|(^|[\\/])n
 
 Expected: only source, tests, design/plan, README, and acceptance documentation changed; no runtime database, log, lock, status, checkpoint, report, or notification outbox is tracked.
 
-- [ ] **Step 5: Request an independent code review**
+- [x] **Step 5: Request an independent code review**
 
 Ask the reviewer to inspect the complete `origin/main..HEAD` diff plus uncommitted documentation, prioritizing:
 
@@ -1058,14 +1058,21 @@ Ask the reviewer to inspect the complete `origin/main..HEAD` diff plus uncommitt
 
 Resolve every critical or important finding, rerun affected focused tests, and rerun the complete verification command before delivery.
 
-- [ ] **Step 6: Commit documentation and completed plan state**
+Review resolutions:
+
+- Moved search DB opening and cleanup after the all-account `df` pass and managed-window check; scheduler cleanup runs once and `run_full_index()` skips the duplicate cleanup.
+- Made legacy search-task cleanup handle SQLite BLOB and TEXT paths, use indexed exact/range deletion for entry rows, and recalculate progress from only the active generation.
+- Added cooperative stop checks to initial and timeout-split directory enumeration while preserving the original pending task when a split is interrupted.
+- Added a 06:00 guard between per-account search cleanups, POSIX backslash filename coverage, cleanup range-boundary coverage, and failure-preserving RHEL acceptance steps.
+
+- [x] **Step 6: Commit documentation and completed plan state**
 
 ```powershell
 git add README.md VWP_ACCEPTANCE.md docs/superpowers/plans/2026-07-29-night-window-snapshot-exclusion.md
 git commit -m "Document managed night scan safety"
 ```
 
-- [ ] **Step 7: Push directly to GitHub main and verify equality**
+- [x] **Step 7: Push directly to GitHub main and verify equality**
 
 ```powershell
 git push origin main

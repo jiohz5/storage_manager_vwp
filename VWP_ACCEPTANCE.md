@@ -39,6 +39,11 @@ tar -xzf storage_manager_vwp-source.tar.gz
 cd storage_manager_vwp
 setenv STORAGE_MANAGER_PYTHON_HOME /path/to/python-3.10
 # 또는: setenv STORAGE_MANAGER_PYTHON_BIN /path/to/python3
+if ($?STORAGE_MANAGER_PYTHON_BIN) then
+    set SM_PYTHON = "$STORAGE_MANAGER_PYTHON_BIN"
+else
+    set SM_PYTHON = "$STORAGE_MANAGER_PYTHON_HOME/bin/python3"
+endif
 chmod +x run.csh setup_cron.csh
 ```
 
@@ -103,7 +108,7 @@ GUI에서 확인합니다.
 생성합니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 nightly_scan.py \
+"$SM_PYTHON" nightly_scan.py \
   --data-dir "$STORAGE_MANAGER_DATA_DIR" --skip-detail --force-weekly
 ```
 
@@ -125,10 +130,12 @@ data/reports/latest_cleanup_en.txt
 
 ## 6. 상세 스캔 검사
 
-업무 부하가 허용되는 시간에 한 번 실행합니다.
+파일 수가 적은 검증용 계정을 등록한 뒤 업무 부하가 허용되는 시간에 직접 실행합니다.
+터미널 직접 실행은 의도적으로 22:00~06:00 제한을 우회하므로 운영 계정에서는
+점검 목적으로만 사용합니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 nightly_scan.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
+"$SM_PYTHON" nightly_scan.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
 ```
 
 합격 기준:
@@ -136,9 +143,134 @@ $STORAGE_MANAGER_PYTHON_HOME/bin/python3 nightly_scan.py --data-dir "$STORAGE_MA
 - timeout 또는 권한 오류 없이 완료하거나, 실패 계정이 보고서에 명확히 기록됨
 - 두 번째 정상 상세 실행부터 `Trend` 탭에 증가 경로가 표시됨
 - 진행 중 기준선이 GUI에 작업 수로 표시되고 다음 야간 실행에서 이어짐
-- 22시 이후 06시가 지나도 작업이 강제 종료되지 않고 완료 또는 수동 안전 중지됨
-- 개별 15분 timeout 항목은 하위 디렉터리 작업으로 나뉘고 전체 deadline은 없음
+- cron/GUI 관리 실행은 06:00에 `paused`로 종료되고 다음 22:00에 체크포인트부터 재개됨
+- 개별 15분 timeout 항목은 하위 디렉터리 작업으로 나뉨
+- 여러 계정의 상세 작업은 직렬 실행되어 동시에 두 계정을 순회하지 않음
 - 동시 두 번째 실행은 `Another nightly scan is already running`으로 종료됨
+- `nice`/`ionice`는 낮은 우선순위일 뿐 처리량의 절대 상한이 아님
+
+### 6-1. `.snapshot` 제외 실환경 검사
+
+운영 계정 대신 `/tmp`의 작은 임시 트리에서 RHEL의 실제 `du`와 `find`, 검색 인덱스를
+검사합니다. 계정 루트의 `.snapshot`만 제외되고 일반 경로 아래의 같은 이름은
+포함되어야 합니다.
+
+```csh
+setenv SM_ACCEPT_ROOT /tmp/storage-manager-vwp-$USER-$$
+mkdir -p "$SM_ACCEPT_ROOT/project/.snapshot"
+mkdir -p "$SM_ACCEPT_ROOT/project/results/.snapshot"
+echo ignored > "$SM_ACCEPT_ROOT/project/.snapshot/ignored.dat"
+echo included > "$SM_ACCEPT_ROOT/project/results/.snapshot/included.dat"
+
+"$SM_PYTHON" - << PY
+import os
+import subprocess
+from pathlib import Path
+
+from storage_manager.activity_scan import scan_changed_file_activity
+from storage_manager.database import Database
+from storage_manager.resumable_scan import run_resumable_baseline
+from storage_manager.search_index import SearchIndex, run_full_index
+
+workspace = Path(os.environ["SM_ACCEPT_ROOT"])
+account = workspace / "project"
+database = Database(workspace / "detail.db")
+index = SearchIndex(workspace / "search.db")
+try:
+    detail = run_resumable_baseline(
+        database,
+        "accept-account",
+        str(account),
+        None,
+    )
+    assert detail.complete, detail
+    detail_sizes = {
+        Path(path).relative_to(account).as_posix(): size_kb
+        for path, size_kb in detail.items
+    }
+    expected_results_kb = int(
+        subprocess.check_output(
+            ["du", "-sk", "--", str(account / "results")],
+            text=True,
+        ).split()[0]
+    )
+    assert detail_sizes == {
+        "results": expected_results_kb
+    }, detail_sizes
+
+    activity = scan_changed_file_activity(
+        str(account),
+        "1970-01-01 00:00:00",
+        60,
+    )
+    assert activity.complete, activity
+    assert activity.files_seen == 1, activity
+
+    indexed = run_full_index(
+        index,
+        "accept-account",
+        account,
+        force=True,
+    )
+    assert indexed.complete, indexed
+    assert not index.search(
+        "accept-account",
+        "ignored.dat",
+        mode="exact",
+    )
+    included = index.search(
+        "accept-account",
+        "included.dat",
+        mode="exact",
+    )
+    assert [row.relative_path for row in included] == [
+        "results/.snapshot/included.dat"
+    ], included
+finally:
+    index.close()
+    database.close()
+
+print("PASS: root .snapshot excluded; nested .snapshot included")
+PY
+
+set sm_accept_status = $status
+if ($sm_accept_status == 0) then
+    rm -rf "$SM_ACCEPT_ROOT"
+else
+    echo "FAIL: acceptance data retained at $SM_ACCEPT_ROOT"
+endif
+```
+
+마지막에 `PASS`가 출력되어야 합니다. 검사가 실패하면 임시 경로와 DB를 자동으로
+보존하므로 출력된 위치를 함께 기록합니다.
+
+### 6-2. 22:00~06:00 시간창 검사
+
+먼저 시간 경계와 중단 신호 전달을 검증하는 자동 테스트를 실행합니다.
+
+```csh
+"$SM_PYTHON" -m unittest \
+  tests.test_scan_window \
+  tests.test_reports_scheduler.ReportAndSchedulerTests.test_managed_daytime_run_collects_df_but_pauses_detail \
+  tests.test_reports_scheduler.ReportAndSchedulerTests.test_direct_daytime_run_can_execute_detail \
+  tests.test_reports_scheduler.ReportAndSchedulerTests.test_window_closing_during_baseline_pauses_before_next_account \
+  tests.test_reports_scheduler.ReportAndSchedulerTests.test_window_closing_during_search_cleanup_skips_next_account \
+  -v
+```
+
+합격 기준:
+
+- 관리 실행은 22:00부터 시작 가능하고 06:00부터 상세 작업을 시작하지 않음
+- 낮 시간의 관리 실행도 모든 계정의 빠른 `df`는 기록한 뒤 `paused`로 종료함
+- 실행 중 06:00이 되면 현재 하위 프로세스를 정리하고 다음 계정을 시작하지 않음
+- 터미널 직접 실행은 낮에도 상세 작업을 수행함
+
+실제 시각 검증은 작은 검증용 계정과 별도 데이터 디렉터리에서 진행합니다. 낮에
+`--trigger cron`으로 실행한 뒤 `nightly_scan_status.json`의 `state`가 `paused`인지,
+22:00 이후에는 상세 단계가 시작되는지 확인합니다. 06:00 직전까지 남을 수 있는
+검증 트리로 실행했다면 06:00 이후 PID가 종료되고 상태가 `paused`, phase가
+`complete`, message가 `scan window closed`인지 확인합니다. 운영 대용량 계정으로
+경계 시험을 만들지 않습니다.
 
 ## 7. cron 검사
 
@@ -150,12 +282,14 @@ crontab -l | grep storage-manager-vwp
 15분 watcher, 22시 수집, 07시 건강 점검 행이 각각 하나, 총 세 줄이어야 합니다.
 `which nice`와 `which ionice`가 모두 성공하면 22시 행의 Python 앞에
 `nice -n 10 ionice -c 2 -n 7`이 포함되어야 합니다. 도구가 없는 환경에서는 이
-prefix 없이도 cron 설치와 수집이 정상 동작해야 합니다.
+prefix 없이도 cron 설치와 수집이 정상 동작해야 합니다. 이 prefix는 우선순위
+조정이며 CPU·I/O 처리량의 절대 상한은 아닙니다. 15분 watcher cron은 야간 상세
+작업이 `paused`인 낮에도 그대로 등록·실행되어야 합니다.
 watcher를 수동으로 두 번 실행하고 다음 파일을 확인합니다.
 
 ```csh
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 capacity_watch.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
-$STORAGE_MANAGER_PYTHON_HOME/bin/python3 capacity_watch.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
+"$SM_PYTHON" capacity_watch.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
+"$SM_PYTHON" capacity_watch.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
 ```
 
 ```text
@@ -174,6 +308,7 @@ data/reports/latest_cleanup.txt
 - 15분 watcher 최근 결과에 filesystem·표본·오류 건수가 표시됨
 - `지금 백그라운드 실행` 후 PID와 현재 계정이 표시되고 버튼이 `안전 중지`로 바뀜
 - `안전 중지` 후 상태가 `사용자 중지`가 되고 기준선 체크포인트가 유지됨
+- 06:00 자동 중지는 `사용자 중지`가 아니라 `시간창 종료로 일시 정지`로 표시됨
 - `자동 수집 켜기/끄기`가 앱의 세 cron 행만 변경하고 다른 cron 행은 유지함
 
 ## 8. MATE 로컬 알림 검사

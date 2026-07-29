@@ -315,11 +315,84 @@ class SearchIndexTests(unittest.TestCase):
                     )
                     index.conn.execute(
                         """
+                        INSERT INTO search_entries(
+                          account_id, relative_path, basename, extension,
+                          entry_type, generation
+                        ) VALUES(?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "id-a",
+                            "legacy-keep.dat",
+                            "legacy-keep.dat",
+                            "dat",
+                            "file",
+                            "old-generation",
+                        ),
+                    )
+                    for relative_path in (
+                        ".snapshot-old/keep.dat",
+                        ".snapshot0/keep.dat",
+                        "results/.snapshot/keep.dat",
+                    ):
+                        index.conn.execute(
+                            """
+                            INSERT INTO search_entries(
+                              account_id, relative_path, basename,
+                              extension, entry_type, generation
+                            ) VALUES(?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                "id-a",
+                                relative_path,
+                                Path(relative_path).name,
+                                "dat",
+                                "file",
+                                "old-generation",
+                            ),
+                        )
+                    index.conn.execute(
+                        """
                         INSERT INTO search_scan_tasks(
                           account_id, generation, relative_dir, status
                         ) VALUES(?, ?, ?, 'pending')
                         """,
-                        ("id-a", generation, ".snapshot"),
+                        ("id-a", generation, os.fsencode(".snapshot")),
+                    )
+                    index.conn.execute(
+                        """
+                        INSERT INTO search_scan_tasks(
+                          account_id, generation, relative_dir, status
+                        ) VALUES(?, ?, ?, 'pending')
+                        """,
+                        (
+                            "id-a",
+                            generation,
+                            os.fsencode(".snapshot/legacy"),
+                        ),
+                    )
+                    index.conn.execute(
+                        """
+                        INSERT INTO search_scan_tasks(
+                          account_id, generation, relative_dir, status
+                        ) VALUES(?, ?, ?, 'pending')
+                        """,
+                        (
+                            "id-a",
+                            generation,
+                            ".snapshot/text-legacy",
+                        ),
+                    )
+                    index.conn.execute(
+                        """
+                        INSERT INTO search_scan_tasks(
+                          account_id, generation, relative_dir, status
+                        ) VALUES(?, ?, ?, 'pending')
+                        """,
+                        (
+                            "id-a",
+                            generation,
+                            os.fsencode(".snapshot-old"),
+                        ),
                     )
 
                 removed = index.prune_excluded_paths("id-a")
@@ -329,15 +402,37 @@ class SearchIndexTests(unittest.TestCase):
                     index.search("id-a", "legacy.dat", mode="exact"),
                     [],
                 )
+                remaining_tasks = index.conn.execute(
+                    """
+                    SELECT relative_dir FROM search_scan_tasks
+                    WHERE account_id = ?
+                    ORDER BY relative_dir
+                    """,
+                    ("id-a",),
+                ).fetchall()
                 self.assertEqual(
-                    index.conn.execute(
+                    [
+                        search_index_module._decode_task_path(row[0])
+                        for row in remaining_tasks
+                    ],
+                    [".snapshot-old"],
+                )
+                remaining_paths = {
+                    str(row[0])
+                    for row in index.conn.execute(
                         """
-                        SELECT COUNT(*) FROM search_scan_tasks
+                        SELECT relative_path FROM search_entries
                         WHERE account_id = ?
                         """,
                         ("id-a",),
-                    ).fetchone()[0],
-                    0,
+                    ).fetchall()
+                }
+                self.assertTrue(
+                    {
+                        ".snapshot-old/keep.dat",
+                        ".snapshot0/keep.dat",
+                        "results/.snapshot/keep.dat",
+                    }.issubset(remaining_paths)
                 )
                 status = index.account_status("id-a")
                 self.assertEqual(status["files_indexed"], 1)
