@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+from storage_manager.path_policy import (
+    SNAPSHOT_ROOT_NAME,
+    is_excluded_account_path,
+)
+
 
 @dataclass(frozen=True)
 class ActivityScanResult:
@@ -45,12 +50,17 @@ def scan_changed_file_activity(
 
     env = os.environ.copy()
     env["LC_ALL"] = "C"
+    snapshot_path = str(base / SNAPSHOT_ROOT_NAME)
     try:
         process = subprocess.Popen(
             [
                 "find",
                 str(base),
                 "-xdev",
+                "-path",
+                snapshot_path,
+                "-prune",
+                "-o",
                 "-type",
                 "f",
                 "-newermt",
@@ -126,6 +136,8 @@ def scan_changed_file_activity(
                 except ValueError:
                     continue
                 file_path = os.fsdecode(fields[2])
+                if is_excluded_account_path(base, file_path):
+                    continue
                 if record_batch is not None:
                     pending_records.append((file_path, size_bytes, modified_at))
                     if len(pending_records) >= record_batch_size:

@@ -6,6 +6,10 @@ from unittest.mock import patch
 
 from storage_manager.activity_scan import scan_changed_file_activity
 from storage_manager.database import Database
+from storage_manager.path_policy import (
+    is_excluded_account_path,
+    is_excluded_relative_path,
+)
 from storage_manager.resumable_scan import TaskTimeout, run_resumable_baseline
 
 
@@ -22,6 +26,77 @@ class FakeFindProcess:
 
 
 class ResumableAndActivityTests(unittest.TestCase):
+    def test_root_snapshot_policy_does_not_exclude_nested_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            account = Path(temp) / "account"
+            self.assertTrue(
+                is_excluded_account_path(
+                    account,
+                    account / ".snapshot" / "old.dat",
+                )
+            )
+            self.assertTrue(is_excluded_relative_path(".snapshot/old.dat"))
+            self.assertFalse(
+                is_excluded_account_path(
+                    account,
+                    account / "results" / ".snapshot" / "current.dat",
+                )
+            )
+            self.assertFalse(
+                is_excluded_relative_path("results/.snapshot/current.dat")
+            )
+
+    def test_resumable_baseline_excludes_root_snapshot_and_legacy_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            account = root / "account"
+            snapshot = account / ".snapshot"
+            nested = account / "results" / ".snapshot"
+            snapshot.mkdir(parents=True)
+            nested.mkdir(parents=True)
+            db = Database(root / "test.db")
+            calls = []
+            try:
+                first = run_resumable_baseline(
+                    db,
+                    "account-id",
+                    str(account),
+                    30,
+                    du_runner=lambda path, timeout: calls.append(path) or 10,
+                )
+                self.assertTrue(first.complete)
+                self.assertNotIn(str(snapshot), calls)
+                self.assertIn(str(account / "results"), calls)
+
+                db.begin_detail_scan(
+                    "account-id",
+                    str(account),
+                    "legacy-cycle",
+                    "2026-07-29 22:00:00",
+                    [
+                        (
+                            str(snapshot),
+                            str(snapshot),
+                            "scan",
+                            0,
+                            "pending",
+                            0,
+                        )
+                    ],
+                )
+                resumed = run_resumable_baseline(
+                    db,
+                    "account-id",
+                    str(account),
+                    30,
+                    du_runner=lambda path, timeout: calls.append(path) or 10,
+                )
+                self.assertTrue(resumed.complete)
+                self.assertNotIn(str(snapshot), calls)
+                self.assertNotIn(str(snapshot), dict(resumed.items))
+            finally:
+                db.close()
+
     def test_unbounded_production_budget_keeps_per_task_timeout(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -225,6 +300,47 @@ class ResumableAndActivityTests(unittest.TestCase):
                     (str(account / "a.dat"), 100, 1000.0),
                     (str(account / "b.log"), 250, 1001.0),
                 ],
+            )
+
+    def test_changed_file_scan_prunes_only_root_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            account = Path(temp) / "account"
+            account.mkdir()
+            root_snapshot_file = account / ".snapshot" / "old.dat"
+            nested_snapshot_file = (
+                account / "results" / ".snapshot" / "new.dat"
+            )
+            output = (
+                b"100\t1000.0\t"
+                + str(root_snapshot_file).encode()
+                + b"\0"
+                + b"250\t1001.0\t"
+                + str(nested_snapshot_file).encode()
+                + b"\0"
+            )
+            received = []
+            with patch(
+                "storage_manager.activity_scan.subprocess.Popen",
+                return_value=FakeFindProcess(output),
+            ) as popen_mock:
+                result = scan_changed_file_activity(
+                    str(account),
+                    "2026-07-28 22:00:00",
+                    30,
+                    record_batch=lambda rows: received.extend(rows),
+                )
+
+            self.assertTrue(result.complete)
+            self.assertEqual(result.files_seen, 1)
+            self.assertEqual(
+                [row[0] for row in received],
+                [str(nested_snapshot_file)],
+            )
+            command = popen_mock.call_args.args[0]
+            snapshot_index = command.index(str(account / ".snapshot"))
+            self.assertEqual(
+                command[snapshot_index - 1 : snapshot_index + 3],
+                ["-path", str(account / ".snapshot"), "-prune", "-o"],
             )
 
     def test_stop_request_preserves_baseline_checkpoint(self):

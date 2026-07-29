@@ -1,8 +1,11 @@
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from storage_manager.collector import (
+    collect_top_level_sizes,
     delta_map,
     parse_df_output,
     parse_du_output,
@@ -14,6 +17,27 @@ from storage_manager.collector import (
 
 
 class CollectorTests(unittest.TestCase):
+    @patch("storage_manager.collector.subprocess.run")
+    def test_top_level_collection_excludes_root_snapshot(self, run_mock):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp) / "project_a"
+            base.mkdir()
+            run_mock.return_value = subprocess.CompletedProcess(
+                ["du"],
+                0,
+                f"10\t{base / '.snapshot'}\n"
+                f"20\t{base / 'results'}\n"
+                f"30\t{base}\n",
+                "",
+            )
+
+            result = collect_top_level_sizes(str(base), 30)
+
+            self.assertTrue(result.complete)
+            self.assertEqual(result.items, [(str(base / "results"), 20)])
+            command = run_mock.call_args.args[0]
+            self.assertIn(f"--exclude={base / '.snapshot'}", command)
+
     def test_parse_df_output(self):
         snapshot = parse_df_output(
             "Filesystem 1024-blocks Used Available Capacity Mounted on\n"

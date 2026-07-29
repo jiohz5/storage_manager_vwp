@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
+from storage_manager.path_policy import (
+    SNAPSHOT_ROOT_NAME,
+    is_excluded_account_path,
+)
+
 
 @dataclass(frozen=True)
 class UsageSnapshot:
@@ -121,9 +126,19 @@ def collect_top_level_sizes(path: str, timeout_seconds: int = 3600) -> DetailSca
 
     env = os.environ.copy()
     env["LC_ALL"] = "C"
+    snapshot_path = str(base / SNAPSHOT_ROOT_NAME)
     try:
         result = subprocess.run(
-            ["du", "-a", "-x", "-k", "--max-depth=1", "--", str(base)],
+            [
+                "du",
+                "-a",
+                "-x",
+                "-k",
+                "--max-depth=1",
+                f"--exclude={snapshot_path}",
+                "--",
+                str(base),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -142,7 +157,11 @@ def collect_top_level_sizes(path: str, timeout_seconds: int = 3600) -> DetailSca
         return DetailScanResult([], False, time.monotonic() - started, str(exc))
 
     duration = time.monotonic() - started
-    items = parse_du_output(result.stdout, str(base))
+    items = [
+        row
+        for row in parse_du_output(result.stdout, str(base))
+        if not is_excluded_account_path(base, row[0])
+    ]
     if result.returncode != 0:
         return DetailScanResult(
             items,

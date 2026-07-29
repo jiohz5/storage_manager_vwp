@@ -10,6 +10,7 @@ from typing import Callable, List, Optional, Tuple
 
 from storage_manager.collector import DetailScanResult
 from storage_manager.database import Database
+from storage_manager.path_policy import is_excluded_account_path
 
 
 Task = Tuple[str, str, str, int, str, int]
@@ -35,6 +36,8 @@ def initial_tasks(account_path: str) -> List[Task]:
     base = Path(account_path)
     tasks: List[Task] = []
     for child in base.iterdir():
+        if is_excluded_account_path(base, child):
+            continue
         child_path = str(child)
         if child.is_dir() and not child.is_symlink():
             tasks.append((child_path, child_path, "scan", 0, "pending", 0))
@@ -146,6 +149,16 @@ def run_resumable_baseline(
         )
     else:
         cycle_id = str(state[1])
+        try:
+            current_tasks = initial_tasks(account_path)
+        except OSError as exc:
+            return DetailScanResult([], False, 0.0, str(exc), resumable=True)
+        db.reconcile_detail_scan_roots(
+            account_id,
+            cycle_id,
+            timestamp,
+            current_tasks,
+        )
 
     while True:
         completed, total = db.detail_scan_progress(account_id, cycle_id)
