@@ -15,7 +15,10 @@ class LoadSaveConfigTests(unittest.TestCase):
 
     def test_round_trip_preserves_accounts_and_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
-            data_dir = Path(tmp)
+            # data_dir과 account_path는 반드시 형제 디렉터리여야 한다 - 데이터
+            # 디렉터리가 계정 경로 내부(또는 그 반대)에 있으면 읽기 전용
+            # 불변식 위반으로 load_config가 거부한다 (config._guard_read_only_invariant).
+            data_dir = Path(tmp) / "sm_data"
             account_path = Path(tmp) / "acct"
             account_path.mkdir()
 
@@ -69,6 +72,39 @@ class AddAccountTests(unittest.TestCase):
             account_a = config_module.add_account(config, "a", str(path_a))
             account_b = config_module.add_account(config, "b", str(path_b))
             self.assertNotEqual(account_a.account_id, account_b.account_id)
+
+
+class ReadOnlyInvariantGuardTests(unittest.TestCase):
+    """읽기 전용 불변식(paths.assert_not_inside_monitored_paths)이 실제
+    config 로드/계정 추가 경로에서 강제되는지 확인한다."""
+
+    def test_add_account_rejects_path_that_would_nest_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            monitored = Path(tmp) / "user_project_a"
+            monitored.mkdir()
+            data_dir = monitored / "sm_data"
+            data_dir.mkdir()
+
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            with self.assertRaises(config_module.ConfigError):
+                config_module.add_account(config, "project_a", str(monitored), data_dir=data_dir)
+
+    def test_load_config_rejects_previously_saved_violating_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            monitored = Path(tmp) / "user_project_a"
+            monitored.mkdir()
+            data_dir = monitored / "sm_data"
+            data_dir.mkdir()
+
+            # data_dir 없이 계정을 추가한 뒤 강제로 저장해 "이미 저장된 위반
+            # 상태"를 재현한다 (예: 나중에 데이터 디렉터리를 계정 내부로
+            # 옮긴 경우).
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            config_module.add_account(config, "project_a", str(monitored))
+            config_module.save_config(data_dir, config)
+
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load_config(data_dir)
 
 
 class RemoveAndFilterAccountTests(unittest.TestCase):

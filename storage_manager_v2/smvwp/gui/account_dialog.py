@@ -118,7 +118,7 @@ class AccountDialog(QDialog):
             QMessageBox.warning(self, "입력 필요", "계정 이름과 경로를 모두 입력하세요.")
             return
         try:
-            config_module.add_account(self._config, name, path)
+            config_module.add_account(self._config, name, path, data_dir=self._data_dir)
         except config_module.ConfigError as exc:
             QMessageBox.critical(self, "계정 추가 실패", str(exc))
             return

@@ -111,9 +111,26 @@ def load_config(data_dir: Path) -> AppConfig:
         accounts.append(account)
 
     config = AppConfig(settings=settings, accounts=accounts)
+    _guard_read_only_invariant(data_dir, config)
     if changed:
         save_config(data_dir, config)
     return config
+
+
+def _guard_read_only_invariant(data_dir: Path, config: AppConfig) -> None:
+    """데이터 디렉터리가 모니터링 대상 계정 경로와 겹치지 않는지 매번 확인한다.
+
+    CONCEPT.md 1절의 읽기 전용 불변식(데이터 디렉터리 외에는 절대 쓰지 않음)을
+    설정을 불러올 때마다 강제한다 - GUI, cron 수집기, 야간 스캔이 모두
+    `load_config`를 거치므로 세 경로 전부에서 이 점검이 실행된다.
+    """
+
+    try:
+        paths.assert_not_inside_monitored_paths(
+            data_dir, [account.path for account in config.accounts]
+        )
+    except paths.DataDirError as exc:
+        raise ConfigError(str(exc)) from exc
 
 
 def save_config(data_dir: Path, config: AppConfig) -> None:
@@ -140,7 +157,17 @@ def save_config(data_dir: Path, config: AppConfig) -> None:
             pass
 
 
-def add_account(config: AppConfig, name: str, path: str, require_exists: bool = True) -> Account:
+def add_account(
+    config: AppConfig,
+    name: str,
+    path: str,
+    require_exists: bool = True,
+    data_dir: Optional[Path] = None,
+) -> Account:
+    """계정을 추가한다. `data_dir`을 넘기면 그 자리에서 바로 읽기 전용
+    불변식(데이터 디렉터리와 겹치지 않음)을 확인해, 저장 후 다음 실행에서야
+    발견되는 것보다 즉시 사용자에게 알려준다."""
+
     name = name.strip()
     if not name:
         raise ConfigError("계정 이름을 입력하세요")
@@ -154,6 +181,12 @@ def add_account(config: AppConfig, name: str, path: str, require_exists: bool = 
         if not os.access(str(resolved), os.R_OK):
             raise ConfigError(f"경로를 읽을 수 없습니다: {resolved}")
         resolved = resolved.resolve()
+
+    if data_dir is not None:
+        try:
+            paths.assert_not_inside_monitored_paths(data_dir, [str(resolved)])
+        except paths.DataDirError as exc:
+            raise ConfigError(str(exc)) from exc
 
     if any(existing.path == str(resolved) for existing in config.accounts):
         raise ConfigError(f"이미 등록된 경로입니다: {resolved}")
