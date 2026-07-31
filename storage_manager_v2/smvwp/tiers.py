@@ -1,0 +1,99 @@
+"""사용률 등급(정상/주의/경고/긴급/FULL) 계산.
+
+CONCEPT.md 4절의 등급 기준을 그대로 따른다: 90% 미만 정상, 90~94% 주의,
+95~97% 경고, 98~99% 긴급, 100% 이상 FULL. byte 등급과 inode 등급은 서로
+독립적으로 계산한다 (inode가 가득 차면 용량이 남아도 파일을 만들 수 없기
+때문). 화면에는 항상 색상 + 텍스트 라벨을 함께 쓴다 (색맹/흑백 출력 대비,
+REBUILD_CONCEPT.md 6절 "1차 채택" 항목).
+
+숫자를 과장하지 않는다는 원칙(CONCEPT.md 2-6)에 따라, 여기서는 df가 이미
+계산해 준 사용률(%)을 그대로 등급 판정에 쓴다 — 별도로 재추정하지 않는다.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+NORMAL = "normal"
+WARN = "warn"
+ALERT = "alert"
+EMERGENCY = "emergency"
+FULL = "full"
+UNKNOWN = "unknown"
+
+# 등급 순서 (심각도 오름차순). UNKNOWN은 "판단 불가"이며 정상보다 낮게 취급하지
+# 않는다 — 표시에서는 별도로 다루고, 심각도 비교에서는 가장 낮은 취급으로 둔다.
+_SEVERITY = {
+    UNKNOWN: -1,
+    NORMAL: 0,
+    WARN: 1,
+    ALERT: 2,
+    EMERGENCY: 3,
+    FULL: 4,
+}
+
+# (등급, 한글 라벨, 기준 색상) — 색상은 어두운 배경/밝은 배경 모두에서 무난하게
+# 보이도록 중간 톤을 선택했다. GUI 쪽에서 필요하면 조정 가능.
+LABELS = {
+    NORMAL: ("정상", "#2e7d32"),
+    WARN: ("주의", "#f9a825"),
+    ALERT: ("경고", "#ef6c00"),
+    EMERGENCY: ("긴급", "#c62828"),
+    FULL: ("가득참", "#6a1b9a"),
+    UNKNOWN: ("확인불가", "#757575"),
+}
+
+WARN_THRESHOLD = 90
+ALERT_THRESHOLD = 95
+EMERGENCY_THRESHOLD = 98
+FULL_THRESHOLD = 100
+
+
+def classify(pct: Optional[float]) -> str:
+    """사용률(%)을 등급 문자열로 변환한다. pct가 None이면 UNKNOWN."""
+
+    if pct is None:
+        return UNKNOWN
+    if pct >= FULL_THRESHOLD:
+        return FULL
+    if pct >= EMERGENCY_THRESHOLD:
+        return EMERGENCY
+    if pct >= ALERT_THRESHOLD:
+        return ALERT
+    if pct >= WARN_THRESHOLD:
+        return WARN
+    return NORMAL
+
+
+def severity(tier: str) -> int:
+    return _SEVERITY.get(tier, -1)
+
+
+def worse(tier_a: str, tier_b: str) -> str:
+    """두 등급 중 더 심각한 쪽을 반환한다 (byte 등급 vs inode 등급 종합용)."""
+
+    return tier_a if severity(tier_a) >= severity(tier_b) else tier_b
+
+
+def is_at_least(tier: str, threshold_tier: str) -> bool:
+    """tier가 threshold_tier 이상으로 심각한지. UNKNOWN은 항상 False."""
+
+    if tier == UNKNOWN:
+        return False
+    return severity(tier) >= severity(threshold_tier)
+
+
+def label(tier: str) -> str:
+    return LABELS.get(tier, LABELS[UNKNOWN])[0]
+
+
+def color(tier: str) -> str:
+    return LABELS.get(tier, LABELS[UNKNOWN])[1]
+
+
+def display_text(tier: str, pct: Optional[float]) -> str:
+    """색상 없이도 등급을 알 수 있는 텍스트 표현 (예: '경고 95.2%')."""
+
+    if pct is None:
+        return label(tier)
+    return f"{label(tier)} {pct:.1f}%"
