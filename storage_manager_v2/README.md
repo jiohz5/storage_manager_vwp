@@ -60,12 +60,18 @@ storage_manager_v2/
     store.py                    # SQLite 표본 저장소 (보존기간 정리 포함)
     notifications.py             # 파일 outbox 알림 + cooldown
     cycle.py                      # 수집->저장->알림 한 사이클 (GUI/cron 공유)
-    scheduler.py                   # GUI 내부 QTimer 기반 주기 실행 (PyQt5 의존)
+    scheduler.py                   # GUI 내부 QTimer 주기 실행 + 스캔 워커 (PyQt5 의존)
     diagnostics.py                  # Python/모듈/PyQt5/데이터 디렉터리 진단
-    gui/                              # PyQt5 화면 (PyQt5 의존)
-      main_window.py                   # 대시보드 단일 화면
-      account_dialog.py                 # 계정 등록/설정 다이얼로그
-      widgets.py                         # 등급 배지 위젯
+    scan_window.py                   # 22:00~06:00 시간창 계산
+    scan_lock.py                      # 실행 잠금 + run ID 매칭 안전 중지
+    scan_store.py                      # 스캔 체크포인트/기준선 SQLite 저장소
+    detail_scan.py                      # du 기반 기준선 스캔 (분할/우선순위)
+    activity_scan.py                     # find -newermt 기반 변경 파일 스캔
+    nightly_scan.py                       # 야간 스캔 오케스트레이터
+    gui/                                    # PyQt5 화면 (PyQt5 의존)
+      main_window.py                         # 대시보드 단일 화면 (+ 상세 스캔 영역)
+      account_dialog.py                       # 계정 등록/설정 다이얼로그
+      widgets.py                               # 등급 배지 / 크기 표기 위젯
   tests/                # unittest 기반 단위 테스트 (PyQt5 불필요)
 ```
 
@@ -103,35 +109,51 @@ cd storage_manager_v2
 python3 -m unittest discover -s tests -t .
 ```
 
-## phase 1 범위와 아직 안 만든 것
+## 구현 범위와 아직 안 만든 것
 
-phase 1 범위는 저장소 루트 `REBUILD_CONCEPT.md` 7절을 그대로 따른다:
-계정 등록 + df 기반 대시보드, 사용률 등급 표시(색상+텍스트), 15분 경량 수집
-(cron/타이머), 파일 outbox 알림, 최소 진단, 대시보드 단일 화면 + 한눈 요약.
+**phase 1** (REBUILD_CONCEPT.md 7절): 계정 등록 + df 기반 대시보드, 사용률
+등급 표시(색상+텍스트), 15분 경량 수집(cron/타이머), 파일 outbox 알림, 최소
+진단, 대시보드 단일 화면 + 한눈 요약.
 
-**아직 만들지 않은 것** (REBUILD_CONCEPT.md 8절 순서대로 다음 단계에서
-추가 예정, 지금은 의도적으로 비워둠):
+**phase 2** (REBUILD_CONCEPT.md 8절 1번): 야간 상세 스캔. CONCEPT.md 3·7절의
+검증된 원칙을 계승하되 코드는 새로 썼다.
 
-- 야간 상세 스캔 (`du`/`find` 기반 계정별 증가 경로 분석) - 다음 순서 1번.
-  phase 1 스케줄러(`scheduler.py`)는 15분 경량 수집만 알고 있고, 22:00~06:00
-  같은 시간창 정책을 아직 하드코딩하지 않았다 - 야간 스캔을 나중에 추가할 때
-  기존 15분 수집과 어떻게 시간을 나눌지(REBUILD_CONCEPT.md 9절, 기존
-  22:00~06:00 정책을 그대로 쓸지 새로 설계할지)는 아직 정하지 않은 채로 남겨
-  뒀다. 지금 스케줄러는 그 결정을 선점하지 않는 선에서 최대한 단순하게
-  만들었다.
+- 22:00~06:00 시간창 안에서만 cron 실행 (`scan_window.py`). 06:00이 되면 강제
+  종료가 아니라 완료된 체크포인트를 남기고 `paused` 상태로 스스로 멈춘다.
+- 터미널 직접 실행(`nightly_scan_cli.py --now`)은 의도적 진단/복구 경로라
+  시간창 제한을 받지 않는다.
+- 디렉터리 단위 체크포인트로 완전히 재개 가능 (`scan_store.py`) - 중단된
+  다음 실행은 이미 끝낸 디렉터리를 다시 훑지 않는다.
+- 강제 kill 없음: run ID 매칭 중지 요청 파일만 사용 (`scan_lock.py`).
+  `nightly_scan_cli.py --stop` 또는 GUI의 `안전 중지` 버튼.
+- 디렉터리 단위 타임아웃 초과 시 하위 디렉터리 작업으로 분할해 재시도.
+- 기준선 비교는 "완료된 세대 vs 직전 완료 세대"를 **같은 경로끼리** 대조한다
+  (기존 REVIEW.md가 지적한 "어제 top N vs 오늘 top N" 비교 오류를 피함).
+- `nice`/`ionice`는 있으면 쓰고 없으면 그냥 진행 (최선 노력이지 처리량 상한이
+  아님).
+- 대시보드 아래쪽에 상세 스캔 영역을 추가 (탭 신설 없이 단일 화면 유지) -
+  시간창/실행 상태/남은 작업 수와 선택 계정의 증가 경로를 보여준다. 전체
+  분모를 모르는 진행률은 퍼센트로 부풀리지 않고 남은 작업 수로만 표시한다.
+
+**아직 만들지 않은 것** (다음 단계 후보, 지금은 의도적으로 비워둠):
+
 - 알림 채널 다양화(command/webhook), 검색 인덱스, quota 연동, 다국어(KOR/ENG)
   UI, 정리 후보(cleanup candidates) 보고서, 최초 실행 마법사, 클릭 수 최소화
   단축 버튼 등 GUI 사용성 개선 후보들.
 - 트레이 알림기(notifier) 프로세스 자체 - outbox JSON 파일 포맷은 갖춰
   뒀지만, 그 파일을 읽어 팝업을 띄우는 별도 프로세스는 아직 없다.
+- 상세 스캔 결과를 알림/보고서로 내보내는 경로 (지금은 GUI 표시 전용).
 
 ## 알려진 제약 / 로컬 개발 환경 메모
 
-- 로컬 개발 PC(Windows, Python 3.10)에는 PyQt5와 `df`가 없다. 따라서 GUI와
-  `collector.py`의 실제 `df` 호출 경로는 실제 VWP(RHEL, Python 3.12)에서
-  검증이 필요하다. 비-GUI 로직(등급 계산, 설정 읽기/쓰기, df 출력 파싱,
-  SQLite 저장, 알림 cooldown, 진단 판정)은 `tests/`에서 subprocess/파일시스템을
-  모킹해 검증했다.
-- `run.csh`는 csh 스크립트라 Windows에서 직접 실행/검증할 수 없었다 - 로직은
-  기존 루트 `run.csh`의 검증된 패턴(진단 실패 시 exit 2, PYTHONHOME 경고 후
-  제거 등)을 그대로 계승했다.
+- 단위 테스트는 Windows + Python 3.10에서도 전부 통과한다 (PyQt5 없이도
+  동작하도록 GUI 의존을 분리해 뒀기 때문). Git Bash가 있는 Windows에서는
+  `df`/`du`/`find`도 있어서 GUI 실행, 15분 수집, 상세 스캔(`--now`)까지
+  실제로 돌려 확인했다. 다만 `df -Pi`가 NTFS에서 inode를 보고하지 않아
+  inode 등급은 `확인불가`로 표시된다 - 숫자를 지어내지 않는 정상 동작이다.
+- 실제 VWP(RHEL, Python 3.12)에서 재확인이 필요한 것: Python 3.12 + PyQt5
+  조합, `crontab` 등록 권한, `nice`/`ionice` 존재 여부, 대용량 계정에서의
+  실제 스캔 소요 시간과 06:00 인계 동작.
+- `run.csh` / `setup_cron.csh`는 csh 스크립트라 Windows에서 직접 실행/검증할
+  수 없었다 - 로직은 기존 루트 `run.csh`의 검증된 패턴(진단 실패 시 exit 2,
+  `PYTHONHOME` 경고 후 제거 등)을 그대로 계승했다.

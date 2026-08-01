@@ -32,6 +32,15 @@ DEFAULT_NOTIFICATION_COOLDOWN_MINUTES = 60
 DEFAULT_NOTIFICATION_MIN_TIER = "warn"
 DEFAULT_SAMPLE_RETENTION_DAYS = 90
 
+# 야간 상세 스캔(REBUILD_CONCEPT.md 8절 1번) 관련 기본값. CONCEPT.md 3절의
+# 22:00~06:00 시간창 정책을 원칙만 계승해 새로 구현한다.
+DEFAULT_DETAIL_SCAN_WINDOW_START_HOUR = 22
+DEFAULT_DETAIL_SCAN_WINDOW_END_HOUR = 6
+DEFAULT_DETAIL_TASK_TIMEOUT_SECONDS = 15 * 60  # 디렉터리 하나당 du/find 예산
+DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS = 2
+DEFAULT_DETAIL_SCAN_TOP_N = 15
+DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS = 2
+
 
 @dataclass
 class Settings:
@@ -40,6 +49,12 @@ class Settings:
     notification_min_tier: str = DEFAULT_NOTIFICATION_MIN_TIER
     sample_retention_days: int = DEFAULT_SAMPLE_RETENTION_DAYS
     df_timeout_seconds: int = 10
+    detail_scan_window_start_hour: int = DEFAULT_DETAIL_SCAN_WINDOW_START_HOUR
+    detail_scan_window_end_hour: int = DEFAULT_DETAIL_SCAN_WINDOW_END_HOUR
+    detail_task_timeout_seconds: int = DEFAULT_DETAIL_TASK_TIMEOUT_SECONDS
+    detail_scan_keep_generations: int = DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS
+    detail_scan_top_n: int = DEFAULT_DETAIL_SCAN_TOP_N
+    activity_initial_lookback_days: int = DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS
 
 
 @dataclass
@@ -75,6 +90,18 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("notification_min_tier가 올바른 등급이 아닙니다")
     if settings.df_timeout_seconds < 1:
         raise ConfigError("df_timeout_seconds는 1 이상이어야 합니다")
+    if not 0 <= settings.detail_scan_window_start_hour <= 23:
+        raise ConfigError("detail_scan_window_start_hour는 0~23이어야 합니다")
+    if not 0 <= settings.detail_scan_window_end_hour <= 23:
+        raise ConfigError("detail_scan_window_end_hour는 0~23이어야 합니다")
+    if settings.detail_task_timeout_seconds < 10:
+        raise ConfigError("detail_task_timeout_seconds는 10 이상이어야 합니다")
+    if settings.detail_scan_keep_generations < 1:
+        raise ConfigError("detail_scan_keep_generations는 1 이상이어야 합니다")
+    if not 1 <= settings.detail_scan_top_n <= 200:
+        raise ConfigError("detail_scan_top_n은 1~200이어야 합니다")
+    if settings.activity_initial_lookback_days < 1:
+        raise ConfigError("activity_initial_lookback_days는 1 이상이어야 합니다")
     return settings
 
 
