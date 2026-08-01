@@ -22,7 +22,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import activity_scan, config as config_module, detail_scan, reports, scan_lock, scan_store, scan_window
+from . import (
+    activity_scan,
+    config as config_module,
+    detail_scan,
+    notifications,
+    reports,
+    scan_lock,
+    scan_store,
+    scan_window,
+    search_index,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +51,9 @@ class AccountOutcome:
     baseline_generation: int
     activity_status: str  # 'done' | 'interrupted'
     activity_pass: int
+    # 검색 인덱싱을 켠 계정만 해당. 'skipped' | 'done' | 'interrupted' | 'error'
+    search_status: str = "skipped"
+    search_entries: int = 0
 
 
 @dataclass
@@ -142,6 +155,7 @@ def _process_activity(
 
 def _process_account(
     conn,
+    data_dir: Path,
     account: config_module.Account,
     settings: config_module.Settings,
     clock: Callable[[], datetime],
@@ -165,6 +179,9 @@ def _process_account(
     activity_status, pass_no = _process_activity(
         conn, account, settings, clock, should_stop, deadline_reached, top_level_lister
     )
+    search_status, search_entries = _process_search_index(
+        data_dir, account, should_stop, deadline_reached
+    )
     return AccountOutcome(
         account_id=account.account_id,
         account_name=account.name,
@@ -172,7 +189,48 @@ def _process_account(
         baseline_generation=generation,
         activity_status=activity_status,
         activity_pass=pass_no,
+        search_status=search_status,
+        search_entries=search_entries,
     )
+
+
+def _process_search_index(
+    data_dir: Path,
+    account: config_module.Account,
+    should_stop: Callable[[], bool],
+    deadline_reached: Callable[[], bool],
+) -> "tuple[str, int]":
+    """검색 인덱싱을 켠 계정만 이름 인덱스를 갱신한다.
+
+    시간창/안전 중지 규칙은 `du`/`find`와 똑같이 적용한다 - 인덱싱도 파일
+    시스템을 훑는 무거운 작업이기 때문. 중간에 멈추면 그때까지 커밋한 항목은
+    남고, 완주하지 못했으므로 사라진 항목 정리는 다음 실행으로 미룬다
+    (`search_index.index_account` 참고).
+
+    인덱싱 실패가 스캔 전체를 실패로 만들지는 않는다. 용량 기준선이라는 핵심
+    데이터는 이미 저장된 뒤이므로, 부가 기능 하나 때문에 그것을 무효로 만들
+    이유가 없다."""
+
+    if not account.search_indexing:
+        return "skipped", 0
+
+    stop_or_deadline = lambda: should_stop() or deadline_reached()
+    if stop_or_deadline():
+        return "interrupted", 0
+
+    conn = None
+    try:
+        conn = search_index.connect(data_dir)
+        count = search_index.index_account(
+            conn, account.account_id, Path(account.path), should_stop=stop_or_deadline
+        )
+        return ("interrupted" if stop_or_deadline() else "done"), count
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("검색 인덱싱 실패: %s", account.name)
+        return "error", 0
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def run_nightly_scan(
@@ -233,7 +291,14 @@ def run_nightly_scan(
                 status = STATUS_PAUSED
                 break
             outcome = _process_account(
-                conn, account, settings, clock, should_stop, deadline_reached, top_level_lister
+                conn,
+                data_dir,
+                account,
+                settings,
+                clock,
+                should_stop,
+                deadline_reached,
+                top_level_lister,
             )
             outcomes.append(outcome)
             if outcome.baseline_status == "interrupted" or outcome.activity_status == "interrupted":
@@ -247,8 +312,99 @@ def run_nightly_scan(
         conn.close()
         scan_lock.release_lock(data_dir, run_id)
 
+    # 아래 후처리는 모두 "이미 저장된 스캔 결과"를 소비하기만 한다. 여기서
+    # 실패해도 스캔 자체의 성패를 뒤집지 않는다.
+    _notify_growth(data_dir, config, outcomes, local_now)
+    _prune_orphan_search_indexes(data_dir, config)
     _generate_reports(data_dir, config, local_now)
     return RunSummary(started=True, status=status, run_id=run_id, accounts=outcomes)
+
+
+def _notify_growth(
+    data_dir: Path,
+    config: config_module.AppConfig,
+    outcomes: List[AccountOutcome],
+    now: datetime,
+) -> int:
+    """이번에 기준선을 완주한 계정에 대해 급증 경로 알림을 보낸다.
+
+    직전 완료 세대와 **같은 경로끼리** 비교한 증가량만 본다 (순위 비교가 아님).
+    비교할 이전 세대가 없는 첫 기준선에서는 알리지 않는다 - 전부 '신규'로
+    잡혀 의미 없는 알림 폭탄이 되기 때문."""
+
+    settings = config.settings
+    if not settings.growth_alert_enabled:
+        return 0
+
+    accounts_by_id = {a.account_id: a for a in config.accounts}
+    state = notifications.load_notify_state(data_dir)
+    sent = 0
+
+    conn = scan_store.connect(data_dir)
+    try:
+        for outcome in outcomes:
+            if outcome.baseline_status != "done":
+                continue
+            account = accounts_by_id.get(outcome.account_id)
+            if account is None:
+                continue
+            current = outcome.baseline_generation
+            previous = current - 1
+            if previous < 1:
+                continue  # 첫 기준선 - 비교 대상이 없다
+
+            rows = scan_store.growth_delta(
+                conn, account.account_id, current, previous, settings.detail_scan_top_n
+            )
+            for row in rows:
+                # previous_kb가 None이면 이전 세대에 없던 새 경로다. 새로 생긴
+                # 큰 디렉터리도 알릴 가치가 있으므로 현재 크기 전체를 증가분
+                # 으로 본다 (maybe_notify_growth가 그렇게 처리한다).
+                result = notifications.maybe_notify_growth(
+                    data_dir,
+                    account,
+                    row["path"],
+                    row["current_kb"],
+                    row["previous_kb"],
+                    state,
+                    min_increase_kb=settings.growth_alert_min_kb,
+                    cooldown_minutes=settings.notification_cooldown_minutes,
+                    now=now,
+                    mode=settings.notification_mode,
+                    command=settings.notification_command,
+                    webhook_url=settings.notification_webhook_url,
+                    timeout_seconds=settings.notification_timeout_seconds,
+                )
+                if result is not None:
+                    sent += 1
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("급증 알림 발송 실패 (스캔 결과는 이미 저장됨)")
+    finally:
+        conn.close()
+
+    notifications.save_notify_state(data_dir, state)
+    return sent
+
+
+def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig) -> None:
+    """설정에서 사라진 계정의 검색 인덱스를 정리한다.
+
+    GUI에서 계정을 지울 때도 정리하지만, 그때 GUI가 먼저 닫히는 등으로 정리가
+    끝나지 않을 수 있다. 야간 실행마다 한 번 더 대조해 orphan이 영구히 남지
+    않게 한다."""
+
+    if not search_index.db_path(data_dir).exists():
+        return
+    conn = None
+    try:
+        conn = search_index.connect(data_dir)
+        active = [account.account_id for account in config.accounts if account.search_indexing]
+        search_index.prune_orphans(conn, active)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("검색 인덱스 정리 실패")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _generate_reports(data_dir: Path, config: config_module.AppConfig, now: datetime) -> None:

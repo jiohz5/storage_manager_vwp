@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 from .. import admin_auth, config as config_module
 from .. import i18n, search_index
 from . import widgets
+from .pin_dialog import PinChangeDialog
 
 
 class _IndexWorker(QObject):
@@ -112,7 +113,7 @@ class SearchDialog(QDialog):
         )
         if not ok:
             return False
-        if not self._session.unlock(pin):
+        if not self._session.unlock(pin, self._config.settings.admin_pin_hash):
             QMessageBox.warning(
                 self.parent(), i18n.t("search.pin_title"), i18n.t("search.pin_wrong")
             )
@@ -123,10 +124,24 @@ class SearchDialog(QDialog):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        caveat_row = QHBoxLayout()
         caveat = QLabel(i18n.t("search.pin_caveat"))
         caveat.setStyleSheet("color: #757575; font-size: 9pt;")
         caveat.setWordWrap(True)
-        root.addWidget(caveat)
+        caveat_row.addWidget(caveat, 1)
+        change_pin_btn = QPushButton(i18n.t("search.change_pin"))
+        change_pin_btn.clicked.connect(self._change_pin)
+        caveat_row.addWidget(change_pin_btn)
+        root.addLayout(caveat_row)
+
+        # 기본 PIN을 그대로 쓰고 있으면 눈에 띄게 알린다.
+        self.pin_warning = QLabel(i18n.t("search.pin_default_warning"))
+        self.pin_warning.setStyleSheet("color: #ef6c00; font-size: 9pt; font-weight: bold;")
+        self.pin_warning.setWordWrap(True)
+        self.pin_warning.setVisible(
+            admin_auth.is_using_default(self._config.settings.admin_pin_hash)
+        )
+        root.addWidget(self.pin_warning)
 
         account_row = QHBoxLayout()
         self.account_combo = QComboBox()
@@ -257,6 +272,13 @@ class SearchDialog(QDialog):
             self.results.setItem(row, 0, QTableWidgetItem(hit.relative_path))
             self.results.setItem(row, 1, QTableWidgetItem(hit.kind))
         self.status_label.setText(i18n.t("search.result_count", count=len(hits), limit=limit))
+
+    def _change_pin(self) -> None:
+        dialog = PinChangeDialog(self._data_dir, self._config, parent=self)
+        if dialog.exec_():
+            self.pin_warning.setVisible(
+                admin_auth.is_using_default(self._config.settings.admin_pin_hash)
+            )
 
     def _on_index_finished(self, count: int) -> None:
         self._refresh_state()

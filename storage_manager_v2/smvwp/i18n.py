@@ -159,6 +159,9 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "notify.mode.webhook": "내부 webhook",
         "notify.mode.disabled": "사용 안 함",
         "notify.message": "[{tier}] {account} ({path}) - 용량 {byte_pct} / inode {inode_pct}",
+        "notify.growth_message": (
+            "[급증] {account} - {path} 이(가) {delta} 증가 (현재 {current})"
+        ),
         # -- 최초 실행 안내 ----------------------------------------
         "firstrun.title": "시작하기",
         "firstrun.heading": "Storage Manager VWP를 시작합니다",
@@ -200,6 +203,16 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "search.col.kind": "종류",
         "search.result_count": "결과 {count}건 (최대 {limit}건까지 표시)",
         "search.db_size": "검색 DB 실제 크기: {size}",
+        "search.change_pin": "PIN 변경...",
+        "search.pin_default_warning": "기본 PIN을 그대로 쓰고 있습니다. 변경을 권장합니다.",
+        "pin.change_title": "관리자 PIN 변경",
+        "pin.current": "현재 PIN",
+        "pin.new": "새 PIN",
+        "pin.confirm": "새 PIN 확인",
+        "pin.mismatch": "새 PIN이 서로 일치하지 않습니다.",
+        "pin.too_short": "PIN은 최소 {min_length}자리여야 합니다.",
+        "pin.current_wrong": "현재 PIN이 올바르지 않습니다.",
+        "pin.changed": "PIN을 변경했습니다.",
     },
     ENGLISH: {
         # -- Tiers -------------------------------------------------
@@ -331,6 +344,9 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "notify.mode.webhook": "Internal webhook",
         "notify.mode.disabled": "Disabled",
         "notify.message": "[{tier}] {account} ({path}) - capacity {byte_pct} / inode {inode_pct}",
+        "notify.growth_message": (
+            "[Growth] {account} - {path} grew by {delta} (now {current})"
+        ),
         # -- First run ---------------------------------------------
         "firstrun.title": "Getting started",
         "firstrun.heading": "Welcome to Storage Manager VWP",
@@ -372,6 +388,16 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "search.col.kind": "Kind",
         "search.result_count": "{count} result(s) (showing up to {limit})",
         "search.db_size": "Search DB size on disk: {size}",
+        "search.change_pin": "Change PIN...",
+        "search.pin_default_warning": "Still using the default PIN. Changing it is recommended.",
+        "pin.change_title": "Change admin PIN",
+        "pin.current": "Current PIN",
+        "pin.new": "New PIN",
+        "pin.confirm": "Confirm new PIN",
+        "pin.mismatch": "The new PIN entries do not match.",
+        "pin.too_short": "The PIN must be at least {min_length} characters.",
+        "pin.current_wrong": "The current PIN is incorrect.",
+        "pin.changed": "PIN changed.",
     },
 }
 

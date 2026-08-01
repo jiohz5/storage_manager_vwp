@@ -88,6 +88,12 @@ class Settings:
     report_retention_days: int = 365
     # 검색 인덱스 (계정별 opt-in, 기본 꺼짐)
     search_result_limit: int = 500
+    # 야간 상세 스캔에서 경로 하나가 직전 세대 대비 이만큼 늘면 알림을 보낸다.
+    # 통계 추정이 아니라 설명 가능한 단순 절대 임계치다.
+    growth_alert_min_kb: int = 100 * 1024 * 1024  # 100GB
+    growth_alert_enabled: bool = True
+    # 관리자 PIN 해시 (평문 아님). 비어 있으면 기본 PIN을 쓴다.
+    admin_pin_hash: str = ""
 
 
 @dataclass
@@ -170,6 +176,8 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("report_retention_days는 1 이상이어야 합니다")
     if not 1 <= settings.search_result_limit <= 10000:
         raise ConfigError("search_result_limit은 1~10000이어야 합니다")
+    if settings.growth_alert_min_kb < 0:
+        raise ConfigError("growth_alert_min_kb는 음수일 수 없습니다")
     return settings
 
 

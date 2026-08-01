@@ -30,7 +30,7 @@ import subprocess
 import urllib.error
 import urllib.request
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional, Sequence
@@ -40,7 +40,14 @@ from . import i18n, procio, tiers
 from .config import Account
 from .store import SampleRecord
 
-NOTIFICATION_SCHEMA_VERSION = 1
+# v2에서 kind/details를 추가했다. 기존 소비자(트레이 notifier)가 쓰는 필드는
+# 그대로 두었으므로 v1 파일도 계속 읽을 수 있다.
+NOTIFICATION_SCHEMA_VERSION = 2
+
+# 알림 종류. 15분 df 수집에서 나온 것인지, 야간 상세 스캔의 급증 경로인지
+# 구분한다 - 수신 쪽에서 필터링할 수 있어야 하기 때문.
+KIND_CAPACITY = "capacity"
+KIND_GROWTH = "growth"
 
 
 def outbox_dir(data_dir: Path) -> Path:
@@ -68,6 +75,11 @@ class NotificationEvent:
     byte_pct: Optional[float]
     inode_pct: Optional[float]
     message: str
+    # 종류별 부가 정보. capacity는 비어 있고, growth는 어떤 경로가 얼마나
+    # 늘었는지를 담는다. dict로 둔 이유는 종류가 늘어도 스키마를 흔들지 않기
+    # 위해서다.
+    kind: str = KIND_CAPACITY
+    details: dict = field(default_factory=dict)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -317,4 +329,120 @@ def maybe_notify(
     # 수집 주기마다 같은 실패를 반복해 로그와 endpoint를 두드리게 된다.
     # 실패 사실 자체는 감사 기록(notify_audit)에 남는다.
     state[account.account_id] = {"tier": tier, "last_notified_at": now.isoformat()}
+    return result
+
+
+# -- 상세 스캔 급증 알림 ---------------------------------------------------
+
+def _format_kb(size_kb: Optional[int]) -> str:
+    if size_kb is None:
+        return "-"
+    value = float(size_kb)
+    for unit in ("KB", "MB", "GB", "TB", "PB"):
+        if abs(value) < 1024 or unit == "PB":
+            return f"{int(value):,} KB" if unit == "KB" else f"{value:,.1f} {unit}"
+        value /= 1024
+    return f"{value:,.1f} PB"  # pragma: no cover
+
+
+def growth_state_key(account_id: str, path: str) -> str:
+    """급증 알림의 cooldown 키.
+
+    계정 단위인 용량 알림과 키 공간을 분리한다 - 같은 계정이라도 경로마다
+    따로 세야 하고, 용량 알림이 정상 복귀로 리셋될 때 급증 기록까지 지워지면
+    안 되기 때문."""
+
+    return f"{KIND_GROWTH}:{account_id}:{path}"
+
+
+def build_growth_event(
+    account: Account,
+    path: str,
+    current_kb: int,
+    previous_kb: Optional[int],
+    now: datetime,
+) -> NotificationEvent:
+    delta_kb = current_kb - (previous_kb or 0)
+    message = i18n.t(
+        "notify.growth_message",
+        account=account.name,
+        path=path,
+        delta=_format_kb(delta_kb),
+        current=_format_kb(current_kb),
+    )
+    return NotificationEvent(
+        schema_version=NOTIFICATION_SCHEMA_VERSION,
+        event_id=uuid.uuid4().hex,
+        generated_at=now.isoformat(),
+        account_id=account.account_id,
+        account_name=account.name,
+        account_path=account.path,
+        # 급증은 용량 등급과 다른 축이지만, 트레이 아이콘/정렬이 등급을 쓰므로
+        # '주의' 수준으로 표시한다. 사용률 등급을 덮어쓰지는 않는다.
+        tier=tiers.WARN,
+        tier_label=tiers.label(tiers.WARN),
+        byte_pct=None,
+        inode_pct=None,
+        message=message,
+        kind=KIND_GROWTH,
+        details={
+            "path": path,
+            "current_kb": current_kb,
+            "previous_kb": previous_kb,
+            "delta_kb": delta_kb,
+        },
+    )
+
+
+def maybe_notify_growth(
+    data_dir: Path,
+    account: Account,
+    path: str,
+    current_kb: int,
+    previous_kb: Optional[int],
+    state: Dict[str, dict],
+    min_increase_kb: int,
+    cooldown_minutes: int = 60,
+    now: Optional[datetime] = None,
+    mode: str = config_module.NOTIFY_MODE_OUTBOX,
+    command: Optional[Sequence[str]] = None,
+    webhook_url: str = "",
+    timeout_seconds: int = 10,
+) -> Optional[DeliveryResult]:
+    """한 경로의 증가량이 기준을 넘으면 알림을 보낸다.
+
+    기준은 **직전 완료 세대 대비 절대 증가량** 하나뿐이다. 세대가 두 개뿐인
+    시점에 중앙값·MAD 같은 통계를 계산하면 근거 없는 숫자가 되므로, 설명할 수
+    있는 단순 임계치만 쓴다 (CONCEPT.md "과장하지 않는" 원칙).
+
+    이전 세대에 없던 새 경로는 previous_kb=None으로 들어오며, 이때는 현재
+    크기 전체를 증가로 본다."""
+
+    now = now or datetime.now(timezone.utc)
+    delta_kb = current_kb - (previous_kb or 0)
+    if delta_kb < min_increase_kb:
+        return None
+
+    key = growth_state_key(account.account_id, path)
+    previous = state.get(key)
+    if previous is not None:
+        last_notified_at = previous.get("last_notified_at")
+        if last_notified_at:
+            try:
+                last_dt = datetime.fromisoformat(last_notified_at)
+            except ValueError:
+                last_dt = None
+            if last_dt is not None and now - last_dt < timedelta(minutes=cooldown_minutes):
+                return None
+
+    event = build_growth_event(account, path, current_kb, previous_kb, now)
+    result = deliver(
+        data_dir,
+        event,
+        mode=mode,
+        command=command,
+        webhook_url=webhook_url,
+        timeout_seconds=timeout_seconds,
+    )
+    state[key] = {"last_notified_at": now.isoformat(), "delta_kb": delta_kb}
     return result

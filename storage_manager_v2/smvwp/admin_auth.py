@@ -25,7 +25,17 @@ from typing import Optional
 # 기본 PIN. 운영에서는 반드시 바꾸도록 GUI/문서에서 안내한다.
 DEFAULT_PIN = "6368"
 
+# PIN 최소 길이. 4자리는 짧지만, 이 장치의 목적 자체가 강한 인증이 아니라
+# 화면 노출 제한이므로 현장에서 쓰기 불편할 정도로 강제하지는 않는다.
+MIN_PIN_LENGTH = 4
+
 _ITERATIONS = 120_000
+
+
+def is_using_default(stored: str) -> bool:
+    """아직 기본 PIN을 쓰고 있는지 (변경 권고를 띄우기 위한 확인)."""
+
+    return not stored
 
 
 def hash_pin(pin: str, salt: Optional[bytes] = None) -> str:
