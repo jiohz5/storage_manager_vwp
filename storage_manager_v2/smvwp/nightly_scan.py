@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import activity_scan, config as config_module, detail_scan, scan_lock, scan_store, scan_window
+from . import activity_scan, config as config_module, detail_scan, reports, scan_lock, scan_store, scan_window
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +247,23 @@ def run_nightly_scan(
         conn.close()
         scan_lock.release_lock(data_dir, run_id)
 
+    _generate_reports(data_dir, config, local_now)
     return RunSummary(started=True, status=status, run_id=run_id, accounts=outcomes)
+
+
+def _generate_reports(data_dir: Path, config: config_module.AppConfig, now: datetime) -> None:
+    """스캔이 끝나면 보고서를 갱신한다.
+
+    보고서 생성 실패가 스캔 결과 자체를 무효로 만들면 안 된다 - 스캔 데이터는
+    이미 DB에 안전하게 들어갔으므로, 여기서 나는 오류는 기록만 하고 넘어간다."""
+
+    kinds = [reports.DAILY, reports.CLEANUP]
+    if reports.should_build_weekly(config, now):
+        kinds.append(reports.WEEKLY)
+    try:
+        reports.generate(data_dir, config, kinds=kinds, now=now)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("보고서 생성 실패 (스캔 결과는 이미 저장됨)")
 
 
 @dataclass

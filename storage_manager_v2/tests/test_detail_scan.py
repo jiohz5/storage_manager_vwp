@@ -5,10 +5,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from smvwp import detail_scan, scan_store
+from tests import support
 
 
 def _completed(stdout, returncode=0, stderr=""):
-    return subprocess.CompletedProcess(args=["du"], returncode=returncode, stdout=stdout, stderr=stderr)
+    # stdout은 bytes여야 한다 (procio가 바이트 모드로 읽는다) - tests/support.py 참고.
+    return support.completed(["du"], stdout=stdout, returncode=returncode, stderr=stderr)
 
 
 class RunDuTests(unittest.TestCase):

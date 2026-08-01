@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from . import procio
+from . import quota as quota_module
 from . import tiers
 from .config import Account
 from .store import SampleRecord
@@ -54,13 +56,9 @@ class DfInodeResult:
 
 def _run_df(args: List[str], timeout: int) -> str:
     try:
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
+        # 마운트 지점 이름에 비ASCII가 들어갈 수 있으므로 UTF-8을 명시한다
+        # (smvwp.procio 참고).
+        proc = procio.run_utf8(args, timeout=timeout)
     except FileNotFoundError as exc:
         raise CollectorError("df 명령을 찾을 수 없습니다") from exc
     except subprocess.TimeoutExpired as exc:
@@ -141,10 +139,14 @@ def query_inodes(path: str, timeout: int = 10) -> DfInodeResult:
     )
 
 
-def collect_account(account: Account, df_timeout_seconds: int = 10) -> SampleRecord:
-    """계정 하나에 대해 byte+inode 표본을 수집한다. 실패해도 예외를 던지지
-    않고 ok=False인 SampleRecord를 반환한다 (호출자가 다른 계정을 계속 수집할
-    수 있도록)."""
+def collect_account(
+    account: Account,
+    df_timeout_seconds: int = 10,
+    quota_command: Optional[List[str]] = None,
+) -> SampleRecord:
+    """계정 하나에 대해 byte+inode(+선택적 quota) 표본을 수집한다. 실패해도
+    예외를 던지지 않고 ok=False인 SampleRecord를 반환한다 (호출자가 다른 계정을
+    계속 수집할 수 있도록)."""
 
     collected_at = datetime.now(timezone.utc).isoformat()
     try:
@@ -161,6 +163,16 @@ def collect_account(account: Account, df_timeout_seconds: int = 10) -> SampleRec
     byte_tier = tiers.classify(byte_result.pct)
     inode_tier = tiers.classify(inode_result.pct)
     overall_tier = tiers.worse(byte_tier, inode_tier)
+
+    # quota는 선택 기능이다. 조회에 실패해도 df 결과는 그대로 살린다 - quota
+    # wrapper 하나 때문에 용량 모니터링 전체가 멈추면 안 된다.
+    quota_result = None
+    if quota_module.is_configured(quota_command):
+        quota_result = quota_module.query(
+            quota_command, account.name, account.path, timeout_seconds=df_timeout_seconds
+        )
+        if quota_result.ok:
+            overall_tier = tiers.worse(overall_tier, quota_module.tier_for(quota_result))
 
     return SampleRecord(
         account_id=account.account_id,
@@ -179,8 +191,20 @@ def collect_account(account: Account, df_timeout_seconds: int = 10) -> SampleRec
         inode_pct=inode_result.pct,
         inode_tier=inode_tier,
         overall_tier=overall_tier,
+        quota_used_kb=quota_result.used_kb if quota_result and quota_result.ok else None,
+        quota_limit_kb=quota_result.limit_kb if quota_result and quota_result.ok else None,
+        quota_soft_limit_kb=quota_result.soft_limit_kb if quota_result and quota_result.ok else None,
+        quota_pct=quota_result.pct if quota_result and quota_result.ok else None,
+        quota_tier=quota_module.tier_for(quota_result) if quota_result else tiers.UNKNOWN,
     )
 
 
-def collect_all(accounts: List[Account], df_timeout_seconds: int = 10) -> List[SampleRecord]:
-    return [collect_account(account, df_timeout_seconds=df_timeout_seconds) for account in accounts]
+def collect_all(
+    accounts: List[Account],
+    df_timeout_seconds: int = 10,
+    quota_command: Optional[List[str]] = None,
+) -> List[SampleRecord]:
+    return [
+        collect_account(account, df_timeout_seconds=df_timeout_seconds, quota_command=quota_command)
+        for account in accounts
+    ]

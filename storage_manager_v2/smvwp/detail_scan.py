@@ -19,7 +19,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
 
-from . import scan_store
+from . import procio, scan_store
 
 
 class DetailScanError(Exception):
@@ -60,7 +60,9 @@ def run_du(path: str, timeout_seconds: int) -> DuOutcome:
 
     command = build_priority_prefix() + ["du", "-sk", "--", path]
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False)
+        # du 출력에는 파일 경로가 들어간다 - 비ASCII 경로가 로케일 인코딩으로
+        # 깨지지 않도록 UTF-8을 명시한다 (smvwp.procio 참고).
+        proc = procio.run_utf8(command, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         return DuOutcome(ok=False, timed_out=True)
     except FileNotFoundError:

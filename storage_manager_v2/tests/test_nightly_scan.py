@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from smvwp import config as config_module
 from smvwp import nightly_scan, scan_lock, scan_store
+from tests import support
 
 
 class FakeCommandRunner:
@@ -18,6 +19,9 @@ class FakeCommandRunner:
     patch가 앞의 것을 그대로 덮어써서, `du` 호출이 `find`용 가짜 결과(빈
     stdout)를 받아 엉뚱하게 실패한다. 그래서 patch는 한 번만 걸고, 그 하나가
     명령을 보고 분기하도록 했다.
+
+    stdout은 bytes로 돌려준다 - 앱이 `procio.run_utf8`로 바이트 모드 실행 후
+    직접 UTF-8 디코딩하기 때문 (tests/support.py 참고).
 
     `on_du`는 "N번째 du 호출 직후"에 끼어들 훅이다 - 스캔 도중 안전 중지를
     요청하는 상황을 만들 때 쓴다.
@@ -33,12 +37,10 @@ class FakeCommandRunner:
             self.du_calls.append(command)
             if self.on_du is not None:
                 self.on_du(len(self.du_calls))
-            return subprocess.CompletedProcess(
-                args=command, returncode=0, stdout=f"100\t{command[-1]}\n", stderr=""
-            )
+            return support.completed(command, stdout=f"100\t{command[-1]}\n")
         if "find" in command:
             self.find_calls.append(command)
-            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+            return support.completed(command)
         raise AssertionError(f"예상치 못한 명령: {command}")
 
     @property

@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
 
-from . import scan_store
+from . import procio, scan_store
 from .detail_scan import build_priority_prefix, list_immediate_subdirs
 
 
@@ -42,7 +42,9 @@ def run_find_changed(path: str, since_iso: str, timeout_seconds: int) -> FindOut
 
     command = build_priority_prefix() + ["find", path, "-newermt", since_iso, "-type", "f"]
     try:
-        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout_seconds, check=False)
+        # find는 경로를 그대로 출력한다 - UTF-8을 명시해 비ASCII 경로에서
+        # 디코딩이 깨지지 않게 한다 (smvwp.procio 참고).
+        proc = procio.run_utf8(command, timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         return FindOutcome(ok=False, timed_out=True)
     except FileNotFoundError:

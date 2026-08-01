@@ -15,14 +15,19 @@ from . import collector, config as config_module, notifications, store
 
 
 def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> List[store.SampleRecord]:
+    settings = config.settings
     accounts = config_module.enabled_accounts(config)
-    records = collector.collect_all(accounts, df_timeout_seconds=config.settings.df_timeout_seconds)
+    records = collector.collect_all(
+        accounts,
+        df_timeout_seconds=settings.df_timeout_seconds,
+        quota_command=settings.quota_command,
+    )
 
     conn = store.connect(data_dir)
     try:
         for record in records:
             store.insert_sample(conn, record)
-        store.prune_old_samples(conn, config.settings.sample_retention_days)
+        store.prune_old_samples(conn, settings.sample_retention_days)
     finally:
         conn.close()
 
@@ -37,8 +42,12 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
             account,
             record,
             state,
-            min_tier=config.settings.notification_min_tier,
-            cooldown_minutes=config.settings.notification_cooldown_minutes,
+            min_tier=settings.notification_min_tier,
+            cooldown_minutes=settings.notification_cooldown_minutes,
+            mode=settings.notification_mode,
+            command=settings.notification_command,
+            webhook_url=settings.notification_webhook_url,
+            timeout_seconds=settings.notification_timeout_seconds,
         )
     notifications.save_notify_state(data_dir, state)
 

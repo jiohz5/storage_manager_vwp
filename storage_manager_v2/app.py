@@ -69,6 +69,8 @@ def main() -> int:
 
     window = MainWindow(data_dir, config)
     window.show()
+    # 창이 뜬 뒤에 안내를 띄운다 - 부모 창 없이 모달이 먼저 뜨는 것을 피한다.
+    window.show_first_run_if_needed()
     return app.exec_()
 
 

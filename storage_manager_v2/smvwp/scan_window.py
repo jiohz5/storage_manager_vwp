@@ -15,6 +15,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Optional
 
+from . import i18n
+
 DEFAULT_START_HOUR = 22
 DEFAULT_END_HOUR = 6
 
@@ -52,8 +54,8 @@ def seconds_remaining(now: datetime, end_hour: int = DEFAULT_END_HOUR) -> float:
 
 
 def describe(now: datetime, start_hour: int = DEFAULT_START_HOUR, end_hour: int = DEFAULT_END_HOUR) -> str:
-    """진단/GUI 표시용 사람이 읽는 상태 문자열."""
+    """진단/GUI 표시용 사람이 읽는 상태 문자열 (현재 언어로)."""
 
     if is_within_window(now, start_hour, end_hour):
-        return f"야간 시간창 진행 중 (종료까지 약 {seconds_remaining(now, end_hour) / 60:.0f}분)"
-    return f"야간 시간창 아님 (시작 {start_hour:02d}:00 ~ 종료 {end_hour:02d}:00)"
+        return i18n.t("scan.window_open", minutes=f"{seconds_remaining(now, end_hour) / 60:.0f}")
+    return i18n.t("scan.window_closed", start=start_hour, end=end_hour)

@@ -37,6 +37,21 @@ def format_kb(size_kb: Optional[int]) -> str:
     return f"{value:,.1f} PB"  # pragma: no cover - 위 루프에서 반환됨
 
 
+def format_bytes(size_bytes: Optional[int]) -> str:
+    """byte 단위 크기를 사람이 읽는 문자열로 (파일 실제 크기 표시용)."""
+
+    if size_bytes is None:
+        return "-"
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(value) < 1024 or unit == "TB":
+            if unit == "B":
+                return f"{int(value):,} B"
+            return f"{value:,.1f} {unit}"
+        value /= 1024
+    return f"{value:,.1f} TB"  # pragma: no cover - 위 루프에서 반환됨
+
+
 def format_kb_delta(delta_kb: Optional[int]) -> str:
     """증감량 표시 - 부호를 명시하고 0은 '변화 없음'으로."""
 

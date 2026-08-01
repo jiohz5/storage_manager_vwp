@@ -43,6 +43,25 @@ CREATE INDEX IF NOT EXISTS idx_samples_account_time
     ON samples(account_id, collected_at DESC);
 """
 
+# 나중에 추가된 열. `CREATE TABLE IF NOT EXISTS`는 이미 있는 테이블을 바꾸지
+# 않으므로, 기존 DB에는 ALTER TABLE로 따로 붙여 준다 (열 추가만 하고 기존
+# 데이터는 건드리지 않으므로 되돌릴 필요가 없는 안전한 변경).
+_ADDED_COLUMNS = (
+    ("quota_used_kb", "INTEGER"),
+    ("quota_limit_kb", "INTEGER"),
+    ("quota_soft_limit_kb", "INTEGER"),
+    ("quota_pct", "REAL"),
+    ("quota_tier", "TEXT"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(samples)").fetchall()}
+    for column, column_type in _ADDED_COLUMNS:
+        if column not in existing:
+            conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {column_type}")
+    conn.commit()
+
 
 @dataclass
 class SampleRecord:
@@ -63,6 +82,13 @@ class SampleRecord:
     inode_pct: Optional[float] = None
     inode_tier: str = "unknown"
     overall_tier: str = "unknown"
+    # quota는 선택 기능이라 설정하지 않으면 전부 None으로 남는다 (0으로 채우지
+    # 않는다 - "모름"과 "0"은 다르다).
+    quota_used_kb: Optional[int] = None
+    quota_limit_kb: Optional[int] = None
+    quota_soft_limit_kb: Optional[int] = None
+    quota_pct: Optional[float] = None
+    quota_tier: str = "unknown"
     id: Optional[int] = None
 
 
@@ -77,6 +103,7 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     conn.commit()
+    _migrate(conn)
     return conn
 
 
@@ -86,8 +113,9 @@ def insert_sample(conn: sqlite3.Connection, sample: SampleRecord) -> int:
         INSERT INTO samples (
             account_id, collected_at, ok, error_message, filesystem, mount_point,
             total_kb, used_kb, avail_kb, byte_pct, byte_tier,
-            inode_total, inode_used, inode_avail, inode_pct, inode_tier, overall_tier
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            inode_total, inode_used, inode_avail, inode_pct, inode_tier, overall_tier,
+            quota_used_kb, quota_limit_kb, quota_soft_limit_kb, quota_pct, quota_tier
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             sample.account_id,
@@ -107,6 +135,11 @@ def insert_sample(conn: sqlite3.Connection, sample: SampleRecord) -> int:
             sample.inode_pct,
             sample.inode_tier,
             sample.overall_tier,
+            sample.quota_used_kb,
+            sample.quota_limit_kb,
+            sample.quota_soft_limit_kb,
+            sample.quota_pct,
+            sample.quota_tier,
         ),
     )
     conn.commit()
@@ -133,6 +166,11 @@ def _row_to_record(row: sqlite3.Row) -> SampleRecord:
         inode_pct=row["inode_pct"],
         inode_tier=row["inode_tier"],
         overall_tier=row["overall_tier"],
+        quota_used_kb=row["quota_used_kb"],
+        quota_limit_kb=row["quota_limit_kb"],
+        quota_soft_limit_kb=row["quota_soft_limit_kb"],
+        quota_pct=row["quota_pct"],
+        quota_tier=row["quota_tier"] or "unknown",
     )
 
 

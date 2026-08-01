@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from . import i18n
+
 NORMAL = "normal"
 WARN = "warn"
 ALERT = "alert"
@@ -32,15 +34,16 @@ _SEVERITY = {
     FULL: 4,
 }
 
-# (등급, 한글 라벨, 기준 색상) — 색상은 어두운 배경/밝은 배경 모두에서 무난하게
-# 보이도록 중간 톤을 선택했다. GUI 쪽에서 필요하면 조정 가능.
+# 등급별 기준 색상 — 어두운 배경/밝은 배경 모두에서 무난하게 보이도록 중간
+# 톤을 선택했다. 표시 라벨은 언어에 따라 달라지므로 여기 두지 않고
+# `i18n.t("tier.<code>")`로 그때그때 가져온다 (`label()` 참고).
 LABELS = {
-    NORMAL: ("정상", "#2e7d32"),
-    WARN: ("주의", "#f9a825"),
-    ALERT: ("경고", "#ef6c00"),
-    EMERGENCY: ("긴급", "#c62828"),
-    FULL: ("가득참", "#6a1b9a"),
-    UNKNOWN: ("확인불가", "#757575"),
+    NORMAL: "#2e7d32",
+    WARN: "#f9a825",
+    ALERT: "#ef6c00",
+    EMERGENCY: "#c62828",
+    FULL: "#6a1b9a",
+    UNKNOWN: "#757575",
 }
 
 WARN_THRESHOLD = 90
@@ -84,11 +87,15 @@ def is_at_least(tier: str, threshold_tier: str) -> bool:
 
 
 def label(tier: str) -> str:
-    return LABELS.get(tier, LABELS[UNKNOWN])[0]
+    """현재 언어의 등급 라벨. 등급 코드 자체(`normal` 등)는 언어 중립이므로
+    저장/전송에는 코드를 쓰고, 라벨은 화면에 보일 때만 만든다."""
+
+    key = tier if tier in LABELS else UNKNOWN
+    return i18n.t(f"tier.{key}")
 
 
 def color(tier: str) -> str:
-    return LABELS.get(tier, LABELS[UNKNOWN])[1]
+    return LABELS.get(tier, LABELS[UNKNOWN])
 
 
 def display_text(tier: str, pct: Optional[float]) -> str:

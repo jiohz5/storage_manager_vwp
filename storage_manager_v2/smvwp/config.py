@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from . import paths
+from . import i18n, paths
 
 
 class ConfigError(ValueError):
@@ -41,6 +41,22 @@ DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS = 2
 DEFAULT_DETAIL_SCAN_TOP_N = 15
 DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS = 2
 
+# 표시 언어 (i18n). 저장은 언어 코드로만 하고 라벨은 그때그때 만든다.
+DEFAULT_LANGUAGE = i18n.DEFAULT_LANGUAGE
+
+# 알림 전송 방식. 기본은 폐쇄망에서 가장 안전한 로컬 파일 outbox.
+NOTIFY_MODE_OUTBOX = "outbox"
+NOTIFY_MODE_COMMAND = "command"
+NOTIFY_MODE_WEBHOOK = "webhook"
+NOTIFY_MODE_DISABLED = "disabled"
+NOTIFICATION_MODES = (
+    NOTIFY_MODE_OUTBOX,
+    NOTIFY_MODE_COMMAND,
+    NOTIFY_MODE_WEBHOOK,
+    NOTIFY_MODE_DISABLED,
+)
+DEFAULT_NOTIFICATION_MODE = NOTIFY_MODE_OUTBOX
+
 
 @dataclass
 class Settings:
@@ -55,6 +71,23 @@ class Settings:
     detail_scan_keep_generations: int = DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS
     detail_scan_top_n: int = DEFAULT_DETAIL_SCAN_TOP_N
     activity_initial_lookback_days: int = DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS
+    language: str = DEFAULT_LANGUAGE
+    # 알림 채널. command/webhook은 사내 endpoint가 있을 때만 쓰고, 설정하지
+    # 않으면 outbox 그대로 동작한다.
+    notification_mode: str = DEFAULT_NOTIFICATION_MODE
+    notification_command: List[str] = field(default_factory=list)
+    notification_webhook_url: str = ""
+    notification_timeout_seconds: int = 10
+    # quota 조회 argv (shell 없이 실행). 비어 있으면 quota 열은 '-'로 남는다.
+    quota_command: List[str] = field(default_factory=list)
+    # 보고서 / 정리 후보 기준
+    weekly_report_weekday: int = 4  # 월=0 ... 금=4 (Python weekday 기준)
+    cleanup_min_size_kb: int = 100 * 1024 * 1024  # 100GB
+    cleanup_min_age_days: int = 30
+    cleanup_idle_days: int = 30
+    report_retention_days: int = 365
+    # 검색 인덱스 (계정별 opt-in, 기본 꺼짐)
+    search_result_limit: int = 500
 
 
 @dataclass
@@ -64,6 +97,9 @@ class Account:
     enabled: bool = True
     account_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # 검색 인덱싱은 계정별 opt-in (기본 꺼짐) - 이름 인덱스는 별도 DB를 꽤
+    # 차지할 수 있으므로 필요한 계정만 켠다.
+    search_indexing: bool = False
 
 
 @dataclass
@@ -102,6 +138,38 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("detail_scan_top_n은 1~200이어야 합니다")
     if settings.activity_initial_lookback_days < 1:
         raise ConfigError("activity_initial_lookback_days는 1 이상이어야 합니다")
+    if not i18n.is_supported(settings.language):
+        # 언어는 잘못돼도 앱을 막지 않고 기본값으로 되돌린다 - 표시 문제일 뿐
+        # 데이터 무결성 문제가 아니기 때문.
+        settings.language = i18n.DEFAULT_LANGUAGE
+    if settings.notification_mode not in NOTIFICATION_MODES:
+        raise ConfigError(
+            f"notification_mode는 {', '.join(NOTIFICATION_MODES)} 중 하나여야 합니다"
+        )
+    if not isinstance(settings.notification_command, list) or not all(
+        isinstance(part, str) for part in settings.notification_command
+    ):
+        raise ConfigError("notification_command는 문자열 배열이어야 합니다")
+    if settings.notification_mode == NOTIFY_MODE_COMMAND and not settings.notification_command:
+        raise ConfigError("notification_mode가 command면 notification_command가 필요합니다")
+    if settings.notification_mode == NOTIFY_MODE_WEBHOOK and not settings.notification_webhook_url:
+        raise ConfigError("notification_mode가 webhook이면 notification_webhook_url이 필요합니다")
+    if not isinstance(settings.quota_command, list) or not all(
+        isinstance(part, str) for part in settings.quota_command
+    ):
+        raise ConfigError("quota_command는 문자열 배열이어야 합니다")
+    if settings.notification_timeout_seconds < 1:
+        raise ConfigError("notification_timeout_seconds는 1 이상이어야 합니다")
+    if not 0 <= settings.weekly_report_weekday <= 6:
+        raise ConfigError("weekly_report_weekday는 0(월)~6(일)이어야 합니다")
+    if settings.cleanup_min_size_kb < 0:
+        raise ConfigError("cleanup_min_size_kb는 음수일 수 없습니다")
+    if settings.cleanup_min_age_days < 0 or settings.cleanup_idle_days < 0:
+        raise ConfigError("cleanup 기간 설정은 음수일 수 없습니다")
+    if settings.report_retention_days < 1:
+        raise ConfigError("report_retention_days는 1 이상이어야 합니다")
+    if not 1 <= settings.search_result_limit <= 10000:
+        raise ConfigError("search_result_limit은 1~10000이어야 합니다")
     return settings
 
 

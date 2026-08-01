@@ -4,10 +4,13 @@ from unittest.mock import patch
 
 from smvwp import collector, tiers
 from smvwp.config import Account
+from tests import support
 
 
 def _completed(stdout, returncode=0, stderr=""):
-    return subprocess.CompletedProcess(args=["df"], returncode=returncode, stdout=stdout, stderr=stderr)
+    # stdout은 반드시 bytes여야 한다 (procio가 바이트 모드로 읽는다) -
+    # 자세한 이유는 tests/support.py 참고.
+    return support.completed(["df"], stdout=stdout, returncode=returncode, stderr=stderr)
 
 
 DF_BYTES_OUTPUT = (
