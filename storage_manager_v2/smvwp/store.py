@@ -204,6 +204,22 @@ def history(conn: sqlite3.Connection, account_id: str, limit: int = 500) -> List
     return [_row_to_record(row) for row in rows]
 
 
+def samples_since(
+    conn: sqlite3.Connection, account_id: str, since: datetime
+) -> List[SampleRecord]:
+    """지정 시각 이후의 표본을 오래된 순으로. FULL 예측 회귀에 쓴다.
+
+    `history()`와 달리 개수 제한이 아니라 시간 창으로 자른다 - 30일 추세는
+    표본이 2,880개까지 갈 수 있어 limit 기반으로는 창을 제대로 못 채운다."""
+
+    rows = conn.execute(
+        "SELECT * FROM samples WHERE account_id = ? AND collected_at >= ? "
+        "ORDER BY collected_at",
+        (account_id, since.isoformat()),
+    ).fetchall()
+    return [_row_to_record(row) for row in rows]
+
+
 def prune_old_samples(conn: sqlite3.Connection, retention_days: int, now: Optional[datetime] = None) -> int:
     """보존 기간보다 오래된 샘플을 지운다. 지워진 행 수를 반환한다."""
 

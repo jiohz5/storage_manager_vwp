@@ -11,7 +11,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel
 
-from .. import tiers
+from .. import i18n, tiers
 
 
 def tier_badge_text(tier: str, pct: Optional[float]) -> str:
@@ -35,6 +35,66 @@ def format_kb(size_kb: Optional[int]) -> str:
             return f"{value:,.1f} {unit}"
         value /= 1024
     return f"{value:,.1f} PB"  # pragma: no cover - 위 루프에서 반환됨
+
+
+def _unavailable_text(prediction) -> str:
+    reason_key = f"forecast.reason.{prediction.reason}" if prediction.reason else ""
+    reason = i18n.t(reason_key) if reason_key else ""
+    unavailable = i18n.t("forecast.unavailable")
+    # 번역 키가 없으면 t()가 키를 그대로 돌려주므로, 그럴 땐 사유를 붙이지 않는다.
+    if reason and reason != reason_key:
+        return f"{unavailable}({reason})"
+    return unavailable
+
+
+def format_prediction(prediction) -> str:
+    """예측 하나를 짧은 표시 문자열로. 실패 사유도 사람이 읽게 옮긴다."""
+
+    if not prediction.ok or prediction.hours_to_full is None:
+        return _unavailable_text(prediction)
+    if prediction.hours_to_full < 1:
+        # 반올림해서 '약 0시간'이 되면 "이미 찼다"는 뜻인지 "곧"인지 모호하다.
+        return i18n.t("forecast.within_hour")
+    if prediction.hours_to_full < 48:
+        return i18n.t("forecast.hours", hours=f"{prediction.hours_to_full:.0f}")
+    return i18n.t("forecast.days", days=f"{prediction.days_to_full:.0f}")
+
+
+def format_forecast_cell(forecast, imminent_hours: float = 48.0) -> str:
+    """대시보드 `FULL 예상` 칸.
+
+    임박했을 때는 시간 단위 하나만 크게 보여주고(그 순간엔 그게 유일하게
+    중요한 정보다), 평상시에는 7일/30일 추세를 나란히 보여줘 추세가 빨라졌는지
+    느려졌는지를 사람이 판단하게 한다."""
+
+    if forecast is None:
+        return i18n.t("common.none")
+    if forecast.imminent.ok and forecast.imminent.hours_to_full is not None:
+        if forecast.imminent.hours_to_full < imminent_hours:
+            return format_prediction(forecast.imminent)
+
+    short, long = forecast.short_trend, forecast.long_trend
+    # 둘 다 같은 이유로 불가면 같은 문구를 두 번 쓰지 않는다 - 칸만 길어지고
+    # 읽는 사람이 얻는 정보는 같다.
+    if not short.ok and not long.ok and short.reason == long.reason:
+        return _unavailable_text(short)
+    return i18n.t(
+        "forecast.pair", short=format_prediction(short), long=format_prediction(long)
+    )
+
+
+def format_forecast_tooltip(forecast, window_hours: int) -> str:
+    if forecast is None:
+        return ""
+    slope = forecast.imminent.slope_kb_per_hour
+    slope_text = f"{slope:,.0f} KB/h" if slope else i18n.t("common.none")
+    return i18n.t(
+        "forecast.tooltip",
+        short=format_prediction(forecast.short_trend),
+        long=format_prediction(forecast.long_trend),
+        window=window_hours,
+        slope=slope_text,
+    )
 
 
 def format_bytes(size_bytes: Optional[int]) -> str:

@@ -113,6 +113,12 @@ def _process_baseline(
     if rows:
         scan_store.save_baseline_results(conn, account.account_id, generation, rows)
     scan_store.mark_generation_completed(conn, account.account_id, generation)
+    # 기준선을 정리하기 **전에** 증감 숫자를 이력으로 남긴다 - 정리하고 나면
+    # 비교 대상이 사라져 이력을 만들 수 없다.
+    scan_store.record_growth_history(conn, account.account_id, generation, generation - 1)
+    scan_store.prune_growth_history(
+        conn, account.account_id, settings.growth_history_keep_generations
+    )
     scan_store.prune_old_generations(conn, account.account_id, settings.detail_scan_keep_generations)
     return "done", generation
 

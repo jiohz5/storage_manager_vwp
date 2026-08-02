@@ -8,10 +8,13 @@ cron용 헤드리스 스크립트(`collector_cli.py`)가 이 함수 하나를 �
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import List
 
-from . import collector, config as config_module, notifications, store
+from . import collector, config as config_module, forecast_notify, notifications, store
+
+logger = logging.getLogger(__name__)
 
 
 def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> List[store.SampleRecord]:
@@ -50,5 +53,14 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
             timeout_seconds=settings.notification_timeout_seconds,
         )
     notifications.save_notify_state(data_dir, state)
+
+    # 예측/급증 알림은 수집이 끝난 뒤 별도로 처리한다. 여기서 실패해도 이미
+    # 저장된 df 표본은 그대로 남아야 하므로 예외를 삼킨다 - 예측은 부가
+    # 정보이고, 수집 자체가 이 사이클의 본질이다.
+    try:
+        forecasts = forecast_notify.build_forecasts(data_dir, config)
+        forecast_notify.notify_forecasts(data_dir, config, forecasts)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("FULL 예측 알림 실패 (수집 결과는 이미 저장됨)")
 
     return records

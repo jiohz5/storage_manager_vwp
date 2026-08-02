@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -36,7 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import config as config_module
-from .. import diagnostics, i18n, nightly_scan, quota, store, tiers
+from .. import diagnostics, forecast_notify, i18n, nightly_scan, quota, store, tiers
 from ..scheduler import CollectorScheduler, NightlyScanWorker
 from . import widgets
 from .account_dialog import AccountDialog
@@ -52,10 +53,22 @@ COLUMN_KEYS = [
     "dashboard.col.inode_pct",
     "dashboard.col.quota",
     "dashboard.col.tier",
+    "forecast.column",
     "dashboard.col.collected_at",
     "dashboard.col.status",
 ]
-COL_NAME, COL_PATH, COL_FS, COL_BYTE, COL_INODE, COL_QUOTA, COL_TIER, COL_TIME, COL_STATUS = range(9)
+(
+    COL_NAME,
+    COL_PATH,
+    COL_FS,
+    COL_BYTE,
+    COL_INODE,
+    COL_QUOTA,
+    COL_TIER,
+    COL_FORECAST,
+    COL_TIME,
+    COL_STATUS,
+) = range(10)
 
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
 
@@ -71,6 +84,7 @@ class MainWindow(QMainWindow):
         self._data_dir = data_dir
         self._config = config
         self._latest_samples: Dict[str, store.SampleRecord] = {}
+        self._forecasts: Dict[str, object] = {}
         self._scan_snapshot = None
         i18n.set_language(config.settings.language)
 
@@ -266,7 +280,20 @@ class MainWindow(QMainWindow):
         finally:
             conn.close()
         self._latest_samples = latest
+        self._refresh_forecasts()
         self._render_table(latest)
+
+    def _refresh_forecasts(self) -> None:
+        """FULL 예측을 다시 계산한다 (읽기 전용).
+
+        예측 실패가 대시보드 자체를 못 뜨게 만들면 안 되므로 예외를 삼키고
+        빈 결과로 둔다 - 그러면 해당 칸만 '-'로 표시된다."""
+
+        try:
+            forecasts = forecast_notify.build_forecasts(self._data_dir, self._config)
+            self._forecasts = {f.account_id: f for f in forecasts}
+        except Exception:  # pragma: no cover - 방어적 처리
+            self._forecasts = {}
 
     def _render_table(self, latest: Dict[str, store.SampleRecord]) -> None:
         accounts = self._config.accounts
@@ -283,7 +310,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, COL_PATH, QTableWidgetItem(account.path))
 
             if sample is None:
-                for column in (COL_FS, COL_BYTE, COL_INODE, COL_QUOTA, COL_TIME):
+                for column in (COL_FS, COL_BYTE, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):
                     self.table.setItem(row, column, QTableWidgetItem(dash))
                 self.table.setCellWidget(row, COL_TIER, widgets.TierBadge(tiers.UNKNOWN, None))
                 self.table.setItem(row, COL_STATUS, QTableWidgetItem(i18n.t("dashboard.not_collected")))
@@ -301,6 +328,23 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, COL_QUOTA, QTableWidgetItem(quota.format_usage(sample)))
 
             self.table.setCellWidget(row, COL_TIER, widgets.TierBadge(sample.overall_tier, sample.byte_pct))
+
+            forecast = self._forecasts.get(account.account_id)
+            forecast_item = QTableWidgetItem(widgets.format_forecast_cell(forecast))
+            forecast_item.setToolTip(
+                widgets.format_forecast_tooltip(
+                    forecast, self._config.settings.full_prediction_window_hours
+                )
+            )
+            # 임박했으면 등급 색으로 눈에 띄게 한다.
+            if forecast is not None and forecast.imminent.ok:
+                imminent_tier = forecast_notify.forecast_tier(
+                    forecast.imminent.hours_to_full, self._config.settings
+                )
+                if imminent_tier is not None:
+                    forecast_item.setForeground(QColor(tiers.color(imminent_tier)))
+            self.table.setItem(row, COL_FORECAST, forecast_item)
+
             self.table.setItem(row, COL_TIME, QTableWidgetItem(sample.collected_at))
             status_text = (
                 i18n.t("dashboard.collect_ok")

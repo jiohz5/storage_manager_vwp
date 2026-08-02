@@ -48,6 +48,9 @@ NOTIFICATION_SCHEMA_VERSION = 2
 # 구분한다 - 수신 쪽에서 필터링할 수 있어야 하기 때문.
 KIND_CAPACITY = "capacity"
 KIND_GROWTH = "growth"
+# 15분 표본 기반: FULL 도달 임박 예측과 단기 급증.
+KIND_FULL_FORECAST = "full_forecast"
+KIND_SURGE = "surge"
 
 
 def outbox_dir(data_dir: Path) -> Path:
@@ -446,3 +449,104 @@ def maybe_notify_growth(
     )
     state[key] = {"last_notified_at": now.isoformat(), "delta_kb": delta_kb}
     return result
+
+
+# -- FULL 도달 예측 / 급증 알림 --------------------------------------------
+
+def forecast_state_key(kind: str, filesystem: str) -> str:
+    """파일시스템 단위 cooldown 키.
+
+    `df`는 파일시스템 전체 값이라 같은 fs의 계정들은 예측이 같다. 계정별로
+    세면 같은 경고가 N번 나가므로 fs 단위로 억제한다."""
+
+    return f"{kind}:{filesystem}"
+
+
+def build_forecast_event(
+    accounts: Sequence[Account],
+    filesystem: str,
+    tier: str,
+    message: str,
+    kind: str,
+    details: dict,
+    now: datetime,
+) -> NotificationEvent:
+    """파일시스템 단위 알림. 대표 계정 하나를 싣되 관련 계정 전체를 details에
+    남겨, 수신 쪽에서 "누가 영향을 받는지" 알 수 있게 한다."""
+
+    primary = accounts[0]
+    payload = dict(details)
+    payload["filesystem"] = filesystem
+    payload["accounts"] = [
+        {"account_id": a.account_id, "name": a.name, "path": a.path} for a in accounts
+    ]
+    return NotificationEvent(
+        schema_version=NOTIFICATION_SCHEMA_VERSION,
+        event_id=uuid.uuid4().hex,
+        generated_at=now.isoformat(),
+        account_id=primary.account_id,
+        account_name=primary.name,
+        account_path=primary.path,
+        tier=tier,
+        tier_label=tiers.label(tier),
+        byte_pct=None,
+        inode_pct=None,
+        message=message,
+        kind=kind,
+        details=payload,
+    )
+
+
+def maybe_notify_forecast(
+    data_dir: Path,
+    accounts: Sequence[Account],
+    filesystem: str,
+    tier: str,
+    message: str,
+    kind: str,
+    details: dict,
+    state: Dict[str, dict],
+    cooldown_minutes: int = 60,
+    now: Optional[datetime] = None,
+    mode: str = config_module.NOTIFY_MODE_OUTBOX,
+    command: Optional[Sequence[str]] = None,
+    webhook_url: str = "",
+    timeout_seconds: int = 10,
+) -> Optional[DeliveryResult]:
+    """파일시스템 단위 예측/급증 알림. 심각도가 올라가면 cooldown을 건너뛴다.
+
+    용량 알림과 같은 원칙이다 - 상황이 나빠졌는데 cooldown 때문에 조용하면
+    가장 중요한 순간을 놓친다."""
+
+    now = now or datetime.now(timezone.utc)
+    key = forecast_state_key(kind, filesystem)
+    previous = state.get(key)
+
+    if previous is not None:
+        severity_increased = tiers.severity(tier) > tiers.severity(previous.get("tier", ""))
+        last_notified_at = previous.get("last_notified_at")
+        if not severity_increased and last_notified_at:
+            try:
+                last_dt = datetime.fromisoformat(last_notified_at)
+            except ValueError:
+                last_dt = None
+            if last_dt is not None and now - last_dt < timedelta(minutes=cooldown_minutes):
+                return None
+
+    event = build_forecast_event(accounts, filesystem, tier, message, kind, details, now)
+    result = deliver(
+        data_dir,
+        event,
+        mode=mode,
+        command=command,
+        webhook_url=webhook_url,
+        timeout_seconds=timeout_seconds,
+    )
+    state[key] = {"tier": tier, "last_notified_at": now.isoformat()}
+    return result
+
+
+def clear_forecast_state(state: Dict[str, dict], kind: str, filesystem: str) -> None:
+    """상황이 정상으로 돌아오면 기록을 지워 다음 악화 때 즉시 알리게 한다."""
+
+    state.pop(forecast_state_key(kind, filesystem), None)

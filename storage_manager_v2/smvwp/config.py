@@ -94,6 +94,24 @@ class Settings:
     growth_alert_enabled: bool = True
     # 관리자 PIN 해시 (평문 아님). 비어 있으면 기본 PIN을 쓴다.
     admin_pin_hash: str = ""
+    # FULL 도달 예측 (15분 표본 최소제곱 회귀). 최소 표본을 기대치보다 낮게
+    # 잡은 이유는 cron 누락이나 재시작으로 표본이 빠져도 예측이 통째로 멈추지
+    # 않게 하기 위함이다.
+    full_prediction_enabled: bool = True
+    full_prediction_window_hours: int = 3       # 임박 판정 창 (기대 12표본)
+    full_prediction_min_samples: int = 4
+    full_warn_hours: int = 6                    # 이 시간 내 FULL -> 경고
+    full_critical_hours: int = 2                # 이 시간 내 FULL -> 긴급
+    trend_short_days: int = 7                   # 단기 추세 (기대 672표본)
+    trend_short_min_samples: int = 24           # 6시간치
+    trend_long_days: int = 30                   # 장기 추세 (기대 2880표본)
+    trend_long_min_samples: int = 96            # 1일치
+    full_prediction_max_years: int = 10         # 이보다 먼 예상은 '예측 불가'
+    # 급증 판정도 같은 3시간 창을 쓴다 (창을 나누면 설명만 어려워진다).
+    capacity_surge_min_kb: int = 100 * 1024 * 1024  # 100GB
+    # 경로별 증감 이력 - 이상탐지는 아직 없지만 나중에 붙일 수 있게 숫자만
+    # 축적한다. 행이 작아 기준선 세대보다 훨씬 오래 남길 수 있다.
+    growth_history_keep_generations: int = 60
 
 
 @dataclass
@@ -178,6 +196,25 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("search_result_limit은 1~10000이어야 합니다")
     if settings.growth_alert_min_kb < 0:
         raise ConfigError("growth_alert_min_kb는 음수일 수 없습니다")
+    if settings.full_prediction_window_hours < 1:
+        raise ConfigError("full_prediction_window_hours는 1 이상이어야 합니다")
+    if settings.full_critical_hours >= settings.full_warn_hours:
+        raise ConfigError("full_critical_hours는 full_warn_hours보다 작아야 합니다")
+    if settings.trend_short_days >= settings.trend_long_days:
+        raise ConfigError("trend_short_days는 trend_long_days보다 작아야 합니다")
+    for name in (
+        "full_prediction_min_samples",
+        "trend_short_min_samples",
+        "trend_long_min_samples",
+    ):
+        if getattr(settings, name) < 2:
+            raise ConfigError(f"{name}은 2 이상이어야 합니다 (회귀에 최소 2점 필요)")
+    if settings.full_prediction_max_years < 1:
+        raise ConfigError("full_prediction_max_years는 1 이상이어야 합니다")
+    if settings.capacity_surge_min_kb < 0:
+        raise ConfigError("capacity_surge_min_kb는 음수일 수 없습니다")
+    if settings.growth_history_keep_generations < 1:
+        raise ConfigError("growth_history_keep_generations는 1 이상이어야 합니다")
     return settings
 
 

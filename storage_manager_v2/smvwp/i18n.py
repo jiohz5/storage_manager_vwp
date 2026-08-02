@@ -162,6 +162,29 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "notify.growth_message": (
             "[급증] {account} - {path} 이(가) {delta} 증가 (현재 {current})"
         ),
+        "notify.full_forecast_message": (
+            "[FULL 임박] {filesystem} - 약 {hours}시간 후 가득 참 예상 "
+            "(대상 계정: {accounts})"
+        ),
+        "notify.surge_message": (
+            "[급증] {filesystem} - 최근 {window}시간 동안 {delta} 증가 "
+            "(대상 계정: {accounts})"
+        ),
+        # -- FULL 예측 표시 ----------------------------------------
+        "forecast.column": "FULL 예상",
+        "forecast.unavailable": "예측 불가",
+        "forecast.hours": "약 {hours}시간",
+        "forecast.days": "약 {days}일",
+        "forecast.within_hour": "1시간 이내",
+        "forecast.pair": "{short} / {long}",
+        "forecast.tooltip": (
+            "7일 추세: {short}\n30일 추세: {long}\n"
+            "최근 {window}시간 기울기: {slope}\n"
+            "※ 파일시스템 전체 사용량 기준이며 추정치입니다."
+        ),
+        "forecast.reason.insufficient_samples": "표본 부족",
+        "forecast.reason.not_growing": "증가 추세 아님",
+        "forecast.reason.too_far": "예측 범위 초과",
         # -- 최초 실행 안내 ----------------------------------------
         "firstrun.title": "시작하기",
         "firstrun.heading": "Storage Manager VWP를 시작합니다",
@@ -347,6 +370,29 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "notify.growth_message": (
             "[Growth] {account} - {path} grew by {delta} (now {current})"
         ),
+        "notify.full_forecast_message": (
+            "[FULL imminent] {filesystem} - expected to fill in about {hours}h "
+            "(accounts: {accounts})"
+        ),
+        "notify.surge_message": (
+            "[Surge] {filesystem} - grew {delta} in the last {window}h "
+            "(accounts: {accounts})"
+        ),
+        # -- Forecast display --------------------------------------
+        "forecast.column": "Full ETA",
+        "forecast.unavailable": "No estimate",
+        "forecast.hours": "~{hours}h",
+        "forecast.days": "~{days}d",
+        "forecast.within_hour": "within 1h",
+        "forecast.pair": "{short} / {long}",
+        "forecast.tooltip": (
+            "7-day trend: {short}\n30-day trend: {long}\n"
+            "Slope over last {window}h: {slope}\n"
+            "* Filesystem-wide usage; this is an estimate."
+        ),
+        "forecast.reason.insufficient_samples": "Not enough samples",
+        "forecast.reason.not_growing": "Not trending up",
+        "forecast.reason.too_far": "Beyond forecast range",
         # -- First run ---------------------------------------------
         "firstrun.title": "Getting started",
         "firstrun.heading": "Welcome to Storage Manager VWP",

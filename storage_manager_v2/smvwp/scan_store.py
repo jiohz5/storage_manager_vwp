@@ -71,6 +71,21 @@ CREATE TABLE IF NOT EXISTS baseline_results (
     PRIMARY KEY (account_id, generation, path)
 );
 
+-- 경로별 증감 이력. baseline_results는 DB 크기 때문에 최근 몇 세대만
+-- 남기지만, 이상탐지(중앙값·MAD 등)를 나중에 붙이려면 더 긴 이력이 필요하다.
+-- 여기에는 경로와 숫자만 담아 행을 작게 유지하고, 그만큼 오래 보관한다.
+CREATE TABLE IF NOT EXISTS growth_history (
+    account_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    delta_kb INTEGER NOT NULL,
+    current_kb INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, generation, path)
+);
+CREATE INDEX IF NOT EXISTS idx_growth_history_path
+    ON growth_history(account_id, path, generation);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
@@ -345,6 +360,98 @@ def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: 
         (previous_generation, account_id, current_generation, limit),
     ).fetchall()
     return rows
+
+
+def record_growth_history(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    previous_generation: Optional[int],
+) -> int:
+    """완료된 세대의 경로별 증감을 이력 테이블에 남긴다.
+
+    `baseline_results`는 곧 정리되어 사라지므로, 이상탐지에 쓸 수 있도록 숫자만
+    따로 남긴다. 비교할 이전 세대가 없으면(첫 기준선) 아무것도 쓰지 않는다 -
+    전부 '신규'로 기록되면 나중 통계가 왜곡된다.
+    """
+
+    if not previous_generation or previous_generation < 1:
+        return 0
+
+    rows = conn.execute(
+        """
+        SELECT cur.path AS path, cur.size_kb AS current_kb, prev.size_kb AS previous_kb
+        FROM baseline_results cur
+        LEFT JOIN baseline_results prev
+            ON prev.account_id = cur.account_id AND prev.generation = ? AND prev.path = cur.path
+        WHERE cur.account_id = ? AND cur.generation = ?
+        """,
+        (previous_generation, account_id, generation),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    now = utc_now_iso()
+    conn.executemany(
+        "INSERT OR REPLACE INTO growth_history "
+        "(account_id, generation, path, delta_kb, current_kb, recorded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                account_id,
+                generation,
+                row["path"],
+                row["current_kb"] - (row["previous_kb"] or 0),
+                row["current_kb"],
+                now,
+            )
+            for row in rows
+        ],
+    )
+    conn.commit()
+    return len(rows)
+
+
+def growth_history_for_path(
+    conn: sqlite3.Connection, account_id: str, path: str, limit: int = 60
+) -> List[sqlite3.Row]:
+    """한 경로의 최근 증감 이력 (오래된 것부터). 이상탐지를 붙일 때 쓸 입력."""
+
+    rows = conn.execute(
+        "SELECT generation, delta_kb, current_kb, recorded_at FROM growth_history "
+        "WHERE account_id = ? AND path = ? ORDER BY generation DESC LIMIT ?",
+        (account_id, path, limit),
+    ).fetchall()
+    return list(reversed(rows))
+
+
+def prune_growth_history(
+    conn: sqlite3.Connection, account_id: str, keep_generations: int = 60
+) -> int:
+    """오래된 세대의 증감 이력을 지운다.
+
+    `prune_old_generations`(기준선, 기본 2세대)와 별개로 훨씬 길게 남긴다 -
+    행이 작아 오래 들고 있어도 부담이 적고, 이력이 짧으면 이상탐지 자체가
+    불가능하기 때문."""
+
+    generations = [
+        row["generation"]
+        for row in conn.execute(
+            "SELECT DISTINCT generation FROM growth_history WHERE account_id = ? "
+            "ORDER BY generation DESC",
+            (account_id,),
+        ).fetchall()
+    ]
+    to_delete = generations[keep_generations:]
+    if not to_delete:
+        return 0
+    placeholders = ",".join("?" for _ in to_delete)
+    cursor = conn.execute(
+        f"DELETE FROM growth_history WHERE account_id = ? AND generation IN ({placeholders})",
+        (account_id, *to_delete),
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: int = 2) -> int:
