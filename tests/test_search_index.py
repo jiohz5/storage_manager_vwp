@@ -1,711 +1,203 @@
-import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch
 
-import storage_manager.search_index as search_index_module
-from storage_manager.search_index import (
-    SearchIndex,
-    run_full_index,
-    search_db_file,
-    search_index_disk_bytes,
-)
+from smvwp import admin_auth, search_index
 
 
-class SearchIndexTests(unittest.TestCase):
-    def test_busy_timeout_is_configurable_for_noncritical_index_updates(self):
-        with tempfile.TemporaryDirectory() as temp:
-            index = SearchIndex(
-                search_db_file(Path(temp)),
-                timeout_seconds=0.75,
-            )
-            try:
-                self.assertEqual(index.conn.execute("PRAGMA busy_timeout").fetchone()[0], 750)
-            finally:
-                index.close()
+class WalkAndIndexTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.data_dir = self.root / "data"
+        self.account = self.root / "acct"
 
-    def test_invalid_filesystem_bytes_have_unique_display_and_reversible_task_key(self):
-        safe_text = getattr(search_index_module, "_safe_text")
-        encode_task = getattr(search_index_module, "_encode_task_path", None)
-        decode_task = getattr(search_index_module, "_decode_task_path", None)
-        self.assertTrue(callable(encode_task))
-        self.assertTrue(callable(decode_task))
+        (self.account / "results").mkdir(parents=True)
+        (self.account / "results" / "run_1.dat").write_text("x", encoding="utf-8")
+        (self.account / "notes.txt").write_text("y", encoding="utf-8")
 
-        invalid_name = "bad_\udcff"
-        escaped = safe_text(invalid_name)
-        self.assertNotEqual(escaped, safe_text("bad_?"))
-        self.assertNotIn("\udcff", escaped)
-        self.assertIn("\\xff", escaped)
-        self.assertEqual(decode_task(encode_task(invalid_name)), invalid_name)
+        # 계정 루트 바로 아래의 .snapshot -> 제외되어야 한다.
+        (self.account / ".snapshot").mkdir()
+        (self.account / ".snapshot" / "ignored.dat").write_text("z", encoding="utf-8")
 
-    def test_full_index_supports_name_extension_and_type_queries(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            data_dir = root / "data"
-            account = root / "account"
-            results = account / "Results"
-            empty = account / "EmptyFolder"
-            results.mkdir(parents=True)
-            empty.mkdir()
-            (account / "alpha.txt").write_text("a", encoding="ascii")
-            (account / "beta.log").write_text("b", encoding="ascii")
-            (results / "alpha_data.csv").write_text("c", encoding="ascii")
+        # 중첩된 .snapshot -> 일반 데이터로 포함되어야 한다.
+        (self.account / "results" / ".snapshot").mkdir()
+        (self.account / "results" / ".snapshot" / "included.dat").write_text("w", encoding="utf-8")
 
-            index = SearchIndex(search_db_file(data_dir))
-            try:
-                outcome = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    now=datetime(2026, 7, 14, 22, 0, 0),
-                    force=True,
-                )
-                self.assertTrue(outcome.complete)
-                self.assertEqual(
-                    [row.relative_path for row in index.search("id-a", "alpha.txt", mode="exact")],
-                    ["alpha.txt"],
-                )
-                self.assertEqual(
-                    {row.name for row in index.search("id-a", "alpha", mode="prefix")},
-                    {"alpha.txt", "alpha_data.csv"},
-                )
-                self.assertEqual(
-                    [row.name for row in index.search("id-a", "_data", mode="contains")],
-                    ["alpha_data.csv"],
-                )
-                self.assertEqual(
-                    [row.name for row in index.search("id-a", extension=".csv")],
-                    ["alpha_data.csv"],
-                )
-                directories = index.search(
-                    "id-a",
-                    entry_type="directory",
-                    limit=500,
-                )
-                self.assertEqual(
-                    {row.name for row in directories},
-                    {"EmptyFolder", "Results"},
-                )
-                summary = index.summary()
-                self.assertEqual(summary["total_entries"], 5)
-                self.assertGreater(summary["db_bytes"], 0)
-                status = index.account_status("id-a")
-                self.assertEqual(status["state"], "complete")
-                self.assertEqual(status["files_indexed"], 3)
-                self.assertEqual(status["dirs_indexed"], 2)
-            finally:
-                index.close()
+        self.conn = search_index.connect(self.data_dir)
 
-    def test_prefix_search_uses_basename_range_index(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            for name in ("Alpha.txt", "alpha_data.csv", "alpha%literal.dat", "beta.txt"):
-                (account / name).write_text("x", encoding="ascii")
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
 
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                run_full_index(index, "id-a", account, force=True)
-                statements = []
-                index.conn.set_trace_callback(statements.append)
-                self.assertEqual(
-                    [row.name for row in index.search("id-a", "alpha%", mode="prefix")],
-                    ["alpha%literal.dat"],
-                )
-                select = next(
-                    statement
-                    for statement in statements
-                    if statement.lstrip().upper().startswith("SELECT RELATIVE_PATH")
-                )
-                self.assertIn("basename >=", select)
-                self.assertIn("basename <", select)
-                plan = " ".join(
-                    str(row[3])
-                    for row in index.conn.execute(
-                        "EXPLAIN QUERY PLAN " + select
-                    ).fetchall()
-                )
-                self.assertIn("idx_search_name", plan)
-                self.assertIn("basename>?", plan.replace(" ", ""))
-            finally:
-                index.close()
+    def _indexed_paths(self):
+        return {
+            row["relative_path"]
+            for row in self.conn.execute("SELECT relative_path FROM search_entries").fetchall()
+        }
 
-    def test_full_index_resumes_by_directory_and_reconciles_deletions(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            data_dir = root / "data"
-            account = root / "account"
-            first = account / "first"
-            second = account / "second"
-            first.mkdir(parents=True)
-            second.mkdir()
-            deleted = first / "delete.me"
-            deleted.write_text("x", encoding="ascii")
-            (second / "keep.dat").write_text("y", encoding="ascii")
+    def test_root_snapshot_excluded_but_nested_included(self):
+        search_index.index_account(self.conn, "acct-1", self.account)
+        paths = self._indexed_paths()
 
-            calls = 0
+        self.assertNotIn(".snapshot", paths)
+        self.assertNotIn(".snapshot/ignored.dat", paths)
+        self.assertIn("results/.snapshot/included.dat", paths)
+        self.assertIn("notes.txt", paths)
+        self.assertIn("results/run_1.dat", paths)
 
-            def stop_after_root():
-                nonlocal calls
-                calls += 1
-                return calls > 1
+    def test_extension_and_kind_are_recorded(self):
+        search_index.index_account(self.conn, "acct-1", self.account)
+        row = self.conn.execute(
+            "SELECT * FROM search_entries WHERE relative_path = 'notes.txt'"
+        ).fetchone()
+        self.assertEqual(row["extension"], "txt")
+        self.assertEqual(row["kind"], search_index.KIND_FILE)
 
-            index = SearchIndex(search_db_file(data_dir))
-            first_run = run_full_index(
-                index,
-                "id-a",
-                account,
-                stop_requested=stop_after_root,
-                now=datetime(2026, 7, 14, 22, 0, 0),
-                force=True,
-            )
-            self.assertFalse(first_run.complete)
-            self.assertTrue(first_run.cancelled)
-            index.close()
+        row = self.conn.execute(
+            "SELECT * FROM search_entries WHERE relative_path = 'results'"
+        ).fetchone()
+        self.assertEqual(row["kind"], search_index.KIND_DIR)
 
-            index = SearchIndex(search_db_file(data_dir))
-            try:
-                resumed = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    now=datetime(2026, 7, 15, 22, 0, 0),
-                )
-                self.assertTrue(resumed.complete)
-                self.assertEqual(len(index.search("id-a", "delete.me", mode="exact")), 1)
+    def test_no_file_content_is_stored(self):
+        """이름 인덱스이지 내용 검색이 아니다 - 본문이 저장되면 안 된다."""
 
-                deleted.unlink()
-                rebuilt = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    now=datetime(2026, 7, 22, 22, 0, 0),
-                    force=True,
-                )
-                self.assertTrue(rebuilt.complete)
-                self.assertEqual(index.search("id-a", "delete.me", mode="exact"), [])
-                self.assertEqual(len(index.search("id-a", "keep.dat", mode="exact")), 1)
-            finally:
-                index.close()
+        search_index.index_account(self.conn, "acct-1", self.account)
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(search_entries)")}
+        self.assertNotIn("content", columns)
+        self.assertEqual(
+            columns,
+            {"account_id", "relative_path", "name", "extension", "kind", "indexed_at"},
+        )
 
-    def test_incremental_records_add_file_and_parent_directories(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                changed = account / "new" / "nested" / "result.bin"
-                index.upsert_changed_files(
-                    "id-a",
-                    account,
-                    [(str(changed), 1024, 1_700_000_000.0)],
-                    timestamp="2026-07-15 01:00:00",
-                )
-                self.assertEqual(
-                    [row.relative_path for row in index.search("id-a", extension="bin")],
-                    ["new/nested/result.bin"],
-                )
-                self.assertEqual(
-                    {row.relative_path for row in index.search("id-a", entry_type="directory")},
-                    {"new", "new/nested"},
-                )
-                self.assertEqual(
-                    index.account_status("id-a")["last_incremental_at"],
-                    "2026-07-15 01:00:00",
-                )
-            finally:
-                index.close()
+    def test_reindex_removes_deleted_entries(self):
+        search_index.index_account(self.conn, "acct-1", self.account)
+        self.assertIn("notes.txt", self._indexed_paths())
 
-    def test_full_and_incremental_index_exclude_only_root_snapshot(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            root_snapshot = account / ".snapshot"
-            nested_snapshot = account / "results" / ".snapshot"
-            root_snapshot.mkdir(parents=True)
-            nested_snapshot.mkdir(parents=True)
-            (root_snapshot / "old.dat").write_text("old", encoding="ascii")
-            (nested_snapshot / "current.dat").write_text(
-                "new",
-                encoding="ascii",
-            )
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                result = run_full_index(index, "id-a", account, force=True)
-                self.assertTrue(result.complete)
-                self.assertEqual(
-                    index.search("id-a", "old.dat", mode="exact"),
-                    [],
-                )
-                self.assertEqual(
-                    [
-                        row.relative_path
-                        for row in index.search(
-                            "id-a",
-                            "current.dat",
-                            mode="exact",
-                        )
-                    ],
-                    ["results/.snapshot/current.dat"],
-                )
+        (self.account / "notes.txt").unlink()
+        search_index.index_account(self.conn, "acct-1", self.account)
+        self.assertNotIn("notes.txt", self._indexed_paths())
 
-                inserted = index.upsert_changed_files(
-                    "id-a",
-                    account,
-                    [
-                        (
-                            str(root_snapshot / "incremental.bin"),
-                            1,
-                            1.0,
-                        ),
-                        (
-                            str(nested_snapshot / "incremental.bin"),
-                            1,
-                            1.0,
-                        ),
-                    ],
-                )
-                self.assertGreater(inserted, 0)
-                self.assertEqual(
-                    [
-                        row.relative_path
-                        for row in index.search(
-                            "id-a",
-                            "incremental.bin",
-                            mode="exact",
-                        )
-                    ],
-                    ["results/.snapshot/incremental.bin"],
-                )
-            finally:
-                index.close()
+    def test_interrupted_index_keeps_existing_entries(self):
+        """중간에 멈추면 아직 못 본 항목까지 지워버리면 안 된다."""
 
-    def test_prune_excluded_paths_removes_legacy_rows_and_tasks(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            (account / "keep.dat").write_text("keep", encoding="ascii")
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                run_full_index(index, "id-a", account, force=True)
-                generation = str(
-                    index.account_status("id-a")["generation"]
-                )
-                with index.conn:
-                    index.conn.execute(
-                        """
-                        INSERT INTO search_entries(
-                          account_id, relative_path, basename, extension,
-                          entry_type, generation
-                        ) VALUES(?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            "id-a",
-                            ".snapshot/legacy.dat",
-                            "legacy.dat",
-                            "dat",
-                            "file",
-                            generation,
-                        ),
-                    )
-                    index.conn.execute(
-                        """
-                        INSERT INTO search_entries(
-                          account_id, relative_path, basename, extension,
-                          entry_type, generation
-                        ) VALUES(?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            "id-a",
-                            "legacy-keep.dat",
-                            "legacy-keep.dat",
-                            "dat",
-                            "file",
-                            "old-generation",
-                        ),
-                    )
-                    for relative_path in (
-                        ".snapshot-old/keep.dat",
-                        ".snapshot0/keep.dat",
-                        "results/.snapshot/keep.dat",
-                    ):
-                        index.conn.execute(
-                            """
-                            INSERT INTO search_entries(
-                              account_id, relative_path, basename,
-                              extension, entry_type, generation
-                            ) VALUES(?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                "id-a",
-                                relative_path,
-                                Path(relative_path).name,
-                                "dat",
-                                "file",
-                                "old-generation",
-                            ),
-                        )
-                    index.conn.execute(
-                        """
-                        INSERT INTO search_scan_tasks(
-                          account_id, generation, relative_dir, status
-                        ) VALUES(?, ?, ?, 'pending')
-                        """,
-                        ("id-a", generation, os.fsencode(".snapshot")),
-                    )
-                    index.conn.execute(
-                        """
-                        INSERT INTO search_scan_tasks(
-                          account_id, generation, relative_dir, status
-                        ) VALUES(?, ?, ?, 'pending')
-                        """,
-                        (
-                            "id-a",
-                            generation,
-                            os.fsencode(".snapshot/legacy"),
-                        ),
-                    )
-                    index.conn.execute(
-                        """
-                        INSERT INTO search_scan_tasks(
-                          account_id, generation, relative_dir, status
-                        ) VALUES(?, ?, ?, 'pending')
-                        """,
-                        (
-                            "id-a",
-                            generation,
-                            ".snapshot/text-legacy",
-                        ),
-                    )
-                    index.conn.execute(
-                        """
-                        INSERT INTO search_scan_tasks(
-                          account_id, generation, relative_dir, status
-                        ) VALUES(?, ?, ?, 'pending')
-                        """,
-                        (
-                            "id-a",
-                            generation,
-                            os.fsencode(".snapshot-old"),
-                        ),
-                    )
+        search_index.index_account(self.conn, "acct-1", self.account)
+        before = self._indexed_paths()
 
-                removed = index.prune_excluded_paths("id-a")
+        search_index.index_account(
+            self.conn, "acct-1", self.account, should_stop=lambda: True
+        )
+        self.assertEqual(self._indexed_paths(), before)
 
-                self.assertEqual(removed, 1)
-                self.assertEqual(
-                    index.search("id-a", "legacy.dat", mode="exact"),
-                    [],
-                )
-                remaining_tasks = index.conn.execute(
-                    """
-                    SELECT relative_dir FROM search_scan_tasks
-                    WHERE account_id = ?
-                    ORDER BY relative_dir
-                    """,
-                    ("id-a",),
-                ).fetchall()
-                self.assertEqual(
-                    [
-                        search_index_module._decode_task_path(row[0])
-                        for row in remaining_tasks
-                    ],
-                    [".snapshot-old"],
-                )
-                remaining_paths = {
-                    str(row[0])
-                    for row in index.conn.execute(
-                        """
-                        SELECT relative_path FROM search_entries
-                        WHERE account_id = ?
-                        """,
-                        ("id-a",),
-                    ).fetchall()
-                }
-                self.assertTrue(
-                    {
-                        ".snapshot-old/keep.dat",
-                        ".snapshot0/keep.dat",
-                        "results/.snapshot/keep.dat",
-                    }.issubset(remaining_paths)
-                )
-                status = index.account_status("id-a")
-                self.assertEqual(status["files_indexed"], 1)
-                self.assertEqual(status["dirs_indexed"], 0)
-            finally:
-                index.close()
+    def test_clear_account_removes_only_that_account(self):
+        search_index.index_account(self.conn, "acct-1", self.account)
+        search_index.index_account(self.conn, "acct-2", self.account)
 
-    def test_remove_and_prune_accounts_clear_entries_state_and_tasks(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            first = root / "first"
-            second = root / "second"
-            (first / "queued").mkdir(parents=True)
-            second.mkdir()
-            (first / "queued" / "one.dat").write_text("1", encoding="ascii")
-            (second / "two.dat").write_text("2", encoding="ascii")
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                calls = 0
+        search_index.clear_account(self.conn, "acct-1")
+        self.assertEqual(search_index.entry_count(self.conn, "acct-1"), 0)
+        self.assertGreater(search_index.entry_count(self.conn, "acct-2"), 0)
 
-                def stop_after_root():
-                    nonlocal calls
-                    calls += 1
-                    return calls > 1
+    def test_prune_orphans_removes_unknown_accounts(self):
+        search_index.index_account(self.conn, "acct-1", self.account)
+        search_index.index_account(self.conn, "gone", self.account)
 
-                run_full_index(
-                    index,
-                    "id-a",
-                    first,
-                    stop_requested=stop_after_root,
-                    force=True,
-                )
-                run_full_index(index, "id-b", second, force=True)
+        search_index.prune_orphans(self.conn, ["acct-1"])
+        self.assertGreater(search_index.entry_count(self.conn, "acct-1"), 0)
+        self.assertEqual(search_index.entry_count(self.conn, "gone"), 0)
 
-                remove_account = getattr(index, "remove_account", None)
-                prune_accounts = getattr(index, "prune_accounts", None)
-                self.assertTrue(callable(remove_account))
-                self.assertTrue(callable(prune_accounts))
-                remove_account("id-a")
-                self.assertEqual(index.search("id-a"), [])
-                self.assertEqual(index.account_status("id-a")["state"], "never")
-                self.assertEqual(
-                    index.conn.execute(
-                        "SELECT COUNT(*) FROM search_scan_tasks WHERE account_id = 'id-a'"
-                    ).fetchone()[0],
-                    0,
-                )
 
-                removed = prune_accounts({"id-b": str(root / "different-path")})
-                self.assertEqual(removed, ["id-b"])
-                self.assertEqual(index.search("id-b"), [])
-            finally:
-                index.close()
+class SearchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.account = self.root / "acct"
+        (self.account / "sub").mkdir(parents=True)
+        for name in ("alpha.log", "alpha_backup.log", "beta.txt", "100%_report.txt"):
+            (self.account / name).write_text("x", encoding="utf-8")
+        self.conn = search_index.connect(self.root / "data")
+        search_index.index_account(self.conn, "acct-1", self.account)
 
-    def test_symlink_is_indexed_but_target_is_not_traversed(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            external = root / "external"
-            account.mkdir()
-            external.mkdir()
-            (external / "secret.dat").write_text("secret", encoding="ascii")
-            try:
-                os.symlink(str(external), str(account / "external-link"), target_is_directory=True)
-            except (OSError, NotImplementedError) as exc:
-                self.skipTest(f"symlink creation unavailable: {exc}")
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
 
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                run_full_index(index, "id-a", account, force=True)
-                self.assertEqual(
-                    [row.name for row in index.search("id-a", entry_type="link")],
-                    ["external-link"],
-                )
-                self.assertEqual(index.search("id-a", "secret.dat", mode="exact"), [])
-            finally:
-                index.close()
+    def _names(self, hits):
+        return sorted(hit.name for hit in hits)
 
-    def test_checkpointed_directory_is_revalidated_before_resume(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            queued = account / "queued"
-            queued.mkdir(parents=True)
-            (queued / "must-not-leak.dat").write_text("x", encoding="ascii")
+    def test_exact_match(self):
+        hits = search_index.search(self.conn, "acct-1", "alpha.log", mode=search_index.MODE_EXACT)
+        self.assertEqual(self._names(hits), ["alpha.log"])
 
-            calls = 0
+    def test_prefix_match(self):
+        hits = search_index.search(self.conn, "acct-1", "alpha", mode=search_index.MODE_PREFIX)
+        self.assertEqual(self._names(hits), ["alpha.log", "alpha_backup.log"])
 
-            def stop_after_root():
-                nonlocal calls
-                calls += 1
-                return calls > 1
+    def test_contains_match(self):
+        hits = search_index.search(self.conn, "acct-1", "backup", mode=search_index.MODE_CONTAINS)
+        self.assertEqual(self._names(hits), ["alpha_backup.log"])
 
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                paused = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    stop_requested=stop_after_root,
-                    force=True,
-                )
-                self.assertTrue(paused.cancelled)
+    def test_wildcard_in_query_is_escaped(self):
+        """사용자가 친 '%'가 전체 조회로 바뀌면 안 된다."""
 
-                original_is_symlink = Path.is_symlink
+        hits = search_index.search(self.conn, "acct-1", "%", mode=search_index.MODE_CONTAINS)
+        self.assertEqual(self._names(hits), ["100%_report.txt"])
 
-                def replaced_with_symlink(path):
-                    if path == queued:
-                        return True
-                    return original_is_symlink(path)
+    def test_underscore_in_query_is_escaped(self):
+        """'_'는 LIKE에서 임의의 한 글자를 뜻하므로 이스케이프되어야 한다."""
 
-                with patch.object(
-                    Path,
-                    "is_symlink",
-                    autospec=True,
-                    side_effect=replaced_with_symlink,
-                ):
-                    resumed = run_full_index(index, "id-a", account)
+        hits = search_index.search(self.conn, "acct-1", "alpha_", mode=search_index.MODE_PREFIX)
+        self.assertEqual(self._names(hits), ["alpha_backup.log"])
 
-                self.assertTrue(resumed.complete)
-                self.assertEqual(
-                    index.search("id-a", "must-not-leak.dat", mode="exact"),
-                    [],
-                )
-            finally:
-                index.close()
+    def test_extension_filter(self):
+        hits = search_index.search(self.conn, "acct-1", "", extension="log")
+        self.assertEqual(self._names(hits), ["alpha.log", "alpha_backup.log"])
 
-    def test_large_flat_directory_is_committed_in_batches_and_stops_mid_directory(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            for number in range(9):
-                (account / f"item-{number}.dat").write_text("x", encoding="ascii")
+    def test_kind_filter(self):
+        hits = search_index.search(self.conn, "acct-1", "", kind=search_index.KIND_DIR)
+        self.assertEqual(self._names(hits), ["sub"])
 
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                batch_store = getattr(index, "_store_directory_batch", None)
-                self.assertTrue(callable(batch_store))
-                index._store_directory_batch = Mock(wraps=batch_store)
-                checks = 0
+    def test_limit_is_respected(self):
+        hits = search_index.search(self.conn, "acct-1", "", limit=2)
+        self.assertEqual(len(hits), 2)
 
-                def stop_during_directory():
-                    nonlocal checks
-                    checks += 1
-                    return checks > 6
+    def test_search_is_scoped_to_account(self):
+        hits = search_index.search(self.conn, "other-account", "alpha.log")
+        self.assertEqual(hits, [])
 
-                paused = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    stop_requested=stop_during_directory,
-                    force=True,
-                    entry_batch_size=2,
-                )
-                self.assertTrue(paused.cancelled)
-                self.assertGreaterEqual(index._store_directory_batch.call_count, 2)
-                self.assertEqual(index.account_status("id-a")["state"], "paused")
-                with index.conn:
-                    index.conn.executescript(
-                        """
-                        CREATE TABLE write_audit(kind TEXT NOT NULL);
-                        CREATE TRIGGER audit_search_insert
-                        AFTER INSERT ON search_entries
-                        BEGIN INSERT INTO write_audit(kind) VALUES('insert'); END;
-                        CREATE TRIGGER audit_search_update
-                        AFTER UPDATE ON search_entries
-                        BEGIN INSERT INTO write_audit(kind) VALUES('update'); END;
-                        """
-                    )
 
-                resumed = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    entry_batch_size=2,
-                )
-                self.assertTrue(resumed.complete)
-                self.assertEqual(
-                    len(index.search("id-a", extension="dat")),
-                    9,
-                )
-                self.assertEqual(
-                    index.conn.execute("SELECT COUNT(*) FROM write_audit").fetchone()[0],
-                    4,
-                )
-            finally:
-                index.close()
+class AdminAuthTests(unittest.TestCase):
+    def test_default_pin_works_when_nothing_stored(self):
+        session = admin_auth.AdminSession()
+        self.assertTrue(session.unlock(admin_auth.DEFAULT_PIN))
+        self.assertTrue(session.is_unlocked)
 
-    def test_recent_complete_index_is_not_rebuilt_until_due(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            (account / "first.dat").write_text("x", encoding="ascii")
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                completed_at = datetime(2026, 7, 14, 22, 0, 0)
-                run_full_index(index, "id-a", account, now=completed_at, force=True)
-                (account / "later.dat").write_text("y", encoding="ascii")
-                skipped = run_full_index(
-                    index,
-                    "id-a",
-                    account,
-                    now=completed_at + timedelta(days=1),
-                    full_scan_days=7,
-                )
-                self.assertTrue(skipped.complete)
-                self.assertTrue(skipped.skipped)
-                self.assertEqual(index.search("id-a", "later.dat", mode="exact"), [])
-            finally:
-                index.close()
+    def test_wrong_pin_keeps_locked(self):
+        session = admin_auth.AdminSession()
+        self.assertFalse(session.unlock("0000"))
+        self.assertFalse(session.is_unlocked)
 
-    def test_terminal_checkpoint_finishes_same_generation_after_restart(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            index = SearchIndex(search_db_file(root / "data"))
-            try:
-                generation, skipped = index._begin_full_scan(
-                    "id-a",
-                    account.resolve(),
-                    datetime(2026, 7, 14, 22, 0, 0),
-                    True,
-                    7,
-                )
-                self.assertFalse(skipped)
-                with index.conn:
-                    index.conn.execute(
-                        "UPDATE search_scan_tasks SET status = 'complete' WHERE account_id = ?",
-                        ("id-a",),
-                    )
+    def test_hash_round_trip(self):
+        stored = admin_auth.hash_pin("4321")
+        self.assertTrue(admin_auth.verify_pin("4321", stored))
+        self.assertFalse(admin_auth.verify_pin("1234", stored))
 
-                resumed = run_full_index(index, "id-a", account)
-                self.assertTrue(resumed.complete)
-                self.assertEqual(index.account_status("id-a")["generation"], generation)
-            finally:
-                index.close()
+    def test_hash_is_salted(self):
+        """같은 PIN이라도 저장값이 매번 달라야 한다."""
 
-    def test_production_completion_timestamp_is_not_pinned_to_start(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            account = root / "account"
-            account.mkdir()
-            (account / "one.dat").write_text("x", encoding="ascii")
-            index = SearchIndex(search_db_file(root / "data"))
+        self.assertNotEqual(admin_auth.hash_pin("1111"), admin_auth.hash_pin("1111"))
 
-            def timestamp(value=None):
-                return "2026-07-14 22:00:00" if value is not None else "2026-07-15 08:30:00"
+    def test_pin_is_not_stored_in_plaintext(self):
+        stored = admin_auth.hash_pin("4321")
+        self.assertNotIn("4321", stored)
 
-            try:
-                with patch(
-                    "storage_manager.search_index._timestamp",
-                    side_effect=timestamp,
-                ):
-                    run_full_index(index, "id-a", account, force=True)
-                status = index.account_status("id-a")
-                self.assertEqual(status["started_at"], "2026-07-14 22:00:00")
-                self.assertEqual(status["completed_at"], "2026-07-15 08:30:00")
-            finally:
-                index.close()
+    def test_malformed_stored_hash_is_rejected(self):
+        self.assertFalse(admin_auth.verify_pin("4321", "garbage-without-separator"))
 
-    def test_disk_size_includes_sqlite_sidecars(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            index = SearchIndex(search_db_file(data_dir))
-            index.close()
-            base_size = search_db_file(data_dir).stat().st_size
-            journal = Path(str(search_db_file(data_dir)) + "-journal")
-            journal.write_bytes(b"x" * 123)
-
-            self.assertEqual(search_index_disk_bytes(data_dir), base_size + 123)
+    def test_lock_clears_session(self):
+        session = admin_auth.AdminSession()
+        session.unlock(admin_auth.DEFAULT_PIN)
+        session.lock()
+        self.assertFalse(session.is_unlocked)
 
 
 if __name__ == "__main__":

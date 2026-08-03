@@ -1,567 +1,237 @@
 # Storage Manager VWP
 
-폐쇄망 RHEL/VWP에서 여러 프로젝트 계정 경로를 읽기 전용으로
-모니터링하는 PyQt5 애플리케이션입니다. 사용자가 전역 데이터 저장소로 명시적으로
-선택한 전용 디렉터리를 제외하면 모니터링 대상 계정에는 파일을 쓰거나 삭제하지
-않습니다.
+폐쇄망 RHEL/VWP에서 여러 프로젝트 계정 경로를 **읽기 전용으로** 모니터링하는
+PyQt5 애플리케이션이다. 사용자가 명시적으로 지정한 데이터 디렉터리를 제외하면
+모니터링 대상 계정에는 파일을 쓰거나 삭제하지 않는다.
 
-> ## 📌 이 저장소에는 두 개의 구현이 있습니다
->
-> | | 위치 | 상태 |
-> |---|---|---|
-> | **v1 (현행)** | 이 문서가 설명하는 저장소 루트 (`app.py`, `run.csh`, `storage_manager/`) | Python 3.10 기준. 실제 VWP 운영에 쓰이던 구현 |
-> | **v2 (신규)** | [`storage_manager_v2/`](storage_manager_v2/README.md) | Python 3.12 기준. 설계 철학만 계승해 **새로 작성**했으며 아직 실제 VWP 검증 전 |
->
-> v2는 [CONCEPT.md](CONCEPT.md)(기존 설계 철학 정리)와
-> [REBUILD_CONCEPT.md](REBUILD_CONCEPT.md)(재구현 결정 사항)를 바탕으로 만들었습니다.
-> 실제 VWP에서 v2 검증이 끝나기 전까지 두 구현을 함께 둡니다 — 아래 문서는
-> **v1 기준**입니다.
+[`CONCEPT.md`](CONCEPT.md)(설계 철학) / [`REBUILD_CONCEPT.md`](REBUILD_CONCEPT.md)
+(재구현 결정 사항)를 바탕으로 **처음부터 새로 작성**했다. 이전 구현(Python 3.10
+기준, 패키지명 `storage_manager`)은 사용성 문제로 대체되었으며 git 히스토리에만
+남아 있다 - 필요하면 `git log -- storage_manager/`로 확인할 수 있다.
 
-## 처음 설치: 다운로드부터 실행까지
+Python 패키지 이름은 `smvwp`(Storage Manager VWP)다.
 
-소스 코드나 `run.csh` 안의 경로를 직접 수정할 필요는 없습니다. 압축을 해제한 뒤
-csh에서 Python 실행 파일과 데이터 저장 경로를 환경변수로 지정합니다. cron에는
-소스 디렉터리의 절대경로가 기록되므로, 먼저 소스를 계속 유지할 최종 위치에 둔 뒤
-진행합니다.
+## 실행 방법
 
-### 1. Windows에서 다운로드
-
-GitHub에 접속할 수 있는 Windows/OA PC에서
-[storage_manager_vwp 저장소](https://github.com/jiohz5/storage_manager_vwp)를 엽니다.
-`main` 브랜치에서 `Code` 버튼을 누르고 `Download ZIP`을 선택하면 최신
-`storage_manager_vwp-main.zip`을 받을 수 있습니다. 그 파일 하나를 승인된 사내 반입
-절차로 VWP/RHEL에 옮깁니다.
-
-RHEL에서 `unzip`을 사용할 수 없다면
-[main tar.gz](https://github.com/jiohz5/storage_manager_vwp/archive/refs/heads/main.tar.gz)를
-대신 내려받아 옮깁니다. Git을 사용할 수 있는 외부 테스트 환경에서는 다음 방법도
-가능합니다.
-
-```sh
-git clone --depth 1 https://github.com/jiohz5/storage_manager_vwp.git
-cd storage_manager_vwp
+```
+setenv STORAGE_MANAGER_PYTHON_BIN /installed/python/3.12.x/bin/python3
+./run.csh                 # 사전 점검 후 바로 GUI 실행
+./run.csh --diagnose      # 진단만 하고 종료 (Python/PyQt5/데이터 디렉터리 점검)
 ```
 
-### 2. RHEL에서 압축 해제
+사용자가 지정할 것은 **Python 3.12 실행 파일 경로 하나뿐**이다.
+`STORAGE_MANAGER_PYTHON_HOME`(설치 prefix) 방식은 지원하지 않는다
+(REBUILD_CONCEPT.md 3절 결정 - 옵션이 하나면 헷갈릴 여지가 없다).
 
-ZIP을 받은 경우 다음과 같이 실행합니다.
+데이터 디렉터리(`STORAGE_MANAGER_DATA_DIR`)를 지정하지 않으면 최초 실행 시
+GUI가 한 번 물어보고, 이후에는 홈 디렉터리의 작은 포인터 파일
+(`~/.storage_manager_vwp/data_dir`)에 기억해 둔다. 배포 폴더 자체는 반입
+절차상 다시 덮어써질 수 있어 포인터를 그 안에 두지 않았다.
 
-```csh
-cd /path/to/transfer-directory
-unzip storage_manager_vwp-main.zip
-cd storage_manager_vwp-main
-ls run.csh app.py
+15분 주기 수집은 두 가지 경로를 모두 지원한다:
+
+- GUI를 띄워 두면 내부 타이머(`smvwp/scheduler.py`)가 자동으로 돈다.
+- GUI 없이도 계속 수집하려면 `./setup_cron.csh`로 cron에
+  `collector_cli.py`를 등록한다 (`STORAGE_MANAGER_DATA_DIR`을 미리
+  설정해야 한다 - cron은 대화형 세션이 아니므로 포인터 파일에 의존하지 않고
+  명시적으로 받는다).
+
+## 디렉터리 구조
+
+```
+storage_manager_vwp/
+  run.csh              # 단일 진입점 (진단 + 실행)
+  setup_cron.csh        # 15분 주기 수집 cron 등록 도우미
+  app.py                # GUI 진입점
+  collector_cli.py       # cron용 1회 수집 스크립트 (PyQt5 미의존)
+  smvwp/                  # 애플리케이션 패키지
+    tiers.py               # 사용률 등급 계산 (정상/주의/경고/긴급/FULL)
+    paths.py                 # 데이터 디렉터리 탐색/기억/쓰기 안전성
+    config.py                 # JSON 설정 (계정 목록 + 전역 설정)
+    collector.py               # df/inode(+quota) 조회 및 파싱
+    store.py                    # SQLite 표본 저장소 (보존기간 정리 포함)
+    quota.py                     # 사내 quota JSON 어댑터 (선택)
+    notifications.py              # 알림 생성 + outbox/command/webhook 전송 + 감사
+    popup_queue.py                 # outbox 읽음 상태 관리 (PyQt5 비의존)
+    notifier.py                     # 트레이 알림기 + XDG autostart
+    cycle.py                         # 수집->저장->알림 한 사이클 (GUI/cron 공유)
+    analytics.py                      # FULL 도달 예측 (최소제곱 회귀)
+    forecast_notify.py                 # 예측/급증 알림 (파일시스템 단위 중복제거)
+    procio.py                           # 외부 명령 UTF-8 입출력 래퍼
+    i18n.py                            # 한국어/영어 문자열 카탈로그
+    reports.py                          # 일간/주간/정리 후보 보고서
+    scheduler.py                         # GUI 타이머 + 스캔 워커 (PyQt5 의존)
+    diagnostics.py                        # Python/모듈/PyQt5/데이터 디렉터리 진단
+    scan_window.py                         # 22:00~06:00 시간창 계산
+    scan_lock.py                            # 실행 잠금 + run ID 매칭 안전 중지
+    scan_store.py                            # 스캔 체크포인트/기준선 SQLite
+    detail_scan.py                            # du 기반 기준선 스캔 (분할/우선순위)
+    activity_scan.py                           # find -newermt 기반 변경 파일 스캔
+    nightly_scan.py                             # 야간 스캔 오케스트레이터
+    search_index.py                              # 이름 검색 인덱스 (별도 DB)
+    admin_auth.py                                 # 관리자 PIN (UI 노출 제한)
+    gui/                                            # PyQt5 화면 (PyQt5 의존)
+      main_window.py                                 # 대시보드 단일 화면
+      account_dialog.py                               # 계정 등록/설정
+      reports_dialog.py                                # 보고서 보기/생성
+      search_dialog.py                                  # 관리자 검색
+      pin_dialog.py                                      # 관리자 PIN 변경
+      first_run.py                                        # 최초 실행 안내
+      widgets.py                                           # 등급 배지 / 크기 표기
+  tests/                # unittest 기반 단위 테스트 (PyQt5 불필요)
+    support.py            # 공용 테스트 헬퍼 (bytes stdout, 단일 명령 러너)
 ```
 
-tar.gz를 받은 경우에는 다음과 같이 실행합니다.
+**모듈 분리 원칙**: `smvwp` 최상위와 `gui/`, `scheduler.py`를 의도적으로
+나눴다. `tiers`/`paths`/`config`/`collector`/`store`/`notifications`/`cycle`/
+`diagnostics`는 PyQt5를 전혀 import하지 않으므로, PyQt5가 없는 환경(예: 이
+저장소를 검토만 하는 개발 PC, 또는 cron 환경)에서도 그대로 단위 테스트하고
+재사용할 수 있다. PyQt5 의존은 `smvwp/gui/*`와 `smvwp/scheduler.py`에만
+있다.
 
-```csh
-cd /path/to/transfer-directory
-tar -xzf storage_manager_vwp-main.tar.gz
-cd storage_manager_vwp-main
-ls run.csh app.py
+이 구조는 이번 작업에서 임의로 정한 것이며 (REBUILD_CONCEPT.md 9절
+"모듈 분리 방식은 아직 열린 질문"), 다음 세션에서 사람이 바꾸기 쉽도록 각
+모듈의 책임을 최대한 좁게 나눠 두었다.
+
+## 데이터 디렉터리 레이아웃
+
+모니터링 대상 계정 경로에는 절대 쓰지 않는다 - 오직 아래 데이터 디렉터리
+안에만 쓴다 (CONCEPT.md 1절의 읽기 전용 불변식).
+
 ```
-
-마지막 `ls`에서 두 파일이 보이면 올바른 디렉터리입니다. 폴더 이름을 바꾸거나 다른
-위치로 옮길 계획이라면 cron을 등록하기 전에 옮깁니다.
-
-### 3. 수정할 값 지정
-
-앱 파일을 편집하지 않고 현재 csh 터미널에서 아래 값만 실제 사내 경로로 바꿔
-실행합니다.
-
-```csh
-# 권장: Python 실행 파일 자체를 정확히 지정
-setenv STORAGE_MANAGER_PYTHON_BIN /installed/python/3.10.9/bin/python3
-
-# 위 BIN 대신 설치 prefix를 지정하려면 다음 한 줄만 사용
-# setenv STORAGE_MANAGER_PYTHON_HOME /installed/python/3.10.9
-
-# PYTHONHOME은 이 앱의 Python 선택 변수가 아님
-if ($?PYTHONHOME) unsetenv PYTHONHOME
-
-# DB, 검색 인덱스, 보고서, 알림을 저장할 여유 있는 전용 경로
-setenv STORAGE_MANAGER_DATA_DIR /large/private/path/storage-manager-data
-mkdir -p "$STORAGE_MANAGER_DATA_DIR"
-chmod 700 "$STORAGE_MANAGER_DATA_DIR"
+<data_dir>/
+  config.json          # 계정 목록 + 전역 설정 (JSON)
+  samples.db            # df/inode 표본 이력 (SQLite)
+  outbox/                 # 알림 JSON 파일들
+  notify_state.json        # 알림 cooldown 상태
 ```
-
-`STORAGE_MANAGER_PYTHON_BIN`과 `STORAGE_MANAGER_PYTHON_HOME` 중 하나만 사용합니다.
-`STORAGE_MANAGER_PYTHON_HOME`에는 Python 실행 파일이 아니라 그 아래에
-`bin/python3`가 있는 설치 prefix를 넣습니다. 표준 라이브러리 위치를 바꾸는 예약
-변수 `PYTHONHOME`을 대신 사용하면 `json` 같은 기본 모듈을 찾지 못할 수 있습니다.
-
-`STORAGE_MANAGER_DATA_DIR`은 반드시 현재 사용자와 cron이 쓸 수 있어야 합니다.
-모니터링 대상 계정과 다른 여유 있는 파일시스템을 권장하며, 대상 파일시스템이
-FULL이어도 DB와 경고를 기록할 수 있는 위치가 가장 안전합니다. 이 변수를 생략하면
-최초 GUI 실행 때 저장 경로를 한 번 묻습니다.
-
-### 4. 진단 후 GUI 실행
-
-```csh
-chmod +x run.csh setup_cron.csh
-./run.csh --diagnose
-./run.csh
-```
-
-진단 결과에서 Python `3.10` 이상, `json`, SQLite, PyQt5가 모두 선택한 Python
-설치 경로에서 `OK`인지 먼저 확인합니다. `./run.csh`는 선택된 Python 실행 파일과
-데이터 경로를 시작할 때마다 터미널에 출력하므로 경로 문제를 바로 확인할 수 있습니다.
-
-GUI가 열리면 `Accounts` 탭에서 계정명과 실제 경로를 등록합니다. 예를 들어 계정명이
-`project_a`이고 경로가 `/user/project_a`라면 두 값을 그대로 입력합니다.
-
-### 5. 자동 수집과 팝업 활성화
-
-계정 등록과 대시보드 확인이 끝난 뒤 `추적` 탭에서 `자동 수집 켜기`를 누르거나 다음
-명령을 한 번 실행합니다.
-
-```csh
-./setup_cron.csh
-crontab -l | grep storage-manager-vwp
-```
-
-`추적` 탭에서 `로그인 시 팝업 알림 자동 시작`도 체크합니다. 창의 X 버튼은 앱을
-종료하지 않고 최소화합니다. cron과 알림까지 완전히 종료하려면
-`File > Full Exit`를 사용합니다.
-
-### 6. 다음 로그인에도 같은 경로 사용
-
-진단과 GUI 실행이 정상임을 확인한 뒤 개인 `~/.cshrc`에 실제 환경에 맞는 두 줄을
-추가하면 로그인할 때마다 다시 입력하지 않아도 됩니다.
-
-```csh
-setenv STORAGE_MANAGER_PYTHON_BIN /installed/python/3.10.9/bin/python3
-setenv STORAGE_MANAGER_DATA_DIR /large/private/path/storage-manager-data
-```
-
-`PYTHONHOME`은 `.cshrc`에 추가하지 않습니다. 소스 폴더를 나중에 옮기면 기존 cron은
-이전 절대경로를 계속 가리키므로 새 위치에서 `./setup_cron.csh`를 다시 실행합니다.
-
-## 주요 기능
-
-- 여러 프로젝트 계정 추가, 수정, 비활성화 및 삭제
-- `df -Pk/-Pi <account-path>` 기반의 byte·inode 사용률 대시보드
-- 대시보드 전체 컬럼의 숫자·문자 헤더 정렬과 새로고침 후 정렬 유지
-- 선택적 quota JSON command 연동과 공유 filesystem 계정 그룹화
-- 사용률 상태: 90% 미만 정상, 90~94% 주의(WARN), 95% 이상 경고(ALERT),
-  98% 이상 긴급(EMERGENCY), 100% FULL
-- 사용률 색상: 80% 미만 녹색, 80~89% 노란색, 90~94% 주황색,
-  95% 이상 빨간색 및 통합 팝업 경고
-- 자동 수집 활성 시 GUI 최소화 중에도 15분마다 `df`만 실행하는 경량 capacity watcher
-- raw KB 증가량으로 100GB 급증, 6시간/2시간 내 FULL 예상 경고
-- 자동 수집 활성 시 GUI 최소화 중에도 22:00~06:00에 실행·재개되는 cron 야간 작업
-- `추적` 탭에서 세 cron, watcher, 현재 PID, notifier 및 최근 결과 확인
-- GUI와 독립된 지금 실행과 체크포인트 보존 안전 중지
-- 상단 `언어` 메뉴에서 한국어(KOR)/영어(ENG) 즉시 전환
-- 일간 보고서와 금요일 주간 보고서
-- 7일·30일 추세의 경고/100% 예상일과 평소 대비 급증 이상 탐지
-- 07시 건강 점검 cron을 통한 수집 누락·실패 알림
-- 검토 전용 정리 후보 보고서 (자동 삭제 없음)
-- cron outbox와 MATE 트레이를 이용한 네트워크 없는 로컬 팝업
-- 메인 창과 독립 실행되고 로그인 때 자동 시작되는 notifier
-- 최대 1년간의 일별 사용률 추이
-- 여러 밤에 걸쳐 재개되는 기준선 `du`와 일일 변경 파일 활동 확인
-- 관리자 PIN으로만 노출되는 계정별 파일·디렉터리 이름 검색
-- 별도 `search_index.db`의 실제 크기와 인덱스 항목 수 표시
-- SQLite, JSON, 텍스트 보고서만 사용하는 로컬 저장
-
-## 데이터 저장 경로와 권한
-
-애플리케이션 소스에는 Python 런타임이나 wheel을 포함하지 않습니다. 따라서
-압축 파일이 작고, 사내에 이미 설치된 Python 3.10과 PyQt5를 그대로 사용합니다.
-Python 설치 경로는 읽기 전용이어도 되지만 데이터 저장 경로는 쓰기가 가능해야
-합니다. 실행 스크립트는 상속된 `PYTHONHOME`을 경고 후 제거합니다.
-
-개인 계정은 quota가 제한될 수 있으므로 소스 디렉터리를 기본 데이터 위치로 사용하지
-않고, 충분한 여유가 있는 별도 위치를 선택하는 것을 권장합니다.
-`STORAGE_MANAGER_DATA_DIR`이 없고 저장된 전역 위치도 없으면 최초 GUI 실행에서
-SQLite, 보고서, 로그를 둘 디렉터리를 선택합니다. 선택 결과를 기억하는 1KB 미만의
-포인터만 `~/.config/storage-manager-vwp/location.json`에 저장됩니다.
-
-```csh
-setenv STORAGE_MANAGER_DATA_DIR /large/path/storage-manager-data
-./run.csh
-```
-
-프로젝트 계정 안에 전용 데이터 폴더를 만들 권한이 `newgrp` 뒤에만 생긴다면 생성만
-수동으로 수행합니다. 프로그램은 `newgrp`, `sg`, `sudo`를 자동 실행하지 않습니다.
-
-```csh
-newgrp project_group
-mkdir -p /user/project_account/.storage-manager-vwp
-chmod 700 /user/project_account/.storage-manager-vwp
-exit
-
-# 반드시 일반 셸에서 cron과 같은 조건으로 쓰기 확인
-touch /user/project_account/.storage-manager-vwp/write_test
-rm /user/project_account/.storage-manager-vwp/write_test
-```
-
-마지막 검사가 실패하면 해당 경로에는 cron이 DB와 알림을 안정적으로 기록할 수
-없으므로 다른 전역 위치를 선택합니다. Python과 데이터 환경변수를 로그인 때마다
-유지하려면 개인 `.cshrc`에 `setenv` 행을 넣습니다.
-
-## 환경 확인
-
-가장 간단한 진단 명령은 다음과 같습니다. 선택된 Python 버전·실행 파일, `json`
-모듈 위치, SQLite, PyQt5, 사용자 그룹, 데이터 경로·사용량·쓰기 결과를 먼저 출력한
-뒤 전체 RHEL 명령 probe를 실행합니다.
-
-```csh
-./run.csh --diagnose
-```
-
-아래의 수동 Python 명령을 사용할 때는 현재 터미널에서 실행 파일을 한 번 선택합니다.
-이 변수는 앱 설정이 아니라 README의 긴 명령을 간단히 적기 위한 csh 변수입니다.
-
-```csh
-if ($?STORAGE_MANAGER_PYTHON_BIN) then
-    set SM_PYTHON = "$STORAGE_MANAGER_PYTHON_BIN"
-else if ($?STORAGE_MANAGER_PYTHON_HOME) then
-    set SM_PYTHON = "$STORAGE_MANAGER_PYTHON_HOME/bin/python3"
-else
-    set SM_PYTHON = "python3"
-endif
-```
-
-이후 저장 경로를 명령으로 지정하고 검증할 수도 있습니다.
-
-```csh
-"$SM_PYTHON" runtime_check.py \
-  --set-data-dir /large/path/storage-manager-data
-```
-
-점검기는 앱과 동일한 명령을 작은 임시 디렉터리에서 실제 실행합니다. 다음 핵심
-항목이 모두 `OK`여야 하며 `WARN`은 내용을 확인한 뒤 진행합니다.
-
-- Python 3.10 이상 (`3.10.9` 지원)
-- Python 표준 라이브러리 `json` 위치와 선택된 실제 실행 파일
-- PyQt5 import 및 Qt 화면 플랫폼 플러그인 초기화
-- SQLite 3.24 이상 및 실제 DB 생성
-- 앱이 사용하는 옵션 그대로 실행한 `df -Pk`, `df -Pi`, `du` probe
-- RHEL 명령 `find`, `crontab`, `csh`
-- `/user` 읽기 권한과 데이터 디렉터리 쓰기 권한
-- 데이터 파일시스템 종류와 남은 용량
-- MATE 사용자 autostart 디렉터리 쓰기 또는 생성 권한
-
-데이터 위치가 NFS, CIFS, Lustre 등으로 탐지되면 경고가 표시됩니다. 이 경우에도
-관리자 한 명의 전용 데이터 디렉터리로는 사용할 수 있지만, 여러 관리자가 같은
-SQLite 파일을 동시에 공유하면 안 됩니다.
-
-추가 패키지나 인터넷 연결은 필요하지 않습니다. 그래프도 matplotlib 대신
-PyQt5 자체 그리기를 사용합니다.
-
-## 실행과 계정 등록
-
-```csh
-./run.csh
-```
-
-`Accounts` 탭에서 계정 이름과 `/user/account-name`을 등록합니다. 계정명을 입력하면
-첫 번째 모니터링 루트를 prefix로 경로가 자동 완성되고, 경로를 입력하면 마지막
-디렉터리명이 계정명으로 자동 완성됩니다. 안전을 위해 존재하고 읽을 수 있는
-`/user` 바로 아래 디렉터리만 등록됩니다.
-
-`Dashboard` 표의 컬럼 제목을 누르면 해당 컬럼을 오름차순으로 정렬하고, 같은 제목을
-다시 누르면 내림차순으로 전환합니다. 퍼센트와 사용량은 표시 문자열이 아니라 실제
-숫자로 정렬하며 선택한 컬럼과 방향은 수동·자동 새로고침 후에도 현재 GUI 세션 동안
-유지됩니다.
-
-계정 등록에는 자동 `newgrp`가 필요하지 않습니다. 현재 프로세스에서 해당 경로로
-`cd`하고 `df`·`du`·`find`에 필요한 읽기 권한이 있으면 됩니다. 전역 데이터 경로와
-등록 계정이 같은 파일시스템이면 FULL 상황에서 SQLite와 알림도 기록하지 못할 수
-있다는 확인 경고가 표시됩니다.
-
-경로 입력란에는 절대경로를 직접 입력할 수 있습니다. 허용할 상위 경로는
-`accounts.json`의 `monitored_roots` 목록으로 관리하며 운영 기본값은
-`["/user"]`입니다. 목록 밖의 경로나 상위 경로 자체는 등록되지 않습니다.
-
-직접 실행하려면 다음과 같습니다.
-
-```csh
-"$SM_PYTHON" app.py \
-  --data-dir /large/path/storage-manager-data
-```
-
-## 15분·22시·07시 cron 등록
-
-cron은 계속 떠 있는 daemon이 아닙니다. 매시 07·22·37·52분에는
-`capacity_watch.py`가 `df`·inode·선택적 quota만 확인하고, 매일 22시에는
-`nightly_scan.py`, 매일 07시에는 `health_check.py`를 실행합니다. 15분 watcher는
-`du`나 `find`를 호출하지 않으며 22:00~06:00 시간창과 관계없이 하루 종일
-계속됩니다.
-
-cron 및 GUI 백그라운드 상세 작업은 22:00부터 06:00까지만 수행합니다. 06:00에는
-실행 중인 `du`·`find`·검색 인덱싱을 안전하게 정리하고 완료된 체크포인트를 남긴 뒤
-`paused` 상태로 종료합니다. 다음 22:00 실행에서 기준선·검색 인덱스는 체크포인트부터
-이어가고 완료되지 않은 변경 파일 순회는 기존 cursor부터 다시 실행합니다. 터미널에서
-직접 실행한 `nightly_scan.py`는 점검·복구를 위한 명시적 경로이므로 이 시간 제한을
-적용하지 않습니다.
-
-GUI의 `추적` 탭에서 `자동 수집 켜기`를 누르거나 다음 명령을 한 번 실행합니다.
-
-```csh
-./setup_cron.csh
-```
-
-등록될 내용을 먼저 확인하려면 다음 명령을 사용합니다.
-
-```csh
-"$SM_PYTHON" nightly_scan.py \
-  --data-dir /large/path/storage-manager-data --print-cron
-```
-
-야간 작업을 수동으로 가볍게 확인할 때는 `du`를 생략할 수 있습니다.
-
-```csh
-"$SM_PYTHON" nightly_scan.py \
-  --data-dir /large/path/storage-manager-data --skip-detail
-```
-
-`추적` 탭의 상태형 실행 버튼으로 시작한 백그라운드 작업은 GUI를 최소화해도 계속됩니다.
-실행 중 같은 버튼은 `안전 중지`로 바뀝니다. 안전 중지는 현재
-실행의 run ID에만 요청을 보내고, 실행 중인 `du/find`를 정리한 뒤 완료한 디렉터리
-체크포인트를 남깁니다. 임의 PID에 강제 signal을 보내지 않으므로 다른 사용자의
-프로세스를 종료하지 않습니다.
-
-15분 watcher를 수동으로 확인하려면 다음 명령을 사용합니다. 증가 속도는 같은
-파일시스템의 유효 표본이 두 번 쌓인 뒤 계산됩니다.
-
-```csh
-"$SM_PYTHON" capacity_watch.py \
-  --data-dir /large/path/storage-manager-data
-```
-
-## MATE 로컬 팝업
-
-외부 웹이나 방화벽 연결 없이 팝업을 받으려면 기본 알림 모드인 `파일 outbox`를
-유지합니다. cron은 경고 JSON을 저장하고 별도 `storage_notifier.py`가 이를 MATE
-트레이 팝업으로 표시합니다. 메인 관리 창을 최소화해도 notifier는 독립적으로
-동작합니다.
-
-`추적` 탭에서 `로그인 시 팝업 알림 자동 시작`을 체크하고 `팝업 알림 시작`을 누르는
-방법을 권장합니다. 명령으로 로그인 자동 시작을 설치할 수도 있습니다.
-
-```csh
-"$SM_PYTHON" storage_notifier.py \
-  --data-dir /large/path/storage-manager-data --install-autostart
-```
-
-상태 확인과 자동 시작 해제는 다음과 같습니다.
-
-```csh
-"$SM_PYTHON" storage_notifier.py \
-  --data-dir /large/path/storage-manager-data --status
-"$SM_PYTHON" storage_notifier.py \
-  --data-dir /large/path/storage-manager-data --remove-autostart
-```
-
-DCV 연결만 끊고 MATE 세션이 유지되면 notifier도 계속 실행됩니다. 완전히 로그아웃한
-동안에는 cron이 경고를 outbox에 쌓고 다음 로그인 때 7일 이내 미확인 경고를 한 번에
-요약합니다. 알림 센터를 확인하기 전에는 읽음 처리하지 않습니다.
-
-실수로 모니터링을 끄지 않도록 메인 창의 제목 표시줄에는 X 닫기 버튼을 두지
-않습니다. 제목 표시줄의 최소화 버튼이나 `File > Minimize`를 사용하며,
-`Alt+F4` 같은 창 닫기 요청도 실제 종료 대신 최소화합니다.
-
-모든 관리 백그라운드 동작을 끝내려면 `File > Full Exit`를 선택하고 확인합니다.
-이 작업은 Storage Manager가 등록한 15분/22시/07시 cron 항목만 제거하고,
-notifier 자동 시작을 해제하며, 실행 중인 notifier와 야간 상세 스캔에 안전 종료를
-요청합니다. 다른 cron 항목과 수집 데이터는 삭제하지 않습니다. 다시 사용하려면
-GUI를 실행해 자동 수집과 notifier 자동 시작을 다시 활성화하면 됩니다.
-
-## Cron 내부 알림
-
-설정 탭의 `cron 알림 모드`는 다음 중 하나입니다. 어떤 모드든 알림 원문과 전송
-결과는 데이터 디렉터리에 감사 기록으로 남습니다.
-
-- `파일 outbox`: 기본값. 트레이 notifier가 읽을 `data/notifications/*.json` 생성
-- `사내 명령 (stdin)`: JSON argv로 지정한 프로그램을 shell 없이 실행하고 UTF-8
-  알림 JSON을 표준입력으로 전달
-- `내부 webhook`: 지정한 내부 HTTP(S) 주소에 UTF-8 JSON POST
-- `사용 안 함`: 이벤트 생성과 전송을 모두 끔
-
-command 예시는 다음과 같습니다. `{account}` 치환은 quota command에서만 사용하며,
-알림 command는 고정 argv를 실행하고 메시지 전체를 stdin으로 받습니다.
-
-```json
-{
-  "notification_mode": "command",
-  "notification_command": ["/opt/company/bin/send-message", "storage-alert"],
-  "notification_cooldown_hours": 12
-}
-```
-
-내부 webhook 예시는 다음과 같습니다.
-
-```json
-{
-  "notification_mode": "webhook",
-  "notification_webhook_url": "https://internal.example/message/storage"
-}
-```
-
-GUI의 `테스트 알림`으로 outbox 생성을 먼저 확인합니다. 15분 watcher는
-byte/inode/quota, 100GB 급증, Full 예상 6시간·2시간, 98%·100%를 판정합니다. 07시
-건강 점검은 nightly와 15분 표본 누락·지연 및 최근 비정상 종료를 알립니다. 동일
-key·동일 등급은 기본 12시간 억제하고 심각도가 상승하면 즉시 다시 알리며, 정상
-복귀 후에는 다음 경고 주기를 새로 시작합니다.
-
-## Quota 어댑터
-
-스토리지별 quota 출력 형식이 다르므로 설정 탭에 shell 없는 command argv를 JSON
-배열로 지정합니다. `{account}`와 `{path}`가 치환되며 command는 다음 JSON을 stdout에
-출력해야 합니다.
-
-```json
-{"used_kb": 950000, "limit_kb": 1000000, "soft_limit_kb": 900000}
-```
-
-예: `["/opt/company/bin/quota-json", "{account}", "{path}"]`. 설정하지 않으면 quota
-열만 `-`로 표시되고 byte·inode 수집은 계속됩니다.
-
-## 관리자 검색
-
-상단 `관리자` 메뉴에서 현재 고정 PIN `6368`을 입력해 잠금을 해제하면 실행 세션에만
-`검색` 탭이 나타납니다. 고정 비밀번호 방식은 소수 운영자를 위한 UI 노출 제한이며
-운영체제 권한 통제나 암호화가 아닙니다. 프로그램을 종료하거나 `관리자 잠금`을
-누르면 검색 탭이 다시 숨겨집니다.
-
-검색 인덱싱은 계정별 opt-in입니다. 검색 탭에서 선택 계정의 `검색 인덱싱 켜기`를
-누르면 다음 22시 작업부터 파일 내용이 아닌 상대 경로, 이름, 확장자, 종류만 별도
-`search_index.db`에 저장합니다. 첫 전체 인덱스는 디렉터리 단위 체크포인트로
-중단 후 재개하며 심볼릭 링크나 다른 filesystem으로 넘어가지 않습니다. 이후 일일
-`find` 결과를 같은 순회에서 반영하고, 삭제·rename은 최대 7일 간격 전체 대조 때
-정리합니다.
-
-인덱싱을 끄거나 계정 경로를 바꾸거나 계정을 삭제하면 해당 계정의 검색 행과 진행
-체크포인트를 백그라운드에서 정리합니다. GUI가 먼저 종료되어 정리가 끝나지 않아도
-다음 22시 작업이 orphan·경로 불일치 행을 다시 정리합니다. SQLite는 삭제한 page를
-재사용하므로 일부 계정만 지운 직후 파일 크기가 바로 줄지 않을 수 있습니다. 모든
-검색을 끄고 디스크 공간을 즉시 회수해야 한다면 야간 작업과 GUI가 모두 종료된 것을
-확인한 뒤 파생 데이터인 `search_index.db*`만 삭제할 수 있으며 다음 활성화 때 다시
-구축됩니다.
-
-이름 정확 일치·prefix·포함, 확장자, 파일/디렉터리/링크 종류로 검색할 수 있습니다.
-결과는 최대 500개이며 포함 검색은 대규모 DB에서 상대적으로 느릴 수 있지만 GUI
-worker에서 실행하므로 메인 창은 응답을 유지합니다. 검색 탭은 전체 DB 실제 크기,
-전체 및 선택 계정 항목 수, 마지막 완전 인덱스와 변경 반영 시각을 표시합니다.
-
-## 데이터 크기 제한
-
-생산 스키마에 30일치 15분 표본을 넣은 실측에서 10계정은 약 9.6MB, 20계정은 약
-19.2MB였습니다. 20계정에 top-level 항목을 계정당 1,000개 보관하면 약 25MB,
-10,000개면 약 77MB였습니다. 보고서·알림·체크포인트·로그를 포함한 일반 예상치는
-50~150MB이며 정상 운영 여유로 300MB를 권장합니다. 이 값은 검색 인덱스를 제외한
-관리 이력 기준입니다. 기본 500MB에 도달하면 07시 건강 점검과 설정 화면에서
-경고하며 자동 삭제는 하지 않습니다.
-
-검색을 켠 계정은 파일·디렉터리마다 경로 행이 추가되므로 별도 여유 공간이
-필요합니다. 실험용 스키마의 평균 경로 길이 기준 측정치는 항목당 약 497 byte였고
-대략 100만 항목 0.5GB, 1,000만 항목 4.6GB, 5,000만 항목 23GB입니다. 실제 값은
-경로 길이에 따라 달라지므로 검색 탭의 `검색 DB 실제 크기`를 우선 확인해야 합니다.
-
-- GUI를 몇 번 새로고침해도 계정별 GUI 스냅샷은 하루 1행만 갱신됩니다.
-- 야간 스냅샷도 계정별 하루 1행입니다.
-- 15분 원본 표본은 기본 30일 후 삭제되고 일별 이력은 365일 유지됩니다.
-- 상세 이력과 보고서는 기본 365일 후 삭제됩니다.
-- cron 로그는 5MB가 되면 회전하며 3개까지만 보관합니다.
-- 현재 top-level 전체 기준선은 계정별 1세트만 유지합니다.
-- 초기/주간 기준선의 체크포인트는 파일이 아니라 디렉터리 작업만 저장합니다.
-- 일반 모니터링 DB는 일일 변경 경로 전체를 저장하지 않고 top-level 집계만
-  저장합니다. 검색을 켠 계정의 상대 경로는 별도 `search_index.db`에 저장합니다.
-- SQLite는 네트워크 경로 호환성을 위해 WAL이 아닌 일반 저널을 사용합니다.
-- 최근 야간 실행 상태는 작은 `nightly_scan_status.json` 한 파일에 덮어씁니다.
-- 알림 cooldown과 최근 전송 상태도 작은 JSON 한 세트만 유지합니다.
-- 알림 outbox, 일간·주간·정리 후보 보고서는 이력 보존기간 후 삭제됩니다.
-
-여러 관리자가 같은 네트워크상의 SQLite 파일을 동시에 공유하는 구성은 권장하지
-않습니다. 관리자별 데이터 디렉터리를 사용하세요. 중앙 공유가 필요해지면 별도
-서버형 수집 구조로 전환하는 편이 안전합니다.
-
-## 대용량 계정 스캔 정책
-
-`df` 검사는 모든 활성 계정에서 먼저 끝냅니다. 그 후 상세 작업을 실행하므로 한
-계정이 느려도 다른 계정의 사용률 보고가 누락되지 않습니다.
-
-- cron 및 GUI 백그라운드 상세 작업은 22:00에 시작하고 06:00에 체크포인트를
-  보존한 `paused` 상태로 종료하며 다음 밤에 이어서 실행
-- 터미널 직접 실행은 시간창 밖의 진단·복구 작업을 위해 완료 또는 수동 안전
-  중지까지 계속 실행
-- 여러 계정의 `du`·`find`·검색 인덱싱은 한 번에 한 계정씩 직렬 실행
-- 같은 시간에 두 번째 야간 작업이 시작되면 공통 lock이 중복 실행을 차단
-- RHEL에서 사용 가능한 경우 `nice -n 10`과 `ionice -c 2 -n 7`로 낮은 우선순위 적용
-- `nice`/`ionice`가 없으면 우선순위 prefix 없이 같은 기능을 계속 실행
-- `nice`/`ionice`는 CPU·I/O 우선순위를 낮추는 best-effort 설정이며 처리량의
-  절대 상한이나 서버 부하 차단 장치는 아님
-- 개별 `du` 디렉터리 작업 제한시간은 기본 15분이며 큰 항목은 하위 작업으로 분할
-- 직접 실행에는 전체 deadline을 두지 않으며, 관리 실행에는 06:00 안전 중단 적용
-- 날짜별 시작 계정을 순환해 여러 대형 계정의 순서를 공정하게 배분
-- 95% 이상 계정을 상세 스캔에서 우선 처리
-- 초기 기준선은 완료된 디렉터리 작업을 SQLite에 저장하고 다음 밤에 이어서 수행
-- 검색 전체 인덱스는 한 디렉터리도 500개씩 커밋하고 내부에서 안전 중지를 확인함
-- 매우 평평한 한 디렉터리는 재개 때 목록을 다시 읽지만 이미 저장한 batch는 다시 쓰지 않음
-- 큰 디렉터리가 timeout되면 한 단계 하위 디렉터리 작업으로 나누어 재시도
-- 완료 직전 top-level 목록을 다시 대조해 스캔 중 생성·삭제된 항목을 작업표에 반영
-- 기준선과 변경 cursor를 DB에 기록한 뒤에만 체크포인트를 제거해 중단 후 재실행 안전
-- 초기 기준선 이후에는 `find -newermt`로 `mtime + 현재 byte` 변경 활동을 집계
-- 검색을 켠 계정은 같은 `find` 출력으로 검색 DB도 갱신하여 두 번째 순회를 만들지 않음
-- 금요일에는 삭제와 정확한 순증감을 보정하는 기준선 갱신을 시작
-- 실패 또는 timeout 결과는 정상 기준선과 변경시각 cursor를 갱신하지 않음
-- 계정 루트의 `<account>/.snapshot`은 `du`, 변경 파일 `find`, 검색 인덱스에서 제외
-- `results/.snapshot`처럼 계정 루트 아래의 일반 중첩 경로는 제외하지 않음
-
-`df`는 파일 트리가 아니라 해당 경로가 속한 파일시스템 전체 사용량을 읽습니다.
-따라서 `.snapshot` 제외는 상세 원인 분석과 검색 인덱스에만 적용되며 `df` 수치 자체를
-조정하지 않습니다.
-
-Linux의 `ctime`은 생성시간이 아니라 inode 변경시간이고 birth time은 파일시스템에
-따라 제공되지 않습니다. 따라서 일일 검사는 이식성이 있는 `mtime`을 사용합니다.
-`find`도 파일 존재 여부를 확인하기 위해 트리를 순회해야 하므로 항상 즉시 끝나는
-것은 아니지만, `du` 집계를 매일 반복하지 않고 출력도 스트리밍 처리합니다. 일일
-byte는 변경된 파일의 현재 크기 합계이며 순증감은 주간 기준선에서 확정됩니다.
-여러 밤짜리 기준선이 끝난 뒤 첫 변경 검사는 기준선 시작시각부터 다시 확인하므로,
-그 사이 수정된 파일 활동도 누락하지 않습니다. 다만 실행 중 계속 변하는 파일시스템의
-기준선은 스냅샷 시점 하나가 아니라 완료된 작업들을 합친 rolling baseline입니다.
-
-서로 다른 top-level 경로 사이에 같은 inode를 가리키는 hard link가 있으면 분할된
-`du` 작업의 합계가 실제 할당량보다 크게 보일 수 있습니다. 운영 파일시스템이 quota
-명령을 제공한다면 계정별 실제 한도 표시는 quota 연동이 더 정확합니다.
-
-이 값들은 데이터 디렉터리의 `accounts.json`에서 조정할 수 있습니다.
-
-## 보고서 위치
-
-```text
-data/reports/latest_daily.txt
-data/reports/latest_daily_ko.txt
-data/reports/latest_daily_en.txt
-data/reports/latest_weekly.txt
-data/reports/latest_weekly_ko.txt
-data/reports/latest_weekly_en.txt
-data/reports/latest_cleanup.txt
-data/reports/latest_cleanup_ko.txt
-data/reports/latest_cleanup_en.txt
-data/reports/daily/YYYY-MM-DD.txt
-data/reports/weekly/YYYY-MM-DD.txt
-data/reports/cleanup/YYYY-MM-DD.txt
-```
-
-주간 보고서는 기본 금요일(`weekly_report_weekday: 4`)에 생성됩니다. 값은
-Python의 요일 기준으로 월요일 0부터 일요일 6까지입니다.
-정리 후보는 기본 100GB 이상, 최초 관찰 후 30일 경과, 최근 30일 top-level 변경
-활동 없음 조건을 모두 만족해야 합니다. 이 보고서는 삭제 명령을 실행하지 않습니다.
 
 ## 테스트
 
-```csh
-"$SM_PYTHON" -m unittest discover -s tests -v
+PyQt5 없이도 `smvwp.gui`/`smvwp.scheduler`를 제외한 모든 로직을 테스트할 수
+있다:
+
+```
+python3 -m unittest discover -s tests -t .
 ```
 
-배포용 source tar에도 `tests/test_*.py`가 포함되므로 사내 Python에서 같은 회귀
-테스트를 실행할 수 있습니다. 새 터미널에서는 위 `SM_PYTHON` 선택 블록을 먼저
-실행합니다. 실제 운영 DB·계정 경로·로그는 포함되지 않습니다.
+## 구현 범위와 아직 안 만든 것
 
-현재 설계 검토 내용과 남은 운영 고려사항은 [REVIEW.md](REVIEW.md), 기능 확장
-우선순위는 [FEATURE_ROADMAP.md](FEATURE_ROADMAP.md)에 있습니다.
+**phase 1** (REBUILD_CONCEPT.md 7절): 계정 등록 + df 기반 대시보드, 사용률
+등급 표시(색상+텍스트), 15분 경량 수집(cron/타이머), 파일 outbox 알림, 최소
+진단, 대시보드 단일 화면 + 한눈 요약.
+
+**phase 2** (REBUILD_CONCEPT.md 8절 1번): 야간 상세 스캔. CONCEPT.md 3·7절의
+검증된 원칙을 계승하되 코드는 새로 썼다.
+
+- 22:00~06:00 시간창 안에서만 cron 실행 (`scan_window.py`). 06:00이 되면 강제
+  종료가 아니라 완료된 체크포인트를 남기고 `paused` 상태로 스스로 멈춘다.
+- 터미널 직접 실행(`nightly_scan_cli.py --now`)은 의도적 진단/복구 경로라
+  시간창 제한을 받지 않는다.
+- 디렉터리 단위 체크포인트로 완전히 재개 가능 (`scan_store.py`) - 중단된
+  다음 실행은 이미 끝낸 디렉터리를 다시 훑지 않는다.
+- 강제 kill 없음: run ID 매칭 중지 요청 파일만 사용 (`scan_lock.py`).
+  `nightly_scan_cli.py --stop` 또는 GUI의 `안전 중지` 버튼.
+- 디렉터리 단위 타임아웃 초과 시 하위 디렉터리 작업으로 분할해 재시도.
+- 기준선 비교는 "완료된 세대 vs 직전 완료 세대"를 **같은 경로끼리** 대조한다
+  (기존 REVIEW.md가 지적한 "어제 top N vs 오늘 top N" 비교 오류를 피함).
+- `nice`/`ionice`는 있으면 쓰고 없으면 그냥 진행 (최선 노력이지 처리량 상한이
+  아님).
+- 대시보드 아래쪽에 상세 스캔 영역을 추가 (탭 신설 없이 단일 화면 유지) -
+  시간창/실행 상태/남은 작업 수와 선택 계정의 증가 경로를 보여준다. 전체
+  분모를 모르는 진행률은 퍼센트로 부풀리지 않고 남은 작업 수로만 표시한다.
+
+**phase 3** (나머지 기능 일괄 구현):
+
+- **다국어(KOR/ENG)**: `i18n.py` 단순 dict 카탈로그. 상단 `언어` 메뉴에서 즉시
+  전환되며 재시작이 필요 없다. 저장/전송되는 값에는 언어 중립 코드(`tier` 등)를
+  항상 함께 남겨 나중에 다른 언어로 다시 렌더링할 수 있다.
+- **quota 어댑터**: shell 없이 실행하는 argv 배열로 `{account}`/`{path}`를
+  치환해 JSON을 받는다. quota 조회가 실패해도 `df` 수집은 그대로 살린다.
+  한도가 0/없음이면 사용률을 계산하지 않는다(0으로 나눠 100%처럼 보이지 않게).
+- **알림 채널**: 기본 파일 outbox에 더해 사내 command(stdin UTF-8 JSON, shell
+  미사용)와 내부 webhook(urllib POST). 어떤 모드든 원문과 전송 결과를
+  `notify_audit/`에 남긴다. 설정이 덜 됐으면 outbox로 안전하게 떨어진다.
+- **보고서**: 일간/주간/정리 후보. 정리 후보는 "충분히 크고 + 2세대 이상
+  관찰했고 + 크기가 변하지 않은" 경로만 올리며, **어떤 파일도 삭제하지
+  않는다**. 언어별로 저장한다.
+- **트레이 notifier**: `notifier_cli.py`가 메인 GUI와 독립 실행된다. 팝업을
+  띄운 것만으로 읽음 처리하지 않고 사용자가 확인했을 때만 처리하며, 로그아웃
+  중 쌓인 알림은 다음 실행에서 한 번에 요약한다. XDG autostart 등록/해제 지원.
+- **검색 인덱스**: 파일 **이름만**(내용 아님) 별도 `search_index.db`에 저장.
+  계정별 opt-in, 기본 꺼짐. 루트 `.snapshot` 제외·심볼릭 링크 미추적·파일시스템
+  경계 유지. 관리자 PIN은 **화면 노출 제한**이지 보안 경계가 아님을 코드와
+  화면 양쪽에 명시했다.
+- **최초 실행 안내**: 계정이 없을 때 진단 결과와 다음 할 일을 한 화면에
+  보여준다.
+
+**phase 4** (마무리):
+
+- **급증 알림**: 야간 스캔이 기준선을 완주하면 직전 세대와 **같은 경로끼리**
+  비교해 `growth_alert_min_kb`(기본 100GB)를 넘는 증가를 알린다. 알림 종류를
+  `kind`로 구분(`capacity`/`growth`)하고 cooldown 키 공간도 분리해, 용량
+  알림이 정상 복귀로 리셋될 때 급증 기록이 지워지지 않는다. 비교할 이전
+  세대가 없는 첫 기준선에서는 알리지 않는다 - 전부 '신규'로 잡혀 의미 없는
+  알림 폭탄이 되기 때문. 임계치는 통계 추정이 아니라 설명 가능한 단순 절대
+  값 하나만 쓴다.
+- **검색 인덱스 자동 갱신**: 검색을 켠 계정은 야간 스캔에서 인덱스를 갱신
+  한다. 시간창/안전 중지 규칙을 `du`/`find`와 똑같이 따르고, 인덱싱 실패가
+  이미 저장된 기준선을 무효로 만들지 않는다. 설정에서 사라진 계정의 orphan
+  인덱스도 매 실행마다 정리한다.
+- **관리자 PIN 변경**: 검색 화면에서 변경할 수 있고, 기본 PIN을 쓰는 동안은
+  경고를 표시한다. 설정에는 PBKDF2 해시만 저장한다 (평문 아님). 다만 이는
+  여전히 화면 노출 제한이지 보안 경계가 아니다 - 검색 DB는 암호화되지 않으며
+  파일을 직접 읽을 수 있는 사람은 PIN과 무관하게 내용을 볼 수 있다.
+
+**phase 5** (FULL 도달 예측):
+
+15분 표본을 **최소제곱 회귀**로 분석해 "이 파일시스템이 언제 차는가"를
+추정한다. 첫/끝 두 점 차이가 아니라 창 안의 모든 점을 쓰는 이유는, `df` 값이
+파일 생성·삭제로 톱니처럼 흔들려 두 점만 보면 우연히 잡힌 순간값에 예측이
+통째로 휘둘리기 때문이다.
+
+| 용도 | 창 | 기대 표본 | 최소 표본 |
+|---|---|---|---|
+| 임박 판정 | 최근 3시간 | 12 | 4 |
+| 단기 추세 | 최근 7일 | 672 | 24 |
+| 장기 추세 | 최근 30일 | 2,880 | 96 |
+
+최소 표본을 기대치보다 훨씬 낮게 잡은 것은 cron 누락이나 재시작으로 표본이
+빠져도 예측이 통째로 멈추지 않게 하기 위함이다.
+
+- **예측 불가 규칙**: 표본 부족 / 기울기 ≤ 0(감소·정체) / 도달 예상 10년 초과.
+  숫자를 만들지 않고 사유와 함께 `예측 불가`로 표시한다.
+- **경고 등급**: 2시간 내 → 긴급, 6시간 내 → 경고, 3시간 내 100GB 이상 증가
+  → 주의. 급증 판정은 회귀가 아니라 실제 관측값 차이를 쓴다 ("얼마나 늘었나"는
+  추정이 아니라 사실이어야 한다).
+- **공유 파일시스템 중복 제거**: `df`는 파일시스템 전체 값이라 같은 fs의
+  계정들은 예측이 같다. 알림은 fs당 1건으로 합치고 관련 계정 목록을 메시지와
+  `details.accounts`에 담는다. 대시보드는 계정별로 표시한다.
+- **대시보드 `FULL 예상` 컬럼**: 임박(48시간 이내)이면 시간 하나만, 평상시에는
+  `약 12일 / 약 45일`(7일·30일 기준)을 나란히 보여 추세가 빨라졌는지 판단하게
+  한다. 툴팁에 기울기와 "추정치" 단서를 명시한다.
+
+**경로별 증감 이력 축적**: 이상탐지는 아직 구현하지 않았지만 나중에 붙일 수
+있도록 `growth_history(경로, 세대, 증감KB)` 숫자만 축적한다. `baseline_results`
+는 DB 크기 때문에 2세대만 남기지만, 이 테이블은 행이 작아 **60세대**까지
+보관한다 - 이력이 짧으면 이상탐지 자체가 불가능하기 때문.
+
+**아직 만들지 않은 것**:
+
+- 급증 판정에 중앙값·MAD 같은 이상탐지를 쓰는 것. 이제 이력은 쌓이기
+  시작하므로, 세대가 충분히 모이면 `growth_history_for_path()`를 입력으로
+  붙일 수 있다. 그 전에 구현해 봐야 계산할 데이터가 없다.
+
+## 알려진 제약 / 로컬 개발 환경 메모
+
+- 단위 테스트는 Windows + Python 3.10에서도 전부 통과한다 (PyQt5 없이도
+  동작하도록 GUI 의존을 분리해 뒀기 때문). Git Bash가 있는 Windows에서는
+  `df`/`du`/`find`도 있어서 GUI 실행, 15분 수집, 상세 스캔(`--now`)까지
+  실제로 돌려 확인했다. 다만 `df -Pi`가 NTFS에서 inode를 보고하지 않아
+  inode 등급은 `확인불가`로 표시된다 - 숫자를 지어내지 않는 정상 동작이다.
+- 실제 VWP(RHEL, Python 3.12)에서 재확인이 필요한 것: Python 3.12 + PyQt5
+  조합, `crontab` 등록 권한, `nice`/`ionice` 존재 여부, 대용량 계정에서의
+  실제 스캔 소요 시간과 06:00 인계 동작.
+- `run.csh` / `setup_cron.csh`는 csh 스크립트라 Windows에서 직접 실행/검증할
+  수 없었다 - 로직은 기존 루트 `run.csh`의 검증된 패턴(진단 실패 시 exit 2,
+  `PYTHONHOME` 경고 후 제거 등)을 그대로 계승했다.

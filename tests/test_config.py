@@ -1,188 +1,131 @@
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from storage_manager.config import (
-    Account,
-    AccountStore,
-    ConfigError,
-    Settings,
-    default_data_dir,
-    load_store,
-    normalize_account_path,
-    save_store,
-)
+from smvwp import config as config_module
 
 
-class ConfigTests(unittest.TestCase):
-    def test_default_data_dir_never_falls_back_to_source_directory(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            with self.assertRaisesRegex(ConfigError, "No global data directory"):
-                default_data_dir(
-                    root / "source",
-                    home=root / "home",
-                    environ={},
-                )
-            self.assertFalse((root / "source" / "data").exists())
+class LoadSaveConfigTests(unittest.TestCase):
+    def test_load_creates_default_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config = config_module.load_config(data_dir)
+            self.assertEqual(config.accounts, [])
+            self.assertTrue(config_module.config_file(data_dir).exists())
 
-    def test_invalid_json_error_is_distinct_from_path_error(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            (data_dir / "accounts.json").write_text("{broken", encoding="utf-8")
+    def test_round_trip_preserves_accounts_and_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # data_dir과 account_path는 반드시 형제 디렉터리여야 한다 - 데이터
+            # 디렉터리가 계정 경로 내부(또는 그 반대)에 있으면 읽기 전용
+            # 불변식 위반으로 load_config가 거부한다 (config._guard_read_only_invariant).
+            data_dir = Path(tmp) / "sm_data"
+            account_path = Path(tmp) / "acct"
+            account_path.mkdir()
 
-            with self.assertRaisesRegex(ConfigError, "Invalid JSON.*line 1"):
-                load_store(data_dir)
+            config = config_module.load_config(data_dir)
+            config_module.add_account(config, "project_a", str(account_path))
+            config.settings.collector_interval_seconds = 1800
+            config_module.save_config(data_dir, config)
 
-    def test_non_directory_data_path_has_writable_path_guidance(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_path = Path(temp) / "state"
-            data_path.write_text("not a directory", encoding="utf-8")
+            reloaded = config_module.load_config(data_dir)
+            self.assertEqual(len(reloaded.accounts), 1)
+            self.assertEqual(reloaded.accounts[0].name, "project_a")
+            self.assertEqual(reloaded.settings.collector_interval_seconds, 1800)
 
-            with self.assertRaisesRegex(ConfigError, "writable data directory"):
-                load_store(data_path)
+    def test_rejects_invalid_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config_module.config_file(data_dir).write_text("{not json", encoding="utf-8")
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load_config(data_dir)
 
-    def test_capacity_settings_defaults_and_validation(self):
-        settings = Settings()
-        self.assertEqual(settings.capacity_sample_days, 30)
-        self.assertEqual(settings.rapid_growth_gb, 100)
-        self.assertEqual(settings.forecast_alert_hours, 6)
-        self.assertEqual(settings.forecast_emergency_hours, 2)
-        self.assertEqual(settings.capacity_stale_minutes, 45)
-        self.assertEqual(settings.popup_backlog_days, 7)
-        self.assertEqual(settings.data_size_warning_mb, 500)
 
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            (data_dir / "accounts.json").write_text(
-                json.dumps(
-                    {
-                        "settings": {"capacity_sample_days": 0},
-                        "accounts": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaises(ConfigError):
-                load_store(data_dir)
+class AddAccountTests(unittest.TestCase):
+    def test_rejects_empty_name(self):
+        config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+        with self.assertRaises(config_module.ConfigError):
+            config_module.add_account(config, "   ", "/tmp")
 
-            (data_dir / "accounts.json").write_text(
-                json.dumps(
-                    {
-                        "settings": {"data_size_warning_mb": 0},
-                        "accounts": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaises(ConfigError):
-                load_store(data_dir)
+    def test_rejects_nonexistent_path(self):
+        config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "does_not_exist"
+            with self.assertRaises(config_module.ConfigError):
+                config_module.add_account(config, "acct", str(missing))
 
-    def test_account_path_must_be_directly_below_root(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp) / "user"
-            account = root / "project_a"
-            nested = account / "work"
-            outside = Path(temp) / "outside"
-            nested.mkdir(parents=True)
-            outside.mkdir()
+    def test_rejects_duplicate_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            account_path = Path(tmp) / "acct"
+            account_path.mkdir()
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            config_module.add_account(config, "acct1", str(account_path))
+            with self.assertRaises(config_module.ConfigError):
+                config_module.add_account(config, "acct2", str(account_path))
 
-            self.assertEqual(
-                normalize_account_path("project_a", str(root)),
-                str(account.resolve()),
-            )
-            with self.assertRaises(ConfigError):
-                normalize_account_path(str(root), str(root))
-            with self.assertRaises(ConfigError):
-                normalize_account_path(str(nested), str(root))
-            with self.assertRaises(ConfigError):
-                normalize_account_path(str(outside), str(root))
+    def test_assigns_unique_account_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path_a = Path(tmp) / "a"
+            path_a.mkdir()
+            path_b = Path(tmp) / "b"
+            path_b.mkdir()
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            account_a = config_module.add_account(config, "a", str(path_a))
+            account_b = config_module.add_account(config, "b", str(path_b))
+            self.assertNotEqual(account_a.account_id, account_b.account_id)
 
-    def test_store_round_trip_preserves_account_id(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            account = Account("project_a", "/user/project_a")
-            store = AccountStore(Settings(), [account])
-            save_store(data_dir, store)
 
-            loaded = load_store(data_dir)
-            self.assertEqual(loaded.accounts[0].account_id, account.account_id)
-            self.assertEqual(json.loads((data_dir / "accounts.json").read_text())["accounts"][0]["name"], "project_a")
+class ReadOnlyInvariantGuardTests(unittest.TestCase):
+    """읽기 전용 불변식(paths.assert_not_inside_monitored_paths)이 실제
+    config 로드/계정 추가 경로에서 강제되는지 확인한다."""
 
-    def test_search_index_flag_defaults_off_and_round_trips(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            (data_dir / "accounts.json").write_text(
-                json.dumps(
-                    {
-                        "settings": {},
-                        "accounts": [
-                            {
-                                "name": "legacy",
-                                "path": "/user/legacy",
-                                "enabled": True,
-                                "account_id": "legacy-id",
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
+    def test_add_account_rejects_path_that_would_nest_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            monitored = Path(tmp) / "user_project_a"
+            monitored.mkdir()
+            data_dir = monitored / "sm_data"
+            data_dir.mkdir()
 
-            store = load_store(data_dir)
-            self.assertFalse(store.accounts[0].search_enabled)
-            store.accounts[0].search_enabled = True
-            save_store(data_dir, store)
-            self.assertTrue(load_store(data_dir).accounts[0].search_enabled)
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            with self.assertRaises(config_module.ConfigError):
+                config_module.add_account(config, "project_a", str(monitored), data_dir=data_dir)
 
-    def test_legacy_store_persists_generated_account_id(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            (data_dir / "accounts.json").write_text(
-                json.dumps(
-                    {
-                        "settings": {},
-                        "accounts": [
-                            {"name": "legacy", "path": "/user/legacy", "enabled": True}
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            first = load_store(data_dir).accounts[0].account_id
-            second = load_store(data_dir).accounts[0].account_id
-            self.assertEqual(first, second)
+    def test_load_config_rejects_previously_saved_violating_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            monitored = Path(tmp) / "user_project_a"
+            monitored.mkdir()
+            data_dir = monitored / "sm_data"
+            data_dir.mkdir()
 
-    def test_legacy_root_is_migrated_to_allowed_roots(self):
-        with tempfile.TemporaryDirectory() as temp:
-            data_dir = Path(temp)
-            legacy = {
-                "settings": {"monitored_root": "/user"},
-                "accounts": [],
-            }
-            (data_dir / "accounts.json").write_text(
-                json.dumps(legacy),
-                encoding="utf-8",
-            )
-            store = load_store(data_dir)
-            saved = json.loads((data_dir / "accounts.json").read_text(encoding="utf-8"))
-            self.assertEqual(store.settings.monitored_roots, ["/user"])
-            self.assertEqual(saved["settings"]["monitored_roots"], ["/user"])
-            self.assertNotIn("monitored_root", saved["settings"])
+            # data_dir 없이 계정을 추가한 뒤 강제로 저장해 "이미 저장된 위반
+            # 상태"를 재현한다 (예: 나중에 데이터 디렉터리를 계정 내부로
+            # 옮긴 경우).
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            config_module.add_account(config, "project_a", str(monitored))
+            config_module.save_config(data_dir, config)
 
-    def test_absolute_path_can_match_any_allowed_root(self):
-        with tempfile.TemporaryDirectory() as temp:
-            first_root = Path(temp) / "first"
-            second_root = Path(temp) / "second"
-            account = second_root / "project_b"
-            first_root.mkdir()
-            account.mkdir(parents=True)
-            normalized = normalize_account_path(
-                str(account),
-                [str(first_root), str(second_root)],
-            )
-            self.assertEqual(normalized, str(account.resolve()))
+            with self.assertRaises(config_module.ConfigError):
+                config_module.load_config(data_dir)
+
+
+class RemoveAndFilterAccountTests(unittest.TestCase):
+    def test_remove_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            account_path = Path(tmp) / "acct"
+            account_path.mkdir()
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            account = config_module.add_account(config, "acct", str(account_path))
+            self.assertTrue(config_module.remove_account(config, account.account_id))
+            self.assertEqual(config.accounts, [])
+            self.assertFalse(config_module.remove_account(config, account.account_id))
+
+    def test_enabled_accounts_filters_disabled(self):
+        account_enabled = config_module.Account(name="on", path="/x", enabled=True)
+        account_disabled = config_module.Account(name="off", path="/y", enabled=False)
+        config = config_module.AppConfig(
+            settings=config_module.Settings(), accounts=[account_enabled, account_disabled]
+        )
+        result = config_module.enabled_accounts(config)
+        self.assertEqual(result, [account_enabled])
 
 
 if __name__ == "__main__":
