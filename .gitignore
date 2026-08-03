@@ -43,3 +43,6 @@ docs/superpowers/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Claude Code 작업 상태 (worktree 등)
+.claude/
