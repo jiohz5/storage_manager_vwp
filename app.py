@@ -49,12 +49,44 @@ def _resolve_data_dir(explicit: str | None) -> Path:
     return resolved
 
 
+PYQT5_MISSING_MESSAGE = """\
+ERROR: PyQt5를 불러올 수 없습니다 ({error}).
+
+이 앱의 GUI는 PyQt5가 필요하지만, 폐쇄망이라 앱이 대신 설치해 줄 수 없습니다.
+선택한 Python에 PyQt5가 들어 있는지 확인하세요:
+
+  {python} -c "from PyQt5 import QtWidgets"
+
+PyQt5가 있는 다른 Python 설치를 쓰신다면 STORAGE_MANAGER_PYTHON_BIN을 그쪽
+실행 파일로 다시 지정하면 됩니다.
+
+전체 진단은 다음으로 볼 수 있습니다 (GUI 없이 동작합니다):
+
+  ./run.csh --diagnose
+
+GUI 없이 수집만 하려면 아래 스크립트는 PyQt5 없이도 동작합니다:
+
+  collector_cli.py   (15분 수집)
+  nightly_scan_cli.py (야간 상세 스캔)
+"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Storage Manager VWP")
     parser.add_argument("--data-dir", help="데이터 디렉터리 (미지정 시 저장된 위치 사용, 없으면 GUI에서 지정)")
     args = parser.parse_args()
 
-    from PyQt5.QtWidgets import QApplication, QMessageBox
+    # PyQt5가 없을 때 파이썬 스택트레이스만 뜨면 폐쇄망에서 원인을 짚기 어렵다.
+    # run.csh의 사전 점검은 의도적으로 --python-only(빠른 점검)라 PyQt5를 보지
+    # 않으므로, GUI가 실제로 필요해지는 이 지점에서 친절히 안내한다.
+    try:
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+    except ImportError as exc:
+        print(
+            PYQT5_MISSING_MESSAGE.format(error=exc, python=sys.executable),
+            file=sys.stderr,
+        )
+        return 2
 
     app = QApplication(sys.argv)
 

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from smvwp import diagnostics
 
@@ -32,10 +33,26 @@ class CheckModulesTests(unittest.TestCase):
 
 
 class CheckDataDirTests(unittest.TestCase):
-    def test_not_configured_when_none(self):
+    def test_not_configured_is_not_a_failure(self):
+        """미지정은 '아직 안 정함'이지 실패가 아니다.
+
+        GUI가 최초 실행 때 한 번 물어보도록 설계했으므로, 설치 중에
+        `./run.csh --diagnose`를 돌리는 시점에는 미지정이 정상이다. 여기서
+        FAIL을 내면 정상 설치 중인 사용자가 뭔가 잘못된 줄 안다.
+        (cron은 데이터 경로가 반드시 필요하지만 setup_cron.csh가 따로 막는다.)
+        """
+
         result = diagnostics.check_data_dir(None)
         self.assertFalse(result["configured"])
-        self.assertFalse(result["ok"])
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["error"])
+
+    def test_unconfigured_data_dir_keeps_overall_ok(self):
+        result = diagnostics.run_diagnostics(
+            data_dir=None, version_info=(3, 12, 0), include_pyqt5=False
+        )
+        self.assertTrue(result["ok"])
+        self.assertIn("미지정", diagnostics.format_report(result))
 
     def test_ok_when_writable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,6 +87,29 @@ class RunDiagnosticsTests(unittest.TestCase):
                 include_pyqt5=False,
             )
             self.assertFalse(result["ok"])
+
+    def test_missing_pyqt5_report_explains_what_still_works(self):
+        """'PyQt5 사용 불가'와 '종합 OK'가 나란히 찍히면 모순처럼 보인다.
+
+        종합 판정에서 PyQt5를 빼는 것 자체는 의도한 동작이다(수집 전용 CLI는
+        PyQt5 없이도 돌아야 하므로). 대신 무엇이 되고 무엇이 안 되는지 보고서에
+        명시되어야 한다.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(
+                diagnostics,
+                "check_pyqt5",
+                return_value={"available": False, "error": "No module named 'PyQt5'"},
+            ):
+                result = diagnostics.run_diagnostics(
+                    data_dir=Path(tmp) / "data", version_info=(3, 12, 0)
+                )
+            report = diagnostics.format_report(result)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("GUI는 실행할 수 없습니다", report)
+        self.assertIn("collector_cli.py", report)
 
     def test_format_report_mentions_overall_result(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -96,12 +96,21 @@ chmod +x run.csh setup_cron.csh
 ./run.csh                 # 진단 통과 시 GUI 실행
 ```
 
-진단에서 다음이 모두 `OK`여야 합니다.
+진단에서 확인하는 것:
 
-- Python **3.12 이상**
-- 표준 모듈 (`json`, `sqlite3`, `subprocess`, `dataclasses`, `uuid`, `argparse`, `threading`)
-- PyQt5 import
-- 데이터 디렉터리 쓰기 권한
+| 항목 | 종합 판정 반영 |
+|---|---|
+| Python **3.12 이상** | 반영 |
+| 표준 모듈 (`json`, `sqlite3`, `subprocess`, `dataclasses`, `uuid`, `argparse`, `threading`) | 반영 |
+| 데이터 디렉터리 쓰기 권한 | 반영 (**미지정은 정상** — GUI가 최초 실행 때 묻습니다) |
+| PyQt5 import | **반영 안 함** — 없어도 수집 전용 CLI는 동작하므로 |
+
+`종합 결과: OK`면 준비된 것입니다. PyQt5가 없으면 종합은 `OK`라도 별도 줄로
+"GUI는 실행할 수 없습니다"라고 표시되니 그 줄을 꼭 확인하세요.
+
+GUI가 필요한데 PyQt5가 없다면, 그 Python 설치에 PyQt5가 없다는 뜻입니다.
+폐쇄망이라 앱이 대신 설치할 수 없으므로 **PyQt5가 들어 있는 Python 설치를
+찾아 `STORAGE_MANAGER_PYTHON_BIN`을 그쪽으로 다시 지정**해야 합니다.
 
 GUI가 열리면 계정이 없을 때 **시작 안내**가 뜹니다. `계정 등록하기`를 눌러
 계정명과 경로를 넣으세요 (예: `project_a` / `/user/project_a`).
@@ -234,7 +243,8 @@ PIN은 **화면 노출 제한**이지 보안 경계가 아닙니다 — 검색 D
 | `STORAGE_MANAGER_PYTHON_BIN이 설정되지 않았습니다` | 3단계 환경변수 지정 |
 | `지정한 Python 실행 파일을 실행할 수 없습니다` | 경로가 prefix가 아닌 `bin/python3`인지, 실행 권한이 있는지 |
 | 진단에서 Python 버전 FAIL | 3.12 이상 경로인지 (`$STORAGE_MANAGER_PYTHON_BIN -V`) |
-| PyQt5 사용 불가 | 해당 Python 설치에 PyQt5가 있는지 (`$STORAGE_MANAGER_PYTHON_BIN -c "from PyQt5 import QtWidgets"`) |
+| PyQt5 사용 불가 / GUI가 안 뜸 | 해당 Python 설치에 PyQt5가 있는지 (`$STORAGE_MANAGER_PYTHON_BIN -c "from PyQt5 import QtWidgets"`). 없으면 PyQt5가 있는 Python으로 `STORAGE_MANAGER_PYTHON_BIN`을 바꿔 지정 |
+| 진단에 `데이터 디렉터리: 미지정` | 정상입니다. GUI가 최초 실행 때 물어봅니다 (cron을 쓸 거면 미리 지정 필요) |
 | inode가 `확인불가` | 일부 파일시스템(NFS 등)이 inode를 보고하지 않음 — 정상 |
 | cron이 안 도는 것 같음 | `crontab -l`, `<data_dir>/logs/*.log` 확인 |
 | 야간 스캔이 `paused` | 정상 — 06:00 시간창 종료로 안전 정지, 다음 밤에 이어서 진행 |

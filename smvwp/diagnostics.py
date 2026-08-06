@@ -65,7 +65,11 @@ def check_pyqt5() -> dict:
 
 def check_data_dir(data_dir: Optional[Path]) -> dict:
     if data_dir is None:
-        return {"configured": False, "ok": False, "path": None, "error": "데이터 디렉터리가 지정되지 않았습니다"}
+        # 미지정은 실패가 아니다. GUI가 최초 실행 때 한 번 물어보도록 설계했고,
+        # 설치 중 --diagnose를 돌리는 시점에는 아직 안 정한 것이 정상이다.
+        # 여기서 FAIL을 내면 정상 설치 중인 사용자가 뭔가 잘못된 줄 안다.
+        # (cron은 이야기가 다르지만, 그건 setup_cron.csh가 따로 막는다.)
+        return {"configured": False, "ok": True, "path": None, "error": None}
     try:
         paths.ensure_writable(data_dir)
     except paths.DataDirError as exc:
@@ -117,12 +121,22 @@ def format_report(result: dict) -> str:
         lines.append(f"PyQt5: 사용 불가 ({pyqt5.get('error')})")
     data_dir = result["data_dir"]
     if not data_dir["configured"]:
-        lines.append("데이터 디렉터리: 미지정 (최초 실행 시 GUI에서 지정 필요)")
+        lines.append("데이터 디렉터리: 미지정 (정상 - 최초 실행 시 GUI에서 지정합니다)")
     elif data_dir["ok"]:
         lines.append(f"데이터 디렉터리: {data_dir['path']} - 쓰기 OK")
     else:
         lines.append(f"데이터 디렉터리: {data_dir['path']} - 오류: {data_dir['error']}")
+
     lines.append(f"종합 결과: {'OK' if result['ok'] else 'FAIL'}")
+
+    # PyQt5는 종합 판정에 넣지 않는다 (수집 전용 CLI는 PyQt5 없이도 동작해야
+    # 하므로). 다만 그대로 두면 "PyQt5 사용 불가 + 종합 OK"가 나란히 찍혀
+    # 모순처럼 보이므로, 무엇이 되고 무엇이 안 되는지 한 줄로 못박는다.
+    if not pyqt5.get("skipped") and not pyqt5.get("available"):
+        lines.append(
+            "  └ 단, PyQt5가 없어 GUI는 실행할 수 없습니다. "
+            "수집 전용 CLI(collector_cli.py / nightly_scan_cli.py)는 사용 가능합니다."
+        )
     return "\n".join(lines)
 
 
