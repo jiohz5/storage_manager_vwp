@@ -439,6 +439,9 @@ class AccountScanSnapshot:
     last_activity_completed_at: Optional[str]
     pending_baseline_count: int
     pending_activity_count: int
+    # 권한 등으로 일부만 읽어 실제보다 작게 측정된 경로들. 비어 있지 않으면
+    # 화면에 알려야 한다 - 모르고 보면 증가량을 잘못 해석하게 된다.
+    partial_paths: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -499,6 +502,11 @@ def get_status_snapshot(
                     last_activity_completed_at=state.last_activity_completed_at,
                     pending_baseline_count=pending_baseline_count,
                     pending_activity_count=pending_activity_count,
+                    partial_paths=(
+                        scan_store.partial_paths(conn, account.account_id, current_gen)
+                        if current_gen
+                        else []
+                    ),
                 )
             )
     finally:

@@ -108,6 +108,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(비교할 이전 세대가 없어 증감은 다음 스캔부터 표시됩니다){activity}"
         ),
         "scan.activity_note": " · 최근 변경 파일 {count:,}개",
+        "scan.partial_warning": (
+            "⚠ 경로 {count}곳은 읽을 수 없는 하위 디렉터리가 있어 실제보다 작게 "
+            "측정되었습니다 (권한 부족). 증가량도 그만큼 축소될 수 있습니다."
+        ),
         "scan.new_path": "신규 (이전 세대에 없음)",
         "scan.no_change": "변화 없음",
         "scan.confirm_title": "상세 스캔 실행",
@@ -316,6 +320,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(no previous generation to compare, deltas appear after the next scan){activity}"
         ),
         "scan.activity_note": " - {count:,} changed file(s) recently",
+        "scan.partial_warning": (
+            "! {count} path(s) contain unreadable subdirectories, so their sizes are "
+            "under-measured (insufficient permissions). Growth figures may be understated."
+        ),
         "scan.new_path": "New (absent in previous generation)",
         "scan.no_change": "No change",
         "scan.confirm_title": "Run detail scan",

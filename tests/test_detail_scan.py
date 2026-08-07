@@ -109,3 +109,92 @@ class ProcessOneCheckpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PermissionDeniedTests(unittest.TestCase):
+    """관리자가 아닌 사용자를 위한 부분 측정 처리.
+
+    남의 프로젝트 계정을 모니터링할 때 읽을 수 없는 하위 디렉터리는 예외가
+    아니라 일상이다. `du`는 그런 디렉터리만 stderr로 알리고 나머지는 계속
+    합산한 뒤 exit 1로 끝내므로, 여기서 결과를 통째로 버리면 사실상 모든
+    계정이 실패로 기록되어 기준선이 영영 만들어지지 않는다.
+    """
+
+    def _denied(self, path, size_kb=1234):
+        return support.completed(
+            ["du", "-sk", "--", path],
+            stdout=f"{size_kb}\t{path}\n",
+            stderr=f"du: cannot read directory '{path}/private': Permission denied\n",
+            returncode=1,
+        )
+
+    def test_partial_result_is_kept_not_discarded(self):
+        with patch("smvwp.detail_scan.subprocess.run", return_value=self._denied("/acct/a")):
+            outcome = detail_scan.run_du("/acct/a", 60)
+
+        self.assertTrue(outcome.ok)
+        self.assertEqual(outcome.size_kb, 1234)
+        self.assertTrue(outcome.partial)
+        self.assertIn("Permission denied", outcome.error_message)
+
+    def test_full_success_is_not_marked_partial(self):
+        with patch(
+            "smvwp.detail_scan.subprocess.run",
+            return_value=support.completed(["du"], stdout="42\t/acct/a\n"),
+        ):
+            outcome = detail_scan.run_du("/acct/a", 60)
+
+        self.assertTrue(outcome.ok)
+        self.assertFalse(outcome.partial)
+        self.assertIsNone(outcome.error_message)
+
+    def test_no_usable_total_is_still_an_error(self):
+        """총계조차 못 얻으면 그건 진짜 실패다."""
+
+        with patch(
+            "smvwp.detail_scan.subprocess.run",
+            return_value=support.completed(
+                ["du"], stdout="", stderr="du: cannot access '/acct/a'\n", returncode=1
+            ),
+        ):
+            outcome = detail_scan.run_du("/acct/a", 60)
+
+        self.assertFalse(outcome.ok)
+        self.assertIsNone(outcome.size_kb)
+
+    def test_checkpoint_records_size_and_partial_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = scan_store.connect(Path(tmp) / "data")
+            try:
+                scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/acct/a"])
+                checkpoint = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+                with patch(
+                    "smvwp.detail_scan.subprocess.run", return_value=self._denied("/acct/a")
+                ):
+                    status = detail_scan.process_one_checkpoint(conn, checkpoint, 60)
+
+                self.assertEqual(status, scan_store.STATUS_DONE)
+                self.assertEqual(
+                    scan_store.partial_paths(conn, "acct-1", 1), ["/acct/a"]
+                )
+                row = conn.execute(
+                    "SELECT size_kb FROM scan_checkpoints WHERE id = ?", (checkpoint["id"],)
+                ).fetchone()
+                self.assertEqual(row["size_kb"], 1234)
+            finally:
+                conn.close()
+
+    def test_fully_readable_account_reports_no_partial_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = scan_store.connect(Path(tmp) / "data")
+            try:
+                scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/acct/a"])
+                checkpoint = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+                with patch(
+                    "smvwp.detail_scan.subprocess.run",
+                    return_value=support.completed(["du"], stdout="42\t/acct/a\n"),
+                ):
+                    detail_scan.process_one_checkpoint(conn, checkpoint, 60)
+                self.assertEqual(scan_store.partial_paths(conn, "acct-1", 1), [])
+            finally:
+                conn.close()

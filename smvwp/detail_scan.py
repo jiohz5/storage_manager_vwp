@@ -32,6 +32,9 @@ class DuOutcome:
     size_kb: Optional[int] = None
     timed_out: bool = False
     error_message: Optional[str] = None
+    # 일부 하위 디렉터리를 못 읽어 실제보다 작게 측정된 값인지. 관리자가 아닌
+    # 사용자가 남의 프로젝트 계정을 볼 때는 이쪽이 오히려 일반적이다.
+    partial: bool = False
 
 
 _priority_prefix_cache: Optional[List[str]] = None
@@ -68,18 +71,32 @@ def run_du(path: str, timeout_seconds: int) -> DuOutcome:
     except FileNotFoundError:
         return DuOutcome(ok=False, error_message="du 명령을 찾을 수 없습니다")
 
-    if proc.returncode != 0:
+    # du는 읽을 수 없는 하위 디렉터리를 만나면 그것만 stderr로 알리고 나머지는
+    # 계속 합산한 뒤 exit 1로 끝낸다. 여기서 결과를 통째로 버리면, 관리자가
+    # 아닌 사용자가 남의 프로젝트 계정을 볼 때 사실상 모든 계정이 실패로
+    # 기록되어 기준선이 영영 만들어지지 않는다. stdout에 총계가 있으면 부분
+    # 결과로 받아들이고 `partial`로 표시한다 (activity_scan의 find 처리와
+    # 같은 원칙).
+    line = (proc.stdout or "").strip().splitlines()[-1] if (proc.stdout or "").strip() else ""
+    parts = line.split(None, 1)
+    size_kb: Optional[int] = None
+    if parts:
+        try:
+            size_kb = int(parts[0])
+        except ValueError:
+            size_kb = None
+
+    if size_kb is None:
         message = (proc.stderr or proc.stdout or "").strip() or f"du exit={proc.returncode}"
         return DuOutcome(ok=False, error_message=message)
 
-    line = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout.strip() else ""
-    parts = line.split(None, 1)
-    if not parts:
-        return DuOutcome(ok=False, error_message=f"du 출력을 해석할 수 없습니다: {proc.stdout!r}")
-    try:
-        size_kb = int(parts[0])
-    except ValueError:
-        return DuOutcome(ok=False, error_message=f"du 출력 숫자 파싱 실패: {line!r}")
+    if proc.returncode != 0:
+        return DuOutcome(
+            ok=True,
+            size_kb=size_kb,
+            partial=True,
+            error_message=(proc.stderr or "").strip() or f"du exit={proc.returncode}",
+        )
     return DuOutcome(ok=True, size_kb=size_kb)
 
 
@@ -102,7 +119,14 @@ def process_one_checkpoint(conn, checkpoint, timeout_seconds: int) -> str:
 
     outcome = run_du(checkpoint["path"], timeout_seconds)
     if outcome.ok:
-        scan_store.mark_done(conn, checkpoint["id"], size_kb=outcome.size_kb)
+        # 부분 측정이면 크기는 살리되 사유를 함께 남긴다 - 값이 실제보다 작다는
+        # 사실을 사용자가 알아야 증가량 해석을 그르치지 않는다.
+        scan_store.mark_done(
+            conn,
+            checkpoint["id"],
+            size_kb=outcome.size_kb,
+            error_message=outcome.error_message if outcome.partial else None,
+        )
         return scan_store.STATUS_DONE
 
     if outcome.timed_out:

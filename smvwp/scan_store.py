@@ -272,12 +272,35 @@ def has_pending(conn: sqlite3.Connection, account_id: str, kind: str, generation
     return next_pending(conn, account_id, kind, generation) is not None
 
 
-def mark_done(conn: sqlite3.Connection, checkpoint_id: int, *, size_kb: int = None, changed_count: int = None) -> None:
+def mark_done(
+    conn: sqlite3.Connection,
+    checkpoint_id: int,
+    *,
+    size_kb: int = None,
+    changed_count: int = None,
+    error_message: str = None,
+) -> None:
+    """완료 처리. `error_message`는 "값은 얻었지만 일부만 읽었다"는 부분 측정
+    사유를 남길 때 쓴다 (권한 없는 하위 디렉터리 등)."""
+
     conn.execute(
-        "UPDATE scan_checkpoints SET status = 'done', size_kb = ?, changed_count = ?, scanned_at = ? WHERE id = ?",
-        (size_kb, changed_count, utc_now_iso(), checkpoint_id),
+        "UPDATE scan_checkpoints SET status = 'done', size_kb = ?, changed_count = ?, "
+        "error_message = ?, scanned_at = ? WHERE id = ?",
+        (size_kb, changed_count, error_message, utc_now_iso(), checkpoint_id),
     )
     conn.commit()
+
+
+def partial_paths(conn: sqlite3.Connection, account_id: str, generation: int) -> List[str]:
+    """이번 세대에서 일부만 읽어 실제보다 작게 측정된 경로들."""
+
+    rows = conn.execute(
+        "SELECT path FROM scan_checkpoints WHERE account_id = ? AND kind = 'baseline' "
+        "AND generation = ? AND status = 'done' AND error_message IS NOT NULL "
+        "ORDER BY path",
+        (account_id, generation),
+    ).fetchall()
+    return [row["path"] for row in rows]
 
 
 def mark_error(conn: sqlite3.Connection, checkpoint_id: int, message: str) -> None:

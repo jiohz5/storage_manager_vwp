@@ -486,6 +486,12 @@ class MainWindow(QMainWindow):
         activity_note = ""
         if entry.last_activity_total_changed is not None:
             activity_note = i18n.t("scan.activity_note", count=entry.last_activity_total_changed)
+        # 권한 부족으로 축소 측정된 경로가 있으면 반드시 알린다 - 모르고 보면
+        # "안 늘었네"로 잘못 읽는다.
+        if entry.partial_paths:
+            activity_note += "\n" + i18n.t(
+                "scan.partial_warning", count=len(entry.partial_paths)
+            )
 
         if entry.growth:
             self.growth_caption.setText(
