@@ -76,6 +76,21 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.collected": "수집 완료 ({count}개 계정)",
         "dashboard.collected_with_failures": "수집 완료 ({count}개 계정, 실패 {failed}건)",
         "dashboard.collect_error": "수집 오류: {message}",
+        # -- 수집 신선도 --------------------------------------------
+        "freshness.just_now": "방금",
+        "freshness.minutes_ago": "{minutes}분 전",
+        "freshness.hours_ago": "{hours}시간 전",
+        "freshness.days_ago": "{days}일 전",
+        "freshness.never": "수집된 적 없음",
+        "freshness.stale_summary": "⚠ 계정 {count}개의 수집이 멈춰 있습니다 (가장 오래된 것: {age})",
+        "freshness.gappy_summary": (
+            "⚠ 계정 {count}개는 최근 {hours}시간 중 {coverage}%만 수집됐습니다. "
+            "cron이 돌지 않아 GUI를 열 때만 수집되고 있을 수 있습니다 "
+            "(확인: crontab -l)"
+        ),
+        "freshness.notify_stale": (
+            "[수집 지연] {account} - 마지막 수집이 {age}입니다. 수집기가 멈췄는지 확인하세요."
+        ),
         # -- 메뉴 --------------------------------------------------
         "menu.language": "언어",
         "menu.file": "파일",
@@ -288,6 +303,22 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.collected": "Collection done ({count} accounts)",
         "dashboard.collected_with_failures": "Collection done ({count} accounts, {failed} failed)",
         "dashboard.collect_error": "Collection error: {message}",
+        # -- Collection freshness ----------------------------------
+        "freshness.just_now": "just now",
+        "freshness.minutes_ago": "{minutes} min ago",
+        "freshness.hours_ago": "{hours} h ago",
+        "freshness.days_ago": "{days} d ago",
+        "freshness.never": "never collected",
+        "freshness.stale_summary": "! Collection stopped for {count} account(s) (oldest: {age})",
+        "freshness.gappy_summary": (
+            "! {count} account(s) collected only {coverage}% of expected samples in the "
+            "last {hours}h. cron may not be running, so data is only collected when the "
+            "GUI is open (check: crontab -l)"
+        ),
+        "freshness.notify_stale": (
+            "[Collection stalled] {account} - last collected {age}. Check whether the "
+            "collector is still running."
+        ),
         # -- Menu --------------------------------------------------
         "menu.language": "Language",
         "menu.file": "File",

@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import config as config_module
-from .. import diagnostics, forecast_notify, i18n, nightly_scan, quota, store, tiers
+from .. import diagnostics, forecast_notify, freshness, i18n, nightly_scan, quota, store, tiers
 from ..scheduler import CollectorScheduler, NightlyScanWorker
 from . import widgets
 from .account_dialog import AccountDialog
@@ -85,12 +85,18 @@ class MainWindow(QMainWindow):
         self._config = config
         self._latest_samples: Dict[str, store.SampleRecord] = {}
         self._forecasts: Dict[str, object] = {}
+        self._freshness: Dict[str, object] = {}
         self._scan_snapshot = None
         i18n.set_language(config.settings.language)
 
         self.resize(1040, 640)
         self._build_ui()
         self.retranslate()
+
+        # 수집 신선도는 **첫 수집을 돌리기 전에** 판정해야 한다. GUI를 열면
+        # 스케줄러가 곧바로 한 번 수집하므로, 그 뒤에 보면 늘 "방금 수집됨"이
+        # 되어 "그동안 cron이 안 돌았다"는 사실이 가려진다.
+        self._freshness = self._evaluate_freshness()
         self._refresh_table_from_store()
 
         self._scheduler = CollectorScheduler(
@@ -283,6 +289,52 @@ class MainWindow(QMainWindow):
         self._refresh_forecasts()
         self._render_table(latest)
 
+    def _evaluate_freshness(self) -> Dict[str, object]:
+        """수집 상태를 판정한다 (읽기 전용).
+
+        판정 실패가 대시보드를 못 뜨게 하면 안 되므로 예외는 삼키고 빈 결과로
+        둔다 - 그러면 경고만 안 뜰 뿐 나머지는 정상 동작한다."""
+
+        if not self._config.settings.freshness_enabled:
+            return {}
+        try:
+            return {
+                item.account_id: item
+                for item in freshness.evaluate_all(self._data_dir, self._config)
+            }
+        except Exception:  # pragma: no cover - 방어적 처리
+            return {}
+
+    def _freshness_warning(self) -> Optional[str]:
+        """요약줄에 띄울 수집 경고. 없으면 None."""
+
+        problems = [f for f in self._freshness.values() if f.needs_attention]
+        if not problems:
+            return None
+
+        stalled = [f for f in problems if f.status in (freshness.STATUS_STALE, freshness.STATUS_NEVER)]
+        if stalled:
+            oldest = max(
+                (f for f in stalled if f.age_seconds is not None),
+                key=lambda f: f.age_seconds,
+                default=None,
+            )
+            age_text = (
+                freshness.format_age(oldest.age_seconds)
+                if oldest is not None
+                else i18n.t("freshness.never")
+            )
+            return i18n.t("freshness.stale_summary", count=len(stalled), age=age_text)
+
+        gappy = [f for f in problems if f.status == freshness.STATUS_GAPPY]
+        worst = min(gappy, key=lambda f: f.coverage_pct or 0)
+        return i18n.t(
+            "freshness.gappy_summary",
+            count=len(gappy),
+            coverage=int(worst.coverage_pct or 0),
+            hours=self._config.settings.freshness_window_hours,
+        )
+
     def _refresh_forecasts(self) -> None:
         """FULL 예측을 다시 계산한다 (읽기 전용).
 
@@ -345,7 +397,18 @@ class MainWindow(QMainWindow):
                     forecast_item.setForeground(QColor(tiers.color(imminent_tier)))
             self.table.setItem(row, COL_FORECAST, forecast_item)
 
-            self.table.setItem(row, COL_TIME, QTableWidgetItem(sample.collected_at))
+            # 절대 시각보다 "얼마나 오래됐나"가 판단에 직접 쓰인다. 원본
+            # 타임스탬프는 툴팁에 남긴다.
+            status_info = self._freshness.get(account.account_id)
+            time_item = QTableWidgetItem(
+                freshness.format_age(status_info.age_seconds)
+                if status_info is not None and status_info.age_seconds is not None
+                else sample.collected_at
+            )
+            time_item.setToolTip(sample.collected_at)
+            if status_info is not None and status_info.needs_attention:
+                time_item.setForeground(QColor(tiers.color(tiers.ALERT)))
+            self.table.setItem(row, COL_TIME, time_item)
             status_text = (
                 i18n.t("dashboard.collect_ok")
                 if sample.ok
@@ -379,6 +442,15 @@ class MainWindow(QMainWindow):
             text = i18n.t(
                 "dashboard.warn_summary", count=warn_or_worse_count, worst=worst_account_label
             )
+
+        # 수집이 멈춰 있으면 사용률 요약보다 그게 먼저다 - 멈춘 데이터를 보고
+        # "정상"이라고 판단하는 것이 가장 위험하다.
+        warning = self._freshness_warning()
+        if warning:
+            text = f"{warning}\n{text}"
+            color = tiers.color(tiers.ALERT)
+            self.summary_label.setWordWrap(True)
+
         self.summary_label.setText(text)
         self.summary_label.setStyleSheet(f"{SUMMARY_STYLE} color: {color};")
 

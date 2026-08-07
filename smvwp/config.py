@@ -112,6 +112,14 @@ class Settings:
     # 경로별 증감 이력 - 이상탐지는 아직 없지만 나중에 붙일 수 있게 숫자만
     # 축적한다. 행이 작아 기준선 세대보다 훨씬 오래 남길 수 있다.
     growth_history_keep_generations: int = 60
+    # 수집 신선도 감시. cron이 조용히 안 도는 상황을 잡기 위한 것이라 판정을
+    # 넉넉하게 잡는다 - 한두 번 밀린 것으로 경고하면 경고가 일상이 되어
+    # 아무도 안 본다.
+    freshness_enabled: bool = True
+    freshness_stale_multiplier: int = 4      # 최신 표본이 간격의 N배보다 오래되면 지연
+    freshness_window_hours: int = 24         # 커버리지를 볼 창
+    freshness_min_coverage_pct: int = 50     # 이 미만이면 수집기가 안 도는 것으로 의심
+    freshness_min_expected_samples: int = 8  # 창 안 기대 표본이 이보다 적으면 판정 보류
 
 
 @dataclass
@@ -215,6 +223,14 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("capacity_surge_min_kb는 음수일 수 없습니다")
     if settings.growth_history_keep_generations < 1:
         raise ConfigError("growth_history_keep_generations는 1 이상이어야 합니다")
+    if settings.freshness_stale_multiplier < 2:
+        raise ConfigError("freshness_stale_multiplier는 2 이상이어야 합니다 (cron 지연 여유)")
+    if settings.freshness_window_hours < 1:
+        raise ConfigError("freshness_window_hours는 1 이상이어야 합니다")
+    if not 0 <= settings.freshness_min_coverage_pct <= 100:
+        raise ConfigError("freshness_min_coverage_pct는 0~100이어야 합니다")
+    if settings.freshness_min_expected_samples < 1:
+        raise ConfigError("freshness_min_expected_samples는 1 이상이어야 합니다")
     return settings
 
 
