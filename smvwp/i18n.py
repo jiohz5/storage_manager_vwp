@@ -172,6 +172,23 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.suffix.days": " 일",
         "accounts.none_selected_title": "계정 없음",
         "accounts.none_selected_body": "먼저 계정을 등록하세요.",
+        # -- 읽기 가능 범위 -----------------------------------------
+        "readability.title": "읽기 권한 확인",
+        "readability.all_ok": "확인한 디렉터리 {checked}곳을 모두 읽을 수 있습니다.",
+        "readability.all_ok_partial": (
+            "확인한 디렉터리 {checked}곳은 모두 읽을 수 있습니다 (일부만 표본 확인)."
+        ),
+        "readability.some_unreadable": (
+            "확인한 디렉터리 {checked}곳 중 {unreadable}곳을 읽을 수 없습니다. "
+            "그 하위는 용량 측정에서 빠지므로 크기가 실제보다 작게 나옵니다."
+        ),
+        "readability.truncated_note": "(경로가 커서 일부만 표본 확인했습니다.)",
+        "readability.more": "... 외 {count}곳",
+        "readability.root_unreadable": "이 경로 자체를 읽을 수 없습니다.",
+        "readability.register_anyway": (
+            "그래도 등록할까요? df 기반 사용률과 알림은 정상 동작하며, "
+            "상세 스캔의 크기만 하한선으로 보시면 됩니다."
+        ),
         # -- 알림 --------------------------------------------------
         "notify.mode.outbox": "파일 outbox",
         "notify.mode.command": "사내 command (stdin)",
@@ -400,6 +417,23 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.suffix.days": " days",
         "accounts.none_selected_title": "No accounts",
         "accounts.none_selected_body": "Register an account first.",
+        # -- Readability -------------------------------------------
+        "readability.title": "Read permission check",
+        "readability.all_ok": "All {checked} directories checked are readable.",
+        "readability.all_ok_partial": (
+            "All {checked} directories checked are readable (sampled subset only)."
+        ),
+        "readability.some_unreadable": (
+            "{unreadable} of {checked} directories checked are not readable. "
+            "Their contents are excluded from size measurement, so sizes will be understated."
+        ),
+        "readability.truncated_note": "(Large path - only a sample was checked.)",
+        "readability.more": "... and {count} more",
+        "readability.root_unreadable": "This path itself cannot be read.",
+        "readability.register_anyway": (
+            "Register anyway? df-based usage and alerts still work correctly; "
+            "only detail-scan sizes should be read as a lower bound."
+        ),
         # -- Notifications -----------------------------------------
         "notify.mode.outbox": "File outbox",
         "notify.mode.command": "Internal command (stdin)",

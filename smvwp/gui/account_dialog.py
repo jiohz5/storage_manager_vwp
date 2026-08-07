@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import config as config_module
-from .. import i18n
+from .. import i18n, readability
 
 
 class AccountDialog(QDialog):
@@ -165,6 +165,12 @@ class AccountDialog(QDialog):
                 i18n.t("accounts.input_required_body"),
             )
             return
+        # 읽기 권한은 등록하는 이 자리에서 알려준다. 최상위만 R_OK로 보고
+        # 넘기면, 하위가 막혀 크기가 축소 측정된다는 사실이 며칠 뒤 야간 스캔
+        # 이후에야 드러난다.
+        if not self._confirm_readability(path):
+            return
+
         try:
             config_module.add_account(self._config, name, path, data_dir=self._data_dir)
         except config_module.ConfigError as exc:
@@ -173,6 +179,31 @@ class AccountDialog(QDialog):
         self.name_edit.clear()
         self.path_edit.clear()
         self._reload_list()
+
+    def _confirm_readability(self, path: str) -> bool:
+        """읽기 권한을 표본 조사하고, 문제가 있으면 계속할지 묻는다.
+
+        막힌 하위가 있어도 등록 자체를 막지는 않는다 - df 기반 사용률과 알림은
+        정상 동작하므로 여전히 쓸모가 있고, 비관리자에게는 그게 유일한 선택지일
+        수 있다. 다만 무엇이 부정확해지는지는 미리 알아야 한다.
+        """
+
+        try:
+            result = readability.probe(Path(path).expanduser())
+        except OSError:
+            return True  # 조사 자체가 실패하면 기존 검증에 맡긴다
+
+        if not result.has_findings:
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            i18n.t("readability.title"),
+            f"{readability.describe(result)}\n\n{i18n.t('readability.register_anyway')}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        return reply == QMessageBox.Yes
 
     def _remove_selected(self) -> None:
         item = self.account_list.currentItem()

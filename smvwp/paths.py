@@ -19,8 +19,10 @@
 from __future__ import annotations
 
 import os
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 
 class DataDirError(Exception):
@@ -94,6 +96,92 @@ def ensure_writable(data_dir: Path) -> None:
         probe.unlink()
     except OSError as exc:
         raise DataDirError(f"데이터 디렉터리에 쓸 수 없습니다: {data_dir}: {exc}") from exc
+
+
+@dataclass
+class LocationInfo:
+    """데이터 경로 후보 하나에 대한 판단 재료."""
+
+    path: Path
+    exists: bool
+    writable: bool
+    free_bytes: Optional[int]
+    total_bytes: Optional[int]
+    error: Optional[str] = None
+
+    @property
+    def usable(self) -> bool:
+        return self.writable and self.error is None
+
+
+def describe_location(path: Path) -> LocationInfo:
+    """경로의 여유 공간과 쓰기 가능 여부를 조사한다 (실제로 쓰지는 않는다).
+
+    아직 없는 경로면 만들 수 있는지를 가장 가까운 상위 디렉터리로 판단한다 -
+    사용자가 `~/storage-manager-data`처럼 아직 없는 경로를 고르는 것이 정상
+    흐름이기 때문."""
+
+    probe_target = path
+    while not probe_target.exists() and probe_target != probe_target.parent:
+        probe_target = probe_target.parent
+
+    free_bytes = total_bytes = None
+    error = None
+    try:
+        usage = shutil.disk_usage(str(probe_target))
+        free_bytes, total_bytes = usage.free, usage.total
+    except OSError as exc:
+        error = str(exc)
+
+    writable = os.access(str(probe_target), os.W_OK) if probe_target.exists() else False
+
+    return LocationInfo(
+        path=path,
+        exists=path.exists(),
+        writable=writable,
+        free_bytes=free_bytes,
+        total_bytes=total_bytes,
+        error=error,
+    )
+
+
+def suggest_data_dirs(home: Optional[Path] = None) -> List[LocationInfo]:
+    """데이터 경로 후보를 여유 공간이 많은 순으로 제안한다.
+
+    폐쇄망에서 관리자가 아니면 쓸 수 있는 곳이 몇 군데 없다. 시스템 경로를
+    추측해 늘어놓기보다, 확실히 사용자 것인 위치만 제시하고 각각의 여유
+    공간을 보여줘서 **사용자가 판단하게** 한다. 모니터링 대상 계정 내부는
+    읽기 전용 원칙상 후보가 될 수 없으므로 아예 제안하지 않는다.
+    """
+
+    home = home if home is not None else Path.home()
+    candidates = [home / "storage-manager-data"]
+
+    # 환경변수로 이미 정해 뒀다면 그것을 첫 후보로 올린다.
+    env_value = os.environ.get("STORAGE_MANAGER_DATA_DIR")
+    if env_value:
+        candidates.insert(0, Path(env_value).expanduser())
+
+    seen = set()
+    results: List[LocationInfo] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(describe_location(candidate))
+    return results
+
+
+def format_bytes(size_bytes: Optional[int]) -> str:
+    if size_bytes is None:
+        return "-"
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if abs(value) < 1024 or unit == "PB":
+            return f"{int(value):,} B" if unit == "B" else f"{value:,.1f} {unit}"
+        value /= 1024
+    return f"{value:,.1f} PB"  # pragma: no cover
 
 
 def assert_not_inside_monitored_paths(data_dir: Path, monitored_paths) -> None:

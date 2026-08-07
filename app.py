@@ -21,6 +21,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from smvwp import config as config_module  # noqa: E402
 from smvwp import paths  # noqa: E402
 
+# 수집 이력·보고서·알림을 담기에 최소한 이 정도는 있어야 한다는 기준. 여유가
+# 이보다 적으면 경고한다 (막지는 않는다 - 폐쇄망에서 선택지가 적을 수 있다).
+MIN_RECOMMENDED_FREE_BYTES = 500 * 1024 * 1024  # 500MB
+
+
+def _suggestion_text() -> str:
+    """쓸 수 있는 후보와 여유 공간을 보여준다.
+
+    폐쇄망에서 관리자가 아니면 데이터를 둘 곳이 몇 군데 없다. 빈 파일 선택창만
+    띄우면 어디를 골라야 할지 알 수 없으므로, 확실히 사용자 것인 위치와 그
+    여유 공간을 먼저 보여주고 판단하게 한다."""
+
+    lines = []
+    for info in paths.suggest_data_dirs():
+        free = paths.format_bytes(info.free_bytes)
+        state = "쓰기 가능" if info.usable else "쓰기 불가"
+        lines.append(f"  {info.path}\n      여유 {free} · {state}")
+    if not lines:
+        return ""
+    return "\n\n쓸 수 있을 만한 위치:\n" + "\n".join(lines)
+
 
 def _prompt_for_data_dir_gui() -> Path:
     from PyQt5.QtWidgets import QApplication, QFileDialog, QMessageBox
@@ -30,12 +51,26 @@ def _prompt_for_data_dir_gui() -> Path:
         None,
         "데이터 디렉터리 지정",
         "Storage Manager VWP를 처음 실행합니다.\n"
-        "수집 데이터를 저장할, 모니터링 대상과는 분리된 쓰기 가능한 디렉터리를 선택하세요.",
+        "수집 데이터를 저장할, 모니터링 대상과는 분리된 쓰기 가능한 디렉터리를 선택하세요.\n"
+        "모니터링 대상이 가득 차도 기록할 수 있도록 다른 파일시스템을 권장합니다."
+        + _suggestion_text(),
     )
     selected = QFileDialog.getExistingDirectory(None, "데이터 디렉터리 선택")
     if not selected:
         QMessageBox.critical(None, "데이터 디렉터리 필요", "데이터 디렉터리를 선택하지 않아 종료합니다.")
         raise SystemExit(2)
+
+    # 고른 곳의 여유 공간을 바로 확인해 준다 - 나중에 가득 차서 수집이 멈추는
+    # 것보다 지금 아는 편이 낫다.
+    info = paths.describe_location(Path(selected))
+    if info.free_bytes is not None and info.free_bytes < MIN_RECOMMENDED_FREE_BYTES:
+        QMessageBox.warning(
+            None,
+            "여유 공간 부족",
+            f"선택한 위치의 여유 공간이 {paths.format_bytes(info.free_bytes)}뿐입니다.\n"
+            f"권장 최소는 {paths.format_bytes(MIN_RECOMMENDED_FREE_BYTES)}입니다.\n"
+            "공간이 부족하면 수집과 알림 기록이 멈출 수 있습니다.",
+        )
     return Path(selected)
 
 
