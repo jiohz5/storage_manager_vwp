@@ -46,6 +46,19 @@ LABELS = {
     UNKNOWN: "#757575",
 }
 
+# 표 행 배경에 쓸 옅은 색. 기준 색을 그대로 배경에 깔면 글자가 안 읽히므로
+# 같은 계열의 아주 옅은 톤을 따로 둔다.
+#
+# 정상 등급에 색을 주지 않는 것은 의도다. 계정 대부분이 정상인 것이 보통인데
+# 전부 칠하면 색이 배경 소음이 되어, 정작 문제 있는 행이 묻힌다. 색은 "눈이
+# 가야 할 곳"에만 쓴다.
+ROW_BACKGROUNDS = {
+    WARN: "#fff8e1",
+    ALERT: "#fff0e0",
+    EMERGENCY: "#ffebee",
+    FULL: "#f3e5f5",
+}
+
 WARN_THRESHOLD = 90
 ALERT_THRESHOLD = 95
 EMERGENCY_THRESHOLD = 98
@@ -96,6 +109,16 @@ def label(tier: str) -> str:
 
 def color(tier: str) -> str:
     return LABELS.get(tier, LABELS[UNKNOWN])
+
+
+def row_background(tier: str) -> Optional[str]:
+    """표 행 배경색. 정상·확인불가는 None (칠하지 않는다).
+
+    색은 등급을 전달하는 **유일한** 수단이 아니라 보조 수단이다. 등급 자체는
+    항상 텍스트 배지로도 보이므로(`display_text`), 색을 못 보는 환경에서도
+    정보가 사라지지 않는다."""
+
+    return ROW_BACKGROUNDS.get(tier)
 
 
 def display_text(tier: str, pct: Optional[float]) -> str:

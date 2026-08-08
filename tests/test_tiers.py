@@ -66,3 +66,53 @@ class TierDisplayTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RowBackgroundTests(unittest.TestCase):
+    """표 행 배경색.
+
+    색은 등급을 전달하는 유일한 수단이 아니라 보조 수단이다. 등급 자체는 항상
+    텍스트 배지로도 보이므로(display_text), 색을 못 보는 환경에서도 정보가
+    사라지지 않아야 한다.
+    """
+
+    def test_normal_is_not_painted(self):
+        """대부분의 계정이 정상인데 전부 칠하면 색이 배경 소음이 된다."""
+
+        self.assertIsNone(tiers.row_background(tiers.NORMAL))
+
+    def test_unknown_is_not_painted(self):
+        self.assertIsNone(tiers.row_background(tiers.UNKNOWN))
+
+    def test_warn_and_worse_are_painted(self):
+        for tier in (tiers.WARN, tiers.ALERT, tiers.EMERGENCY, tiers.FULL):
+            with self.subTest(tier=tier):
+                self.assertIsNotNone(tiers.row_background(tier))
+
+    def test_backgrounds_are_distinct(self):
+        painted = [
+            tiers.row_background(t)
+            for t in (tiers.WARN, tiers.ALERT, tiers.EMERGENCY, tiers.FULL)
+        ]
+        self.assertEqual(len(set(painted)), len(painted))
+
+    def test_backgrounds_are_light_enough_for_dark_text(self):
+        """옅은 톤이어야 검은 글자가 읽힌다 - 기준색을 그대로 깔면 안 된다."""
+
+        for tier in (tiers.WARN, tiers.ALERT, tiers.EMERGENCY, tiers.FULL):
+            value = tiers.row_background(tier).lstrip("#")
+            red, green, blue = (int(value[i : i + 2], 16) for i in (0, 2, 4))
+            # ITU-R BT.601 명도. 밝을수록 1에 가깝다.
+            luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+            with self.subTest(tier=tier):
+                self.assertGreater(luminance, 0.85)
+
+    def test_unknown_tier_string_is_safe(self):
+        self.assertIsNone(tiers.row_background("bogus"))
+
+    def test_label_still_carries_the_tier_without_color(self):
+        """색을 빼도 등급을 알 수 있어야 한다."""
+
+        for tier in (tiers.WARN, tiers.ALERT, tiers.EMERGENCY, tiers.FULL):
+            with self.subTest(tier=tier):
+                self.assertTrue(tiers.display_text(tier, 95.0).strip())

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -75,7 +75,48 @@ GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"
 # 스캔이 도는 동안 진행 상황(남은 체크포인트 수)을 주기적으로 다시 읽는 간격.
 SCAN_STATUS_REFRESH_MS = 5000
 
-SUMMARY_STYLE = "font-size: 14pt; font-weight: bold; padding: 6px;"
+# 요약 바는 글자만 물들이지 않고 배너로 만든다 - 창을 열자마자 시선이 먼저
+# 닿는 자리이므로, 상태가 색면으로 보이는 편이 판단이 빠르다.
+SUMMARY_STYLE = (
+    "font-size: 14pt; font-weight: bold; padding: 10px 12px;"
+    "border-radius: 6px; border: 1px solid {border}; background: {background}; color: {text};"
+)
+
+# 등급별 배너 배색 (배경, 테두리). 글자는 등급 기준색을 쓴다.
+BANNER_COLORS = {
+    tiers.NORMAL: ("#e8f5e9", "#a5d6a7"),
+    tiers.WARN: ("#fff8e1", "#ffe082"),
+    tiers.ALERT: ("#fff3e0", "#ffcc80"),
+    tiers.EMERGENCY: ("#ffebee", "#ef9a9a"),
+    tiers.FULL: ("#f3e5f5", "#ce93d8"),
+    tiers.UNKNOWN: ("#f5f5f5", "#e0e0e0"),
+}
+
+SECTION_TITLE_STYLE = (
+    "font-weight: bold; padding: 4px 0; color: #37474f;"
+    "border-bottom: 2px solid #cfd8dc;"
+)
+
+PRIMARY_BUTTON_STYLE = (
+    "QPushButton { background: #1565c0; color: white; border: none;"
+    " padding: 6px 14px; border-radius: 4px; font-weight: bold; }"
+    "QPushButton:hover { background: #1976d2; }"
+    "QPushButton:disabled { background: #b0bec5; color: #eceff1; }"
+)
+
+DANGER_BUTTON_STYLE = (
+    "QPushButton { background: #fff; color: #c62828; border: 1px solid #ef9a9a;"
+    " padding: 6px 14px; border-radius: 4px; }"
+    "QPushButton:hover { background: #ffebee; }"
+    "QPushButton:disabled { color: #bdbdbd; border-color: #e0e0e0; }"
+)
+
+TABLE_STYLE = (
+    "QTableWidget { gridline-color: #eceff1; selection-background-color: #e3f2fd;"
+    " selection-color: #0d47a1; }"
+    "QHeaderView::section { background: #eceff1; padding: 5px;"
+    " border: none; border-right: 1px solid #cfd8dc; font-weight: bold; color: #37474f; }"
+)
 
 
 class MainWindow(QMainWindow):
@@ -151,6 +192,9 @@ class MainWindow(QMainWindow):
 
         button_row = QHBoxLayout()
         self.collect_btn = QPushButton()
+        # 가장 자주 쓰는 동작 하나만 강조한다 - 전부 강조하면 아무것도 강조되지
+        # 않는다.
+        self.collect_btn.setStyleSheet(PRIMARY_BUTTON_STYLE)
         self.collect_btn.clicked.connect(self._trigger_now)
         self.accounts_btn = QPushButton()
         self.accounts_btn.clicked.connect(self._open_account_dialog)
@@ -175,6 +219,9 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setAlternatingRowColors(False)  # 등급 색과 겹치면 판독을 방해한다
+        self.table.setStyleSheet(TABLE_STYLE)
+        self.table.verticalHeader().setVisible(False)
         self.table.itemSelectionChanged.connect(self._refresh_growth_table)
         layout.addWidget(self.table, 3)
 
@@ -206,10 +253,13 @@ class MainWindow(QMainWindow):
 
         section = QFrame()
         section.setFrameShape(QFrame.StyledPanel)
+        section.setStyleSheet(
+            "QFrame { background: #fafafa; border: 1px solid #e0e0e0; border-radius: 6px; }"
+        )
         box = QVBoxLayout(section)
 
         self.scan_title_label = QLabel()
-        self.scan_title_label.setStyleSheet("font-weight: bold; padding-top: 2px;")
+        self.scan_title_label.setStyleSheet(SECTION_TITLE_STYLE)
         box.addWidget(self.scan_title_label)
 
         self.scan_status_label = QLabel()
@@ -221,6 +271,9 @@ class MainWindow(QMainWindow):
         self.scan_run_btn = QPushButton()
         self.scan_run_btn.clicked.connect(self._trigger_scan_now)
         self.scan_stop_btn = QPushButton()
+        # 중지는 되돌릴 수 없는 성격의 동작이라 색으로 구분해 둔다 (강제 종료는
+        # 아니지만, 실수로 누르면 진행 중인 밤을 날린다).
+        self.scan_stop_btn.setStyleSheet(DANGER_BUTTON_STYLE)
         self.scan_stop_btn.clicked.connect(self._request_scan_stop)
         scan_buttons.addWidget(self.scan_run_btn)
         scan_buttons.addWidget(self.scan_stop_btn)
@@ -416,6 +469,10 @@ class MainWindow(QMainWindow):
             )
             self.table.setItem(row, COL_STATUS, QTableWidgetItem(status_text))
 
+            # 주의 이상인 행만 옅게 칠한다. 정상까지 칠하면 색이 배경 소음이
+            # 되어 정작 문제 있는 행이 묻힌다.
+            self._tint_row(row, sample.overall_tier if sample.ok else tiers.UNKNOWN)
+
             if sample.ok:
                 if tiers.is_at_least(sample.overall_tier, "warn"):
                     warn_or_worse_count += 1
@@ -427,6 +484,21 @@ class MainWindow(QMainWindow):
 
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
 
+    def _tint_row(self, row: int, tier: str) -> None:
+        """행 배경을 등급 색으로 옅게 칠한다 (정상/확인불가는 칠하지 않음).
+
+        등급은 배지 텍스트로도 보이므로, 색을 못 보는 환경에서도 정보가
+        사라지지 않는다 - 색은 어디를 먼저 볼지 알려주는 보조 수단이다."""
+
+        background = tiers.row_background(tier)
+        if background is None:
+            return
+        brush = QBrush(QColor(background))
+        for column in range(self.table.columnCount()):
+            item = self.table.item(row, column)
+            if item is not None:
+                item.setBackground(brush)
+
     def _update_summary(
         self, warn_or_worse_count: int, worst_account_label: Optional[str], worst_tier: str
     ) -> None:
@@ -435,7 +507,7 @@ class MainWindow(QMainWindow):
             self.summary_label.setStyleSheet(SUMMARY_STYLE + " color: #757575;")
             return
 
-        color = tiers.color(worst_tier if warn_or_worse_count else tiers.NORMAL)
+        banner_tier = worst_tier if warn_or_worse_count else tiers.NORMAL
         if warn_or_worse_count == 0:
             text = i18n.t("dashboard.all_normal", count=len(self._config.accounts))
         else:
@@ -448,11 +520,19 @@ class MainWindow(QMainWindow):
         warning = self._freshness_warning()
         if warning:
             text = f"{warning}\n{text}"
-            color = tiers.color(tiers.ALERT)
+            banner_tier = tiers.worse(banner_tier, tiers.ALERT)
             self.summary_label.setWordWrap(True)
 
         self.summary_label.setText(text)
-        self.summary_label.setStyleSheet(f"{SUMMARY_STYLE} color: {color};")
+        self._apply_banner(banner_tier)
+
+    def _apply_banner(self, tier: str) -> None:
+        background, border = BANNER_COLORS.get(tier, BANNER_COLORS[tiers.UNKNOWN])
+        self.summary_label.setStyleSheet(
+            SUMMARY_STYLE.format(
+                background=background, border=border, text=tiers.color(tier)
+            )
+        )
 
     # -- 이벤트 핸들러 --------------------------------------------------
     def _trigger_now(self) -> None:
