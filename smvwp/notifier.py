@@ -1,7 +1,7 @@
 """트레이 알림기 - outbox를 지켜보다 팝업을 띄우는 독립 프로세스.
 
 메인 GUI와 **완전히 별개로** 동작한다. 관리 창을 닫아도(또는 아예 켜지 않아도)
-cron이 쌓은 알림은 이 프로세스가 표시한다 - CONCEPT.md 5절이 요구한 구조다.
+cron이 쌓은 알림은 이 프로세스가 표시한다 - DESIGN.md 1부 5절이 요구한 구조다.
 
 동작:
 - 주기적으로 `outbox/`를 확인하고 아직 확인하지 않은 알림을 트레이 메시지로
@@ -17,11 +17,10 @@ cron이 쌓은 알림은 이 프로세스가 표시한다 - CONCEPT.md 5절이 �
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from . import config as config_module
 from . import i18n, paths, popup_queue, tiers
@@ -48,8 +47,8 @@ def build_autostart_entry(python_bin: str, script_dir: Path, data_dir: Path) -> 
     쓰이므로 항상 슬래시 표기가 맞고, 개발 PC(Windows)에서 만들어 봐도 같은
     결과가 나와 검증이 쉬워진다."""
 
-    script = (script_dir / "notifier_cli.py").as_posix()
-    command = f'"{python_bin}" "{script}" --data-dir "{data_dir.as_posix()}"'
+    script = (script_dir / "smvwp_cli.py").as_posix()
+    command = f'"{python_bin}" "{script}" notify --data-dir "{data_dir.as_posix()}"'
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
@@ -165,16 +164,12 @@ def run_tray(data_dir: Path, config: config_module.AppConfig, poll_seconds: int 
     return app.exec_()
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Storage Manager VWP - 트레이 알림기")
-    parser.add_argument("--data-dir")
-    parser.add_argument("--poll-seconds", type=int, default=DEFAULT_POLL_SECONDS)
-    parser.add_argument("--install-autostart", action="store_true", help="로그인 시 자동 시작 등록")
-    parser.add_argument("--remove-autostart", action="store_true", help="로그인 자동 시작 해제")
-    parser.add_argument("--status", action="store_true", help="미확인 알림 수만 출력하고 종료")
-    args = parser.parse_args(argv)
+def main_with_args(args) -> int:
+    """이미 파싱된 인자로 실행한다 (`smvwp_cli.py notify`가 호출).
 
-    data_dir = paths.resolve_data_dir(args.data_dir)
+    인자 파싱을 단일 진입점으로 옮기고, 여기서는 동작만 담당한다."""
+
+    data_dir = paths.resolve_data_dir(getattr(args, "data_dir", None))
     if data_dir is None:
         print(
             "ERROR: 데이터 디렉터리를 찾을 수 없습니다. --data-dir을 지정하거나 "
@@ -204,4 +199,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"자동 시작 등록: {'예' if is_autostart_installed() else '아니오'}")
         return 0
 
-    return run_tray(data_dir, config, poll_seconds=args.poll_seconds)
+    return run_tray(
+        data_dir, config, poll_seconds=getattr(args, "poll_seconds", DEFAULT_POLL_SECONDS)
+    )

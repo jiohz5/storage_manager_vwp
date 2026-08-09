@@ -1,6 +1,6 @@
 """대시보드 단일 화면 (GUI의 중심).
 
-REBUILD_CONCEPT.md 6절 결정 사항을 반영:
+DESIGN.md 2부 6절 결정 사항을 반영:
 - 화면 구조: 대시보드 단일 화면 (탭 없음). 계정 등록/설정은 다이얼로그.
 - "한눈 요약 우선" (1차 채택): 최상단에 "경고 이상 계정 수 / 가장 급한 계정"
   요약을 배치해 표를 스크롤/정렬하지 않아도 위험 상태를 바로 파악할 수 있게
@@ -164,7 +164,7 @@ class MainWindow(QMainWindow):
 
         생성자가 아니라 별도 메서드로 둔 이유: 창이 화면에 뜨기 전에 모달
         다이얼로그를 띄우면 부모 없는 창처럼 보이고, 테스트에서도 창을 만들 때
-        마다 모달이 뜨면 곤란하기 때문. 호출은 `app.py`가 `show()` 뒤에 한다."""
+        마다 모달이 뜨면 곤란하기 때문. 호출은 `smvwp_cli.py gui`가 `show()` 뒤에 한다."""
 
         if self._config.accounts:
             return
@@ -249,7 +249,7 @@ class MainWindow(QMainWindow):
 
     def _build_scan_section(self) -> QWidget:
         """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
-        붙인다 (REBUILD_CONCEPT.md 6절 "대시보드 단일 화면" 결정 유지)."""
+        붙인다 (DESIGN.md 2부 6절 "대시보드 단일 화면" 결정 유지)."""
 
         section = QFrame()
         section.setFrameShape(QFrame.StyledPanel)
@@ -611,7 +611,7 @@ class MainWindow(QMainWindow):
         )
         if pending_total:
             # 퍼센트로 부풀리지 않고 남은 작업 수 그대로 보여준다 - 전체 분모를
-            # 아직 모르기 때문 (CONCEPT.md "과장하지 않는 UI").
+            # 아직 모르기 때문 (DESIGN.md 1부 "과장하지 않는 UI").
             parts.append(i18n.t("scan.pending_tasks", count=pending_total))
         self.scan_status_label.setText("  |  ".join(parts))
 

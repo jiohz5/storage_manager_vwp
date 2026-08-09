@@ -58,8 +58,8 @@ endif
 
 if ($?STORAGE_MANAGER_DATA_DIR) then
     echo "데이터 디렉터리: $STORAGE_MANAGER_DATA_DIR (환경변수)"
-    exec "$python_bin" "$app_dir/app.py" --data-dir "$STORAGE_MANAGER_DATA_DIR" $argv:q
+    exec "$python_bin" "$app_dir/smvwp_cli.py" gui --data-dir "$STORAGE_MANAGER_DATA_DIR" $argv:q
 endif
 
 echo "데이터 디렉터리: 저장된 위치 사용 (없으면 GUI에서 최초 지정 요청)"
-exec "$python_bin" "$app_dir/app.py" $argv:q
+exec "$python_bin" "$app_dir/smvwp_cli.py" gui $argv:q

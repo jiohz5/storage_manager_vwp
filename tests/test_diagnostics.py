@@ -109,7 +109,7 @@ class RunDiagnosticsTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertIn("GUI는 실행할 수 없습니다", report)
-        self.assertIn("collector_cli.py", report)
+        self.assertIn("smvwp_cli.py", report)
 
     def test_format_report_mentions_overall_result(self):
         with tempfile.TemporaryDirectory() as tmp:

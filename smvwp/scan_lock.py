@@ -1,6 +1,6 @@
 """야간 상세 스캔의 실행 잠금 + 안전 중지(run ID 매칭) 요청.
 
-CONCEPT.md 2-4 "안전한 중지, 강제 kill 없음" 원칙: 임의 PID에 signal을 보내지
+DESIGN.md 1부 2-4 "안전한 중지, 강제 kill 없음" 원칙: 임의 PID에 signal을 보내지
 않는다. 대신:
 
 - 잠금 파일에 이번 실행의 run_id + pid를 적어 두고, 여러 야간 스캔이

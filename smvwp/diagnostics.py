@@ -1,7 +1,7 @@
 """최소 진단: Python 버전, 필요 표준 모듈, PyQt5, 데이터 디렉터리 쓰기 권한.
 
 기존 구현의 `run.csh --diagnose` / `runtime_check.py` / `verify_environment.py`
-역할을 개념만 이어받아 훨씬 단순하게 하나로 합쳤다 (REBUILD_CONCEPT.md 3절
+역할을 개념만 이어받아 훨씬 단순하게 하나로 합쳤다 (DESIGN.md 2부 3절
 "진단과 실행이 한 번의 호출로 끝나는 느낌"). run.csh는 이 모듈을
 `python -m smvwp.diagnostics`로 호출해 사전 점검 후 바로 앱을 띄운다.
 """
@@ -135,7 +135,7 @@ def format_report(result: dict) -> str:
     if not pyqt5.get("skipped") and not pyqt5.get("available"):
         lines.append(
             "  └ 단, PyQt5가 없어 GUI는 실행할 수 없습니다. "
-            "수집 전용 CLI(collector_cli.py / nightly_scan_cli.py)는 사용 가능합니다."
+            "수집 전용 CLI(smvwp_cli.py collect / scan)는 사용 가능합니다."
         )
     return "\n".join(lines)
 

@@ -1,7 +1,7 @@
 """GUI 안에서 도는 15분 주기 수집 타이머 (백그라운드 타이머 경로).
 
-REBUILD_CONCEPT.md 7절 3번: "15분 주기 경량 수집 (cron 또는 백그라운드
-타이머)". phase 1은 두 경로를 모두 제공한다 - cron은 `collector_cli.py`
+DESIGN.md 2부 7절 3번: "15분 주기 경량 수집 (cron 또는 백그라운드
+타이머)". phase 1은 두 경로를 모두 제공한다 - cron은 `smvwp_cli.py collect`
 스크립트로, 백그라운드 타이머는 이 모듈로. GUI를 열어 두면 cron 설정 없이도
 바로 동작하고, cron을 등록해 두면 GUI를 닫아도 수집은 계속된다.
 
@@ -98,7 +98,7 @@ class NightlyScanWorker(QObject):
     뒤의 것은 cron 등 다른 프로세스까지 포함해서.
 
     중지는 강제 종료가 아니라 `nightly_scan.request_stop`(run ID 매칭 파일)로
-    요청만 하고, 스캐너가 다음 체크포인트에서 스스로 멈춘다 (CONCEPT.md 2-4).
+    요청만 하고, 스캐너가 다음 체크포인트에서 스스로 멈춘다 (DESIGN.md 1부 2-4).
     """
 
     finished = pyqtSignal(object)  # nightly_scan.RunSummary

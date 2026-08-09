@@ -111,7 +111,8 @@ class AutostartTests(unittest.TestCase):
         )
         self.assertIn("[Desktop Entry]", entry)
         self.assertIn("/installed/python/3.12/bin/python3", entry)
-        self.assertIn("notifier_cli.py", entry)
+        self.assertIn("smvwp_cli.py", entry)
+        self.assertIn("notify", entry)
         self.assertIn("/data/sm", entry)
         self.assertIn("Type=Application", entry)
 

@@ -7,3 +7,16 @@
 *.json text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
+
+# 반입용 아카이브(git archive / GitHub의 Download ZIP)에서 제외한다.
+# 폐쇄망에는 파일 하나하나가 반입 대상이라, 실행에 필요 없는 것은 빼서
+# 반입 절차를 가볍게 한다. 저장소에는 그대로 남으므로 개발·검토에는 지장이
+# 없고, 필요하면 `git clone`으로 전부 받을 수 있다.
+#
+# 주의: 이 규칙이 적용됐는지는 실제로 내려받은 ZIP을 한 번 확인하는 것이
+# 좋다. `git archive`는 확실히 따르지만, GitHub의 Download ZIP 버튼이
+# export-ignore를 반영하는지는 시점에 따라 달라진 전례가 있다.
+tests/ export-ignore
+DESIGN.md export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore

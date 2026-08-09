@@ -10,8 +10,7 @@ PyQt5 애플리케이션입니다. 사용자가 명시적으로 지정한 데이
 - 폐쇄망 안에서 동작하는 로컬 팝업 알림
 - 일간·주간 보고서와 정리 후보 목록 (**자동 삭제는 하지 않습니다**)
 
-설계 배경은 [DESIGN.md](DESIGN.md), [CONCEPT.md](CONCEPT.md),
-[REBUILD_CONCEPT.md](REBUILD_CONCEPT.md)에 있습니다.
+설계 배경과 구현 이력은 [DESIGN.md](DESIGN.md)에 있습니다.
 
 ---
 
@@ -50,7 +49,7 @@ cd storage_manager_vwp
 cd /path/to/transfer-directory
 unzip storage_manager_vwp-main.zip
 cd storage_manager_vwp-main
-ls run.csh app.py smvwp
+ls run.csh smvwp_cli.py smvwp
 ```
 
 tar.gz를 받았다면:
@@ -58,10 +57,15 @@ tar.gz를 받았다면:
 ```csh
 tar -xzf storage_manager_vwp-main.tar.gz
 cd storage_manager_vwp-main
-ls run.csh app.py smvwp
+ls run.csh smvwp_cli.py smvwp
 ```
 
 마지막 `ls`에서 세 항목이 모두 보이면 올바른 디렉터리입니다.
+
+> 반입용 아카이브에는 **실행에 필요한 것만** 들어 있습니다 (40개 파일, ZIP
+> 약 124KB). 단위 테스트와 설계 문서는 반입 절차를 가볍게 하려고 제외했으며,
+> 필요하면 [저장소](https://github.com/jiohz5/storage_manager_vwp)에서 전부
+> 받을 수 있습니다.
 
 ## 3. 환경변수 두 개 지정
 
@@ -144,13 +148,13 @@ crontab -l | grep storage_manager_vwp_v2
 
 | 시각 | 하는 일 |
 |---|---|
-| 매 15분 | `df`/inode 경량 수집 (`collector_cli.py`) |
-| 매일 22:00 | 야간 상세 스캔 (`nightly_scan_cli.py`) — 06:00에 체크포인트 남기고 자동 정지 |
+| 매 15분 | `df`/inode 경량 수집 (`smvwp_cli.py collect`) |
+| 매일 22:00 | 야간 상세 스캔 (`smvwp_cli.py scan`) — 06:00에 체크포인트 남기고 자동 정지 |
 
 야간 스캔을 즉시 멈추려면 (강제 kill 아님, 다음 체크포인트에서 안전 정지):
 
 ```csh
-$STORAGE_MANAGER_PYTHON_BIN nightly_scan_cli.py --data-dir "$STORAGE_MANAGER_DATA_DIR" --stop
+$STORAGE_MANAGER_PYTHON_BIN smvwp_cli.py scan --data-dir "$STORAGE_MANAGER_DATA_DIR" --stop
 ```
 
 ## 6. 팝업 알림 등록 (선택)
@@ -160,12 +164,12 @@ $STORAGE_MANAGER_PYTHON_BIN nightly_scan_cli.py --data-dir "$STORAGE_MANAGER_DAT
 
 ```csh
 # 로그인 시 자동 시작 등록
-$STORAGE_MANAGER_PYTHON_BIN notifier_cli.py --data-dir "$STORAGE_MANAGER_DATA_DIR" --install-autostart
+$STORAGE_MANAGER_PYTHON_BIN smvwp_cli.py notify --data-dir "$STORAGE_MANAGER_DATA_DIR" --install-autostart
 
 # 지금 바로 실행 / 상태 확인 / 해제
-$STORAGE_MANAGER_PYTHON_BIN notifier_cli.py --data-dir "$STORAGE_MANAGER_DATA_DIR"
-$STORAGE_MANAGER_PYTHON_BIN notifier_cli.py --data-dir "$STORAGE_MANAGER_DATA_DIR" --status
-$STORAGE_MANAGER_PYTHON_BIN notifier_cli.py --data-dir "$STORAGE_MANAGER_DATA_DIR" --remove-autostart
+$STORAGE_MANAGER_PYTHON_BIN smvwp_cli.py notify --data-dir "$STORAGE_MANAGER_DATA_DIR"
+$STORAGE_MANAGER_PYTHON_BIN smvwp_cli.py notify --data-dir "$STORAGE_MANAGER_DATA_DIR" --status
+$STORAGE_MANAGER_PYTHON_BIN smvwp_cli.py notify --data-dir "$STORAGE_MANAGER_DATA_DIR" --remove-autostart
 ```
 
 ## 7. 다음 로그인에도 유지
@@ -269,7 +273,8 @@ PIN은 **화면 노출 제한**이지 보안 경계가 아닙니다 — 검색 D
 
 ## 테스트
 
-PyQt5 없이도 GUI를 제외한 전 로직을 검증할 수 있습니다.
+단위 테스트는 반입용 아카이브에서 제외되어 있습니다. 저장소를 통째로 받은
+경우에는 PyQt5 없이도 GUI를 제외한 전 로직을 검증할 수 있습니다.
 
 ```csh
 $STORAGE_MANAGER_PYTHON_BIN -m unittest discover -s tests -t .

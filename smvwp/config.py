@@ -1,11 +1,11 @@
 """설정 파일(JSON) 로드/저장 및 계정 등록.
 
-설정 포맷은 REBUILD_CONCEPT.md 4절 결정에 따라 JSON (stdlib만으로 충분,
+설정 포맷은 DESIGN.md 2부 4절 결정에 따라 JSON (stdlib만으로 충분,
 `tomllib`은 검토 후 채택하지 않음). 데이터 디렉터리 안의 `config.json` 하나에
 전역 설정(Settings)과 계정 목록(Account)을 함께 담는다.
 
 쓰기는 항상 임시 파일 작성 후 `os.replace`로 교체하는 원자적 방식을 쓴다 —
-쓰다가 중단돼도 기존 config.json이 깨지지 않도록 하기 위함 (CONCEPT.md의
+쓰다가 중단돼도 기존 config.json이 깨지지 않도록 하기 위함 (DESIGN.md 1부의
 "중단 시점이 언제든 재실행이 항상 안전해야 한다"는 불변식을 설정 파일에도
 동일하게 적용).
 """
@@ -27,12 +27,12 @@ class ConfigError(ValueError):
     pass
 
 
-DEFAULT_COLLECTOR_INTERVAL_SECONDS = 15 * 60  # 15분 (REBUILD_CONCEPT.md 7절)
+DEFAULT_COLLECTOR_INTERVAL_SECONDS = 15 * 60  # 15분 (DESIGN.md 2부 7절)
 DEFAULT_NOTIFICATION_COOLDOWN_MINUTES = 60
 DEFAULT_NOTIFICATION_MIN_TIER = "warn"
 DEFAULT_SAMPLE_RETENTION_DAYS = 90
 
-# 야간 상세 스캔(REBUILD_CONCEPT.md 8절 1번) 관련 기본값. CONCEPT.md 3절의
+# 야간 상세 스캔(DESIGN.md 2부 8절 1번) 관련 기본값. DESIGN.md 1부 3절의
 # 22:00~06:00 시간창 정책을 원칙만 계승해 새로 구현한다.
 DEFAULT_DETAIL_SCAN_WINDOW_START_HOUR = 22
 DEFAULT_DETAIL_SCAN_WINDOW_END_HOUR = 6
@@ -276,7 +276,7 @@ def load_config(data_dir: Path) -> AppConfig:
 def _guard_read_only_invariant(data_dir: Path, config: AppConfig) -> None:
     """데이터 디렉터리가 모니터링 대상 계정 경로와 겹치지 않는지 매번 확인한다.
 
-    CONCEPT.md 1절의 읽기 전용 불변식(데이터 디렉터리 외에는 절대 쓰지 않음)을
+    DESIGN.md 1부 1절의 읽기 전용 불변식(데이터 디렉터리 외에는 절대 쓰지 않음)을
     설정을 불러올 때마다 강제한다 - GUI, cron 수집기, 야간 스캔이 모두
     `load_config`를 거치므로 세 경로 전부에서 이 점검이 실행된다.
     """
