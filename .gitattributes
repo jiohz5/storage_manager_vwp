@@ -20,7 +20,3 @@ tests/ export-ignore
 DESIGN.md export-ignore
 .gitattributes export-ignore
 .gitignore export-ignore
-
-# PyQt6 Fluent GUI는 외부 패키지(PyQt6-Fluent-Widgets)가 있어야 동작한다.
-# 폐쇄망 반입본에는 들어가 봐야 쓸 수 없으므로 제외한다.
-smvwp/gui6/ export-ignore
