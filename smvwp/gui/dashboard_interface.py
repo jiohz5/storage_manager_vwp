@@ -1,7 +1,6 @@
 """대시보드 서브 인터페이스 - 계정 현황과 야간 상세 스캔.
 
-PyQt5 판의 `MainWindow` 본문에 해당한다. 화면 구성만 Fluent로 바꿨고
-표시 규칙과 판단 로직은 그대로다:
+화면 구성은 Fluent를 쓰되, 표시 규칙과 판단 로직은 다음을 지킨다:
 
 - 수집이 멈춰 있으면 사용률 요약보다 **그게 먼저** 보인다. 멈춘 데이터를 보고
   "정상"이라 판단하는 것이 가장 위험하기 때문.
@@ -45,7 +44,7 @@ from qfluentwidgets import FluentIcon as FIF
 from .. import config as config_module
 from .. import diagnostics, forecast_notify, freshness, i18n, nightly_scan, quota, store, tiers
 from . import widgets
-from .scheduler6 import CollectorScheduler, NightlyScanWorker
+from .scheduler import CollectorScheduler, NightlyScanWorker
 
 COLUMN_KEYS = [
     "dashboard.col.name",

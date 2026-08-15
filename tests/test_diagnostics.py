@@ -88,19 +88,19 @@ class RunDiagnosticsTests(unittest.TestCase):
             )
             self.assertFalse(result["ok"])
 
-    def test_missing_pyqt5_report_explains_what_still_works(self):
-        """'PyQt5 사용 불가'와 '종합 OK'가 나란히 찍히면 모순처럼 보인다.
+    def test_missing_gui_toolkit_report_explains_what_still_works(self):
+        """'툴킷 사용 불가'와 '종합 OK'가 나란히 찍히면 모순처럼 보인다.
 
-        종합 판정에서 PyQt5를 빼는 것 자체는 의도한 동작이다(수집 전용 CLI는
-        PyQt5 없이도 돌아야 하므로). 대신 무엇이 되고 무엇이 안 되는지 보고서에
+        종합 판정에서 GUI 툴킷을 빼는 것 자체는 의도한 동작이다(수집 전용 CLI는
+        Qt 없이도 돌아야 하므로). 대신 무엇이 되고 무엇이 안 되는지 보고서에
         명시되어야 한다.
         """
 
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(
                 diagnostics,
-                "check_pyqt5",
-                return_value={"available": False, "error": "No module named 'PyQt5'"},
+                "check_gui_toolkit",
+                return_value={"available": False, "error": "No module named 'PyQt6'"},
             ):
                 result = diagnostics.run_diagnostics(
                     data_dir=Path(tmp) / "data", version_info=(3, 12, 0)
@@ -108,7 +108,7 @@ class RunDiagnosticsTests(unittest.TestCase):
             report = diagnostics.format_report(result)
 
         self.assertTrue(result["ok"])
-        self.assertIn("GUI는 실행할 수 없습니다", report)
+        self.assertIn("화면은 띄울 수 없습니다", report)
         self.assertIn("smvwp_cli.py", report)
 
     def test_format_report_mentions_overall_result(self):

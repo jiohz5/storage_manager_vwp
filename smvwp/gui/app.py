@@ -1,6 +1,6 @@
 """PyQt6 Fluent GUI 부트스트랩 (테마·DPI·데이터 경로).
 
-`smvwp_cli.py gui6`가 호출한다.
+`smvwp_cli.py gui`가 호출한다.
 """
 
 from __future__ import annotations
@@ -17,9 +17,10 @@ ERROR: PyQt6 Fluent GUI를 불러올 수 없습니다 ({error}).
 
   pip install PyQt6 "PyQt6-Fluent-Widgets[full]" pyqtdarktheme
 
-폐쇄망 VWP에서는 설치가 불가능하므로, 그 환경에서는 기본 GUI를 쓰세요:
+설치가 어려운 장비라면 GUI 없이 수집만 돌릴 수 있습니다:
 
-  ./run.csh
+  ./smvwp_cli.py collect
+  ./smvwp_cli.py scan
 """
 
 

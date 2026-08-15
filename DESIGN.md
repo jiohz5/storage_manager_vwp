@@ -286,6 +286,10 @@
 
 ## 3부. 구현 결과
 
+> 1·2부는 **작업 당시의 판단 기록**이라 그대로 둔다. PyQt5를 전제로 쓴 대목이
+> 남아 있는데, 이후 사내 프록시로 pip이 가능한 것이 확인되어 GUI를 PyQt6
+> Fluent로 옮기고 PyQt5는 제거했다. 아래는 **현재 상태**다.
+
 ### 디렉터리 구조
 
 ```
@@ -293,7 +297,7 @@ storage_manager_vwp/
   run.csh              # 단일 진입점 (진단 + 실행)
   setup_cron.csh        # 15분 주기 수집 cron 등록 도우미
   app.py                # GUI 진입점
-  collector_cli.py       # cron용 1회 수집 스크립트 (PyQt5 미의존)
+  smvwp_cli.py           # 단일 진입점 (gui/collect/scan/notify)
   smvwp/                  # 애플리케이션 패키지
     tiers.py               # 사용률 등급 계산 (정상/주의/경고/긴급/FULL)
     paths.py                 # 데이터 디렉터리 탐색/기억/쓰기 안전성
@@ -302,7 +306,7 @@ storage_manager_vwp/
     store.py                    # SQLite 표본 저장소 (보존기간 정리 포함)
     quota.py                     # 사내 quota JSON 어댑터 (선택)
     notifications.py              # 알림 생성 + outbox/command/webhook 전송 + 감사
-    popup_queue.py                 # outbox 읽음 상태 관리 (PyQt5 비의존)
+    popup_queue.py                 # outbox 읽음 상태 관리 (Qt 비의존)
     notifier.py                     # 트레이 알림기 + XDG autostart
     cycle.py                         # 수집->저장->알림 한 사이클 (GUI/cron 공유)
     analytics.py                      # FULL 도달 예측 (최소제곱 회귀)
@@ -310,8 +314,8 @@ storage_manager_vwp/
     procio.py                           # 외부 명령 UTF-8 입출력 래퍼
     i18n.py                            # 한국어/영어 문자열 카탈로그
     reports.py                          # 일간/주간/정리 후보 보고서
-    scheduler.py                         # GUI 타이머 + 스캔 워커 (PyQt5 의존)
-    diagnostics.py                        # Python/모듈/PyQt5/데이터 디렉터리 진단
+    readability.py                       # 계정 경로 읽기 권한 표본 조사
+    diagnostics.py                        # Python/모듈/GUI툴킷/데이터 디렉터리 진단
     scan_window.py                         # 22:00~06:00 시간창 계산
     scan_lock.py                            # 실행 잠금 + run ID 매칭 안전 중지
     scan_store.py                            # 스캔 체크포인트/기준선 SQLite
@@ -320,7 +324,7 @@ storage_manager_vwp/
     nightly_scan.py                             # 야간 스캔 오케스트레이터
     search_index.py                              # 이름 검색 인덱스 (별도 DB)
     admin_auth.py                                 # 관리자 PIN (UI 노출 제한)
-    gui/                                            # PyQt5 화면 (PyQt5 의존)
+    gui/                                            # PyQt6 Fluent 화면 (Qt 의존)
       main_window.py                                 # 대시보드 단일 화면
       account_dialog.py                               # 계정 등록/설정
       reports_dialog.py                                # 보고서 보기/생성
@@ -328,16 +332,16 @@ storage_manager_vwp/
       pin_dialog.py                                      # 관리자 PIN 변경
       first_run.py                                        # 최초 실행 안내
       widgets.py                                           # 등급 배지 / 크기 표기
-  tests/                # unittest 기반 단위 테스트 (PyQt5 불필요)
+  tests/                # unittest 기반 단위 테스트 (Qt 불필요)
     support.py            # 공용 테스트 헬퍼 (bytes stdout, 단일 명령 러너)
 ```
 
 **모듈 분리 원칙**: `smvwp` 최상위와 `gui/`, `scheduler.py`를 의도적으로
 나눴다. `tiers`/`paths`/`config`/`collector`/`store`/`notifications`/`cycle`/
-`diagnostics`는 PyQt5를 전혀 import하지 않으므로, PyQt5가 없는 환경(예: 이
+`diagnostics`는 Qt를 전혀 import하지 않으므로, Qt가 없는 환경(예: 이
 저장소를 검토만 하는 개발 PC, 또는 cron 환경)에서도 그대로 단위 테스트하고
-재사용할 수 있다. PyQt5 의존은 `smvwp/gui/*`와 `smvwp/scheduler.py`에만
-있다.
+재사용할 수 있다. Qt 의존은 `smvwp/gui/*`와 `smvwp/notifier.py`의 트레이
+부분에만 있다.
 
 이 구조는 이번 작업에서 임의로 정한 것이며 (2부 9절
 "모듈 분리 방식은 아직 열린 질문"), 다음 세션에서 사람이 바꾸기 쉽도록 각
@@ -452,12 +456,12 @@ storage_manager_vwp/
 
 ### 알려진 제약 / 로컬 개발 환경 메모
 
-- 단위 테스트는 Windows + Python 3.10에서도 전부 통과한다 (PyQt5 없이도
+- 단위 테스트는 Windows + Python 3.10에서도 전부 통과한다 (Qt 없이도
   동작하도록 GUI 의존을 분리해 뒀기 때문). Git Bash가 있는 Windows에서는
   `df`/`du`/`find`도 있어서 GUI 실행, 15분 수집, 상세 스캔(`--now`)까지
   실제로 돌려 확인했다. 다만 `df -Pi`가 NTFS에서 inode를 보고하지 않아
   inode 등급은 `확인불가`로 표시된다 - 숫자를 지어내지 않는 정상 동작이다.
-- 실제 VWP(RHEL, Python 3.12)에서 재확인이 필요한 것: Python 3.12 + PyQt5
+- 실제 VWP(RHEL, Python 3.12)에서 재확인이 필요한 것: Python 3.12 + PyQt6
   조합, `crontab` 등록 권한, `nice`/`ionice` 존재 여부, 대용량 계정에서의
   실제 스캔 소요 시간과 06:00 인계 동작.
 - `run.csh` / `setup_cron.csh`는 csh 스크립트라 Windows에서 직접 실행/검증할

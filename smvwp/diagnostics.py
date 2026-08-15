@@ -1,4 +1,4 @@
-"""최소 진단: Python 버전, 필요 표준 모듈, PyQt5, 데이터 디렉터리 쓰기 권한.
+"""최소 진단: Python 버전, 필요 표준 모듈, GUI 툴킷, 데이터 디렉터리 쓰기 권한.
 
 기존 구현의 `run.csh --diagnose` / `runtime_check.py` / `verify_environment.py`
 역할을 개념만 이어받아 훨씬 단순하게 하나로 합쳤다 (DESIGN.md 2부 3절
@@ -52,14 +52,14 @@ def check_modules(module_names: Sequence[str] = REQUIRED_MODULES) -> dict:
     return result
 
 
-def check_pyqt5() -> dict:
+def check_gui_toolkit() -> dict:
     try:
-        from PyQt5 import Qt as _qt  # type: ignore
-        from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR  # type: ignore
+        from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR  # type: ignore
+        import qfluentwidgets  # type: ignore  # noqa: F401
     except ImportError as exc:
         return {"available": False, "error": str(exc)}
     except Exception as exc:  # pragma: no cover - 방어적 처리
-        return {"available": False, "error": f"PyQt5 import 중 오류: {exc}"}
+        return {"available": False, "error": f"GUI 툴킷 import 중 오류: {exc}"}
     return {"available": True, "pyqt_version": PYQT_VERSION_STR, "qt_version": QT_VERSION_STR}
 
 
@@ -84,13 +84,13 @@ def run_diagnostics(
 ) -> dict:
     python_result = check_python_version(version_info)
     modules_result = check_modules()
-    pyqt5_result = check_pyqt5() if include_pyqt5 else {"available": None, "skipped": True}
+    pyqt5_result = check_gui_toolkit() if include_pyqt5 else {"available": None, "skipped": True}
     data_dir_result = check_data_dir(data_dir)
 
     modules_ok = all(item["ok"] for item in modules_result.values())
-    # PyQt5 실패는 GUI를 못 띄운다는 뜻이지만, --diagnose 자체는 정보 제공이
+    # GUI 툴킷 실패는 화면을 못 띄운다는 뜻이지만, --diagnose 자체는 정보 제공이
     # 목적이므로 overall ok 판정에는 Python 버전/모듈/데이터 디렉터리만 반영하고
-    # PyQt5는 별도 경고로 취급한다 (CLI 진단은 GUI 없이도 유용해야 함).
+    # 툴킷은 별도 경고로 취급한다 (수집 전용 CLI는 GUI 없이도 돌아야 함).
     overall_ok = python_result["ok"] and modules_ok and data_dir_result["ok"]
 
     return {
@@ -114,11 +114,11 @@ def format_report(result: dict) -> str:
         lines.append(f"모듈 {name}: {status}")
     pyqt5 = result["pyqt5"]
     if pyqt5.get("skipped"):
-        lines.append("PyQt5: 점검 생략")
+        lines.append("GUI 툴킷: 점검 생략")
     elif pyqt5.get("available"):
-        lines.append(f"PyQt5: {pyqt5['pyqt_version']} / Qt {pyqt5['qt_version']} - OK")
+        lines.append(f"GUI 툴킷: PyQt {pyqt5['pyqt_version']} / Qt {pyqt5['qt_version']} - OK")
     else:
-        lines.append(f"PyQt5: 사용 불가 ({pyqt5.get('error')})")
+        lines.append(f"GUI 툴킷: 사용 불가 ({pyqt5.get('error')})")
     data_dir = result["data_dir"]
     if not data_dir["configured"]:
         lines.append("데이터 디렉터리: 미지정 (정상 - 최초 실행 시 GUI에서 지정합니다)")
@@ -129,12 +129,12 @@ def format_report(result: dict) -> str:
 
     lines.append(f"종합 결과: {'OK' if result['ok'] else 'FAIL'}")
 
-    # PyQt5는 종합 판정에 넣지 않는다 (수집 전용 CLI는 PyQt5 없이도 동작해야
-    # 하므로). 다만 그대로 두면 "PyQt5 사용 불가 + 종합 OK"가 나란히 찍혀
-    # 모순처럼 보이므로, 무엇이 되고 무엇이 안 되는지 한 줄로 못박는다.
+    # GUI 툴킷은 종합 판정에 넣지 않는다 (수집 전용 CLI는 Qt 없이도 동작해야
+    # 하므로). 다만 그대로 두면 "사용 불가 + 종합 OK"가 나란히 찍혀 모순처럼
+    # 보이므로, 무엇이 되고 무엇이 안 되는지 한 줄로 못박는다.
     if not pyqt5.get("skipped") and not pyqt5.get("available"):
         lines.append(
-            "  └ 단, PyQt5가 없어 GUI는 실행할 수 없습니다. "
+            "  └ 단, GUI 툴킷이 없어 화면은 띄울 수 없습니다. "
             "수집 전용 CLI(smvwp_cli.py collect / scan)는 사용 가능합니다."
         )
     return "\n".join(lines)

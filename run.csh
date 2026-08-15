@@ -46,7 +46,7 @@ endif
 
 if ($#argv > 0) then
     if ("$argv[1]" == "--diagnose") then
-        # --diagnose는 데이터 디렉터리 쓰기 권한/PyQt5까지 포함한 전체 진단만
+        # --diagnose는 데이터 디렉터리 쓰기 권한/PyQt6까지 포함한 전체 진단만
         # 하고 GUI는 띄우지 않는다.
         if ($?STORAGE_MANAGER_DATA_DIR) then
             exec "$python_bin" -m smvwp.diagnostics --data-dir "$STORAGE_MANAGER_DATA_DIR"

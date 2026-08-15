@@ -42,7 +42,7 @@ from qfluentwidgets import FluentIcon as FIF
 from .. import admin_auth, config as config_module
 from .. import i18n, search_index
 from . import widgets
-from .scheduler6 import SearchIndexWorker
+from .scheduler import SearchIndexWorker
 
 
 class SearchInterface(QWidget):
