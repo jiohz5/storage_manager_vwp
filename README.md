@@ -271,6 +271,48 @@ PIN은 **화면 노출 제한**이지 보안 경계가 아닙니다 — 검색 D
 | cron이 안 도는 것 같음 | `crontab -l`, `<data_dir>/logs/*.log` 확인 |
 | 야간 스캔이 `paused` | 정상 — 06:00 시간창 종료로 안전 정지, 다음 밤에 이어서 진행 |
 
+## (선택) PyQt6 Fluent GUI
+
+Windows 11 Fluent 스타일의 화면을 **별도로** 제공합니다. 기본 GUI를 대체하지
+않고 나란히 둡니다.
+
+> **VWP에서는 쓸 수 없습니다.** 외부 패키지가 필요한데 폐쇄망에서는
+> `pip install`이 불가능하고 관리자 권한도 없습니다. 사내 미러로 wheel을
+> 반입할 수 있거나, 인터넷이 되는 다른 환경에서 쓸 때를 위한 것입니다.
+
+### 설치
+
+```sh
+python -m venv .venv
+.venv\Scripts\activate          # Linux/macOS: source .venv/bin/activate
+pip install PyQt6 "PyQt6-Fluent-Widgets[full]" pyqtdarktheme
+```
+
+`PyQt6 6.11`은 최신 VC++ 런타임을 요구해 환경에 따라 `DLL load failed`가
+납니다. 그런 경우 검증된 조합으로 내려 쓰세요.
+
+```sh
+pip install "PyQt6==6.7.1" "PyQt6-Qt6==6.7.3" "PyQt6-sip==13.8.0"
+```
+
+### 실행
+
+```sh
+python smvwp_cli.py gui6 --data-dir /path/to/data
+```
+
+### 기본 GUI와 다른 점
+
+| | 기본 (`gui`) | Fluent (`gui6`) |
+|---|---|---|
+| 툴킷 | PyQt5 (사내 기설치) | PyQt6 + qfluentwidgets |
+| 구조 | 단일 화면 + 다이얼로그 | 좌측 네비게이션 + 서브 인터페이스 |
+| 테마 | 라이트 | 다크 (Fluent + qdarktheme) |
+| 폐쇄망 | **사용 가능** | 사용 불가 |
+
+수집·스캔·알림 등 **백엔드 동작은 완전히 같습니다.** 두 GUI가 같은 모듈을
+호출하므로 데이터도 그대로 공유합니다.
+
 ## 테스트
 
 단위 테스트는 반입용 아카이브에서 제외되어 있습니다. 저장소를 통째로 받은

@@ -167,6 +167,17 @@ def command_gui(args) -> int:
 
 # -- collect ---------------------------------------------------------------
 
+def command_gui6(args) -> int:
+    """PyQt6 + Fluent GUI.
+
+    외부 패키지(PyQt6-Fluent-Widgets 등)가 필요하므로 폐쇄망 VWP에서는 쓸 수
+    없다. 그 환경에서는 `gui`를 쓴다."""
+
+    from smvwp.gui6.app import run
+
+    return run(args.data_dir)
+
+
 def command_collect(args) -> int:
     from smvwp.cycle import run_collection_cycle
 
@@ -248,9 +259,13 @@ def build_parser() -> argparse.ArgumentParser:
             help="데이터 디렉터리 (미지정 시 STORAGE_MANAGER_DATA_DIR 또는 저장된 위치)",
         )
 
-    gui = sub.add_parser("gui", help="관리 GUI 실행")
+    gui = sub.add_parser("gui", help="관리 GUI 실행 (PyQt5, 폐쇄망 기본)")
     _add_data_dir(gui)
     gui.set_defaults(func=command_gui)
+
+    gui6 = sub.add_parser("gui6", help="Fluent GUI 실행 (PyQt6, 외부 패키지 필요)")
+    _add_data_dir(gui6)
+    gui6.set_defaults(func=command_gui6)
 
     collect = sub.add_parser("collect", help="15분 경량 수집 1회 (cron용)")
     _add_data_dir(collect)
