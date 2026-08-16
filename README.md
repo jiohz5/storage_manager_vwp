@@ -262,7 +262,7 @@ PIN은 **화면 노출 제한**이지 보안 경계가 아닙니다 — 검색 D
 | `STORAGE_MANAGER_PYTHON_BIN이 설정되지 않았습니다` | 3단계 환경변수 지정 |
 | `지정한 Python 실행 파일을 실행할 수 없습니다` | 경로가 prefix가 아닌 `bin/python3`인지, 실행 권한이 있는지 |
 | 진단에서 Python 버전 FAIL | 3.12 이상 경로인지 (`$STORAGE_MANAGER_PYTHON_BIN -V`) |
-| `Could not load the Qt platform plugin "xcb"` | **Qt 6.5부터 `libxcb-cursor`가 새로 필요합니다** (Qt5에는 없던 요구사항이라 PyQt5로는 잘 뜨던 장비에서 처음 막힙니다). `./run.csh --diagnose`가 없는 라이브러리를 짚어 줍니다. 관리자: `yum install xcb-util-cursor libxkbcommon-x11` / 비관리자: RPM만 받아 홈에 풀고 `LD_LIBRARY_PATH`에 추가 |
+| `Could not load the Qt platform plugin "xcb"` | **Qt를 6.4로 내리면 해결됩니다** (`pip install "PyQt6==6.4.2" "PyQt6-Qt6==6.4.3" "PyQt6-sip==13.4.1"`). Qt 6.5부터 필요해진 `libxcb-cursor`는 시스템 라이브러리라 pip으로 못 넣는데, 6.4에는 그 요구사항이 없습니다 — **sudo가 없어도 됩니다.** 관리자 권한이 있다면 `yum install xcb-util-cursor libxkbcommon-x11`로 최신 Qt를 그대로 써도 됩니다 |
 | GUI가 안 뜸 | 실행하면 무엇을 설치하면 되는지 안내가 나옵니다. Fluent를 쓰려면 `python -m pip install PyQt6 "PyQt6-Fluent-Widgets[full]" pyqtdarktheme` |
 | Fluent 대신 클래식이 뜸 | Fluent 패키지가 없거나 import에 실패한 것입니다. `./smvwp_cli.py gui6`로 강제 실행하면 원인이 그대로 보입니다 |
 | 진단에 `데이터 디렉터리: 미지정` | 정상입니다. GUI가 최초 실행 때 물어봅니다 (cron을 쓸 거면 미리 지정 필요) |
@@ -291,23 +291,25 @@ python -m pip install PyQt6 "PyQt6-Fluent-Widgets[full]" pyqtdarktheme
 python -m pip install "PyQt6==6.7.1" "PyQt6-Qt6==6.7.3" "PyQt6-sip==13.8.0"
 ```
 
-**리눅스에서는 시스템 라이브러리도 필요합니다.** Qt 6.5부터 `libxcb-cursor`가
-새로 요구되는데 Qt5에는 없던 것이라, PyQt5로는 잘 뜨던 장비에서도 이것 때문에
-막힐 수 있습니다.
+**리눅스에서 `xcb` 플러그인 오류가 나면 Qt를 6.4로 내리세요.**
+
+Qt 6.5부터 `libxcb-cursor`가 새로 필요해졌는데, 이건 시스템 라이브러리라
+`pip`으로 못 넣고 보통 관리자 권한이 필요합니다. **Qt 6.4에는 그 요구사항이
+없으므로** 버전만 내리면 sudo 없이 해결됩니다.
+
+```sh
+python -m pip install "PyQt6==6.4.2" "PyQt6-Qt6==6.4.3" "PyQt6-sip==13.4.1"
+```
+
+이 조합에서 앱 전체(네비게이션·표·언어 전환·보고서/검색/설정)가 정상 동작하는
+것을 확인했습니다. 관리자 권한이 있다면 최신 Qt를 쓰면서 라이브러리를 넣어도
+됩니다.
 
 ```sh
 sudo yum install xcb-util-cursor libxkbcommon-x11   # RHEL
 ```
 
-관리자 권한이 없다면 RPM만 받아 홈에 풀고 경로를 잡아도 됩니다.
-
-```sh
-mkdir -p ~/qtlibs && cd ~/qtlibs
-rpm2cpio xcb-util-cursor-*.rpm | cpio -idmv
-setenv LD_LIBRARY_PATH ~/qtlibs/usr/lib64:$LD_LIBRARY_PATH
-```
-
-`./run.csh --diagnose`가 무엇이 없는지 짚어 주므로 먼저 돌려 보세요.
+`./run.csh --diagnose`가 무엇이 없는지, 무엇을 하면 되는지 짚어 줍니다.
 
 > **수집·스캔은 GUI 없이도 돕니다.** `smvwp_cli.py collect`와
 > `smvwp_cli.py scan`은 Qt를 전혀 import하지 않으므로, 화면이 없는 장비나

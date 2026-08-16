@@ -262,14 +262,19 @@ def _display_hints(display: dict) -> list:
     missing = display.get("missing") or []
     hints = []
     if any(name.startswith("libxcb-cursor") for name in missing) or not missing:
-        # Qt5에는 없던 요구사항이라 PyQt6로 옮기면 여기서 처음 막힌다.
+        # Qt 6.5부터 새로 생긴 요구사항이라, Qt를 6.4로 내리면 이 라이브러리
+        # 자체가 필요 없어진다. sudo 없이 pip만으로 끝나므로 가장 먼저 권한다.
         hints.append(
-            "Qt 6.5부터 libxcb-cursor가 필요합니다 (Qt5에는 없던 요구사항)."
+            "Qt 6.5부터 libxcb-cursor가 필요합니다 (Qt5·Qt6.4에는 없던 요구사항)."
         )
-        hints.append("관리자: yum install xcb-util-cursor libxkbcommon-x11")
         hints.append(
-            "비관리자: RPM만 받아 홈에 풀고 LD_LIBRARY_PATH에 추가해도 됩니다."
+            "가장 간단: Qt를 6.4로 내리면 이 라이브러리가 아예 필요 없습니다 "
+            "(sudo 불필요)."
         )
+        hints.append(
+            '  pip install "PyQt6==6.4.2" "PyQt6-Qt6==6.4.3" "PyQt6-sip==13.4.1"'
+        )
+        hints.append("관리자가 있다면: yum install xcb-util-cursor libxkbcommon-x11")
     hints.append("자세한 원인: QT_DEBUG_PLUGINS=1 로 다시 실행")
     return hints
 
