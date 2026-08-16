@@ -1,4 +1,4 @@
-"""최소 진단: Python 버전, 필요 표준 모듈, GUI 툴킷, 데이터 디렉터리 쓰기 권한.
+"""최소 진단: Python 버전, 필요 표준 모듈, PyQt5, 데이터 디렉터리 쓰기 권한.
 
 기존 구현의 `run.csh --diagnose` / `runtime_check.py` / `verify_environment.py`
 역할을 개념만 이어받아 훨씬 단순하게 하나로 합쳤다 (DESIGN.md 2부 3절
@@ -54,40 +54,35 @@ def check_modules(module_names: Sequence[str] = REQUIRED_MODULES) -> dict:
     return result
 
 
-def check_gui_toolkit() -> dict:
+def check_pyqt5() -> dict:
     try:
-        from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR  # type: ignore
-        import qfluentwidgets  # type: ignore  # noqa: F401
+        from PyQt5 import Qt as _qt  # type: ignore
+        from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR  # type: ignore
     except ImportError as exc:
         return {"available": False, "error": str(exc)}
     except Exception as exc:  # pragma: no cover - 방어적 처리
-        return {"available": False, "error": f"GUI 툴킷 import 중 오류: {exc}"}
+        return {"available": False, "error": f"PyQt5 import 중 오류: {exc}"}
     return {"available": True, "pyqt_version": PYQT_VERSION_STR, "qt_version": QT_VERSION_STR}
-
-
-# Qt 6.5부터 새로 필수가 된 라이브러리. Qt5에는 없던 요구사항이라, PyQt5로는
-# 잘 뜨던 장비에서 PyQt6로 바꾸면 정확히 이것 때문에 막히는 경우가 많다.
-QT6_NEW_DEPENDENCIES = ("libxcb-cursor.so.0",)
 
 
 def check_display_platform() -> dict:
     """플랫폼 플러그인이 실제로 로드되는지 확인한다.
 
-    import만 성공하고 창은 못 뜨는 경우가 있다. 대표적으로 리눅스에서
+    import만 성공하고 창은 못 뜨는 경우가 있다. 리눅스에서 흔한 두 가지:
+    DISPLAY가 비어 있거나(원격 세션 밖에서 실행),
     `Could not load the Qt platform plugin "xcb" ... even though it was found`
-    - 플러그인 파일은 있는데 그것이 의존하는 시스템 .so가 없다는 뜻이다.
+    (플러그인 파일은 있는데 그것이 의존하는 시스템 .so가 없음).
 
-    이걸 실행 시점이 아니라 `--diagnose`에서 잡아야 한다. 반입된 장비에서
-    창이 안 뜨는 이유를 짐작으로 찾게 두면 안 된다.
+    실행 시점이 아니라 `--diagnose`에서 잡아야 한다. 반입된 장비에서 창이 안
+    뜨는 이유를 짐작으로 찾게 두면 안 된다.
 
-    실제로 `QGuiApplication`을 만들어 보되, 별도 프로세스에서 시도한다 -
+    실제로 QApplication을 만들어 보되 **별도 프로세스**에서 시도한다 -
     플러그인 로드 실패는 파이썬 예외가 아니라 abort로 끝나는 경우가 있어
     같은 프로세스에서 하면 진단 자체가 죽는다.
     """
 
-    if sys.platform == "win32" or sys.platform == "darwin":
-        # 플랫폼 플러그인 문제는 사실상 리눅스/X11 이야기다.
-        return {"checked": False, "ok": True, "reason": "이 OS에서는 점검 생략"}
+    if sys.platform in ("win32", "darwin"):
+        return {"checked": False, "ok": True, "reason": "이 OS에서는 점검 생략", "missing": []}
 
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         return {
@@ -99,16 +94,13 @@ def check_display_platform() -> dict:
 
     probe = (
         "import sys;"
-        "from PyQt6.QtGui import QGuiApplication;"
-        "app = QGuiApplication(['probe']);"
+        "from PyQt5.QtWidgets import QApplication;"
+        "app = QApplication(['probe']);"
         "sys.exit(0)"
     )
     try:
         completed = subprocess.run(
-            [sys.executable, "-c", probe],
-            capture_output=True,
-            timeout=30,
-            check=False,
+            [sys.executable, "-c", probe], capture_output=True, timeout=30, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as exc:  # pragma: no cover
         return {"checked": True, "ok": False, "reason": str(exc), "missing": []}
@@ -117,12 +109,11 @@ def check_display_platform() -> dict:
         return {"checked": True, "ok": True, "reason": None, "missing": []}
 
     stderr = (completed.stderr or b"").decode("utf-8", errors="replace").strip()
-    missing = _missing_platform_libraries()
     return {
         "checked": True,
         "ok": False,
         "reason": stderr.splitlines()[0] if stderr else f"exit={completed.returncode}",
-        "missing": missing,
+        "missing": _missing_platform_libraries(),
     }
 
 
@@ -133,13 +124,11 @@ def _missing_platform_libraries() -> list:
     이름을 지어내지 않는다."""
 
     try:
-        import PyQt6  # type: ignore
+        import PyQt5  # type: ignore
     except ImportError:
         return []
 
-    plugin = (
-        Path(PyQt6.__file__).parent / "Qt6" / "plugins" / "platforms" / "libqxcb.so"
-    )
+    plugin = Path(PyQt5.__file__).parent / "Qt5" / "plugins" / "platforms" / "libqxcb.so"
     if not plugin.exists():
         return []
     try:
@@ -148,7 +137,6 @@ def _missing_platform_libraries() -> list:
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
-
     output = (completed.stdout or b"").decode("utf-8", errors="replace")
     return [
         line.split("=>")[0].strip()
@@ -178,8 +166,9 @@ def run_diagnostics(
 ) -> dict:
     python_result = check_python_version(version_info)
     modules_result = check_modules()
-    pyqt5_result = check_gui_toolkit() if include_pyqt5 else {"available": None, "skipped": True}
-    # 툴킷을 불러올 수 있을 때만 화면 점검이 의미가 있다.
+    pyqt5_result = check_pyqt5() if include_pyqt5 else {"available": None, "skipped": True}
+    # PyQt5를 불러올 수 있을 때만 화면 점검이 의미가 있다 (같은 원인으로 오류를
+    # 두 번 찍지 않는다).
     display_result = (
         check_display_platform()
         if pyqt5_result.get("available")
@@ -188,9 +177,9 @@ def run_diagnostics(
     data_dir_result = check_data_dir(data_dir)
 
     modules_ok = all(item["ok"] for item in modules_result.values())
-    # GUI 툴킷 실패는 화면을 못 띄운다는 뜻이지만, --diagnose 자체는 정보 제공이
+    # PyQt5 실패는 GUI를 못 띄운다는 뜻이지만, --diagnose 자체는 정보 제공이
     # 목적이므로 overall ok 판정에는 Python 버전/모듈/데이터 디렉터리만 반영하고
-    # 툴킷은 별도 경고로 취급한다 (수집 전용 CLI는 GUI 없이도 돌아야 함).
+    # PyQt5는 별도 경고로 취급한다 (CLI 진단은 GUI 없이도 유용해야 함).
     overall_ok = python_result["ok"] and modules_ok and data_dir_result["ok"]
 
     return {
@@ -215,11 +204,11 @@ def format_report(result: dict) -> str:
         lines.append(f"모듈 {name}: {status}")
     pyqt5 = result["pyqt5"]
     if pyqt5.get("skipped"):
-        lines.append("GUI 툴킷: 점검 생략")
+        lines.append("PyQt5: 점검 생략")
     elif pyqt5.get("available"):
-        lines.append(f"GUI 툴킷: PyQt {pyqt5['pyqt_version']} / Qt {pyqt5['qt_version']} - OK")
+        lines.append(f"PyQt5: {pyqt5['pyqt_version']} / Qt {pyqt5['qt_version']} - OK")
     else:
-        lines.append(f"GUI 툴킷: 사용 불가 ({pyqt5.get('error')})")
+        lines.append(f"PyQt5: 사용 불가 ({pyqt5.get('error')})")
     display = result.get("display") or {}
     if display.get("checked"):
         if display.get("ok"):
@@ -228,8 +217,10 @@ def format_report(result: dict) -> str:
             lines.append(f"화면 플러그인: 사용 불가 ({display.get('reason')})")
             for name in display.get("missing") or []:
                 lines.append(f"    없는 라이브러리: {name}")
-            for hint in _display_hints(display):
-                lines.append(f"    {hint}")
+            if "DISPLAY" in (display.get("reason") or ""):
+                lines.append("    원격 데스크톱(DCV 등) 세션 안에서 실행하세요.")
+            else:
+                lines.append("    자세한 원인: QT_DEBUG_PLUGINS=1 로 다시 실행")
 
     data_dir = result["data_dir"]
     if not data_dir["configured"]:
@@ -241,42 +232,15 @@ def format_report(result: dict) -> str:
 
     lines.append(f"종합 결과: {'OK' if result['ok'] else 'FAIL'}")
 
-    # GUI 툴킷은 종합 판정에 넣지 않는다 (수집 전용 CLI는 Qt 없이도 동작해야
-    # 하므로). 다만 그대로 두면 "사용 불가 + 종합 OK"가 나란히 찍혀 모순처럼
-    # 보이므로, 무엇이 되고 무엇이 안 되는지 한 줄로 못박는다.
+    # PyQt5는 종합 판정에 넣지 않는다 (수집 전용 CLI는 PyQt5 없이도 동작해야
+    # 하므로). 다만 그대로 두면 "PyQt5 사용 불가 + 종합 OK"가 나란히 찍혀
+    # 모순처럼 보이므로, 무엇이 되고 무엇이 안 되는지 한 줄로 못박는다.
     if not pyqt5.get("skipped") and not pyqt5.get("available"):
         lines.append(
-            "  └ 단, GUI 툴킷이 없어 화면은 띄울 수 없습니다. "
+            "  └ 단, PyQt5가 없어 GUI는 실행할 수 없습니다. "
             "수집 전용 CLI(smvwp_cli.py collect / scan)는 사용 가능합니다."
         )
     return "\n".join(lines)
-
-
-def _display_hints(display: dict) -> list:
-    """무엇을 하면 되는지 알려준다. 원인별로 다른 조치가 필요하다."""
-
-    reason = (display.get("reason") or "")
-    if "DISPLAY" in reason:
-        return ["원격 데스크톱(DCV 등) 세션 안에서 실행하세요."]
-
-    missing = display.get("missing") or []
-    hints = []
-    if any(name.startswith("libxcb-cursor") for name in missing) or not missing:
-        # Qt 6.5부터 새로 생긴 요구사항이라, Qt를 6.4로 내리면 이 라이브러리
-        # 자체가 필요 없어진다. sudo 없이 pip만으로 끝나므로 가장 먼저 권한다.
-        hints.append(
-            "Qt 6.5부터 libxcb-cursor가 필요합니다 (Qt5·Qt6.4에는 없던 요구사항)."
-        )
-        hints.append(
-            "가장 간단: Qt를 6.4로 내리면 이 라이브러리가 아예 필요 없습니다 "
-            "(sudo 불필요)."
-        )
-        hints.append(
-            '  pip install "PyQt6==6.4.2" "PyQt6-Qt6==6.4.3" "PyQt6-sip==13.4.1"'
-        )
-        hints.append("관리자가 있다면: yum install xcb-util-cursor libxkbcommon-x11")
-    hints.append("자세한 원인: QT_DEBUG_PLUGINS=1 로 다시 실행")
-    return hints
 
 
 def _main() -> int:

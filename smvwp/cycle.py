@@ -1,6 +1,6 @@
 """수집 -> 저장 -> outbox 알림 -> 보존기간 정리, 한 사이클 전체.
 
-이 모듈은 Qt에 의존하지 않는다 - GUI 내부 타이머(`smvwp.gui.scheduler`)와
+이 모듈은 PyQt5에 의존하지 않는다 - GUI 내부 타이머(`smvwp.scheduler`)와
 cron 경로(`smvwp_cli.py collect`)가 이 함수 하나를 공유해서, 두
 실행 경로("cron 또는 백그라운드 타이머", DESIGN.md 2부 7절 3번)의
 동작이 어긋나지 않게 한다.

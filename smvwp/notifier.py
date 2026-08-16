@@ -83,14 +83,14 @@ def is_autostart_installed() -> bool:
     return autostart_file().exists()
 
 
-# -- 트레이 UI (Qt는 여기서만 import) -------------------------------------
+# -- 트레이 UI (PyQt5는 여기서만 import) -------------------------------------
 
 def run_tray(data_dir: Path, config: config_module.AppConfig, poll_seconds: int = DEFAULT_POLL_SECONDS) -> int:
-    """트레이 아이콘을 띄우고 outbox를 폴링한다. PyQt6가 필요하다."""
+    """트레이 아이콘을 띄우고 outbox를 폴링한다. PyQt5가 필요하다."""
 
-    from PyQt6.QtCore import QTimer
-    from PyQt6.QtGui import QAction, QColor, QIcon, QPixmap
-    from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+    from PyQt5.QtCore import QTimer
+    from PyQt5.QtGui import QColor, QIcon, QPixmap
+    from PyQt5.QtWidgets import QAction, QApplication, QMenu, QSystemTrayIcon
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
@@ -154,14 +154,14 @@ def run_tray(data_dir: Path, config: config_module.AppConfig, poll_seconds: int 
 
     acknowledge_action.triggered.connect(acknowledge)
     quit_action.triggered.connect(app.quit)
-    tray.activated.connect(lambda reason: acknowledge() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+    tray.activated.connect(lambda reason: acknowledge() if reason == QSystemTrayIcon.Trigger else None)
 
     timer = QTimer()
     timer.timeout.connect(refresh)
     timer.start(max(5, poll_seconds) * 1000)
     refresh()
 
-    return app.exec()
+    return app.exec_()
 
 
 def main_with_args(args) -> int:

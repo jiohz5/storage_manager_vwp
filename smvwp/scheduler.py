@@ -1,8 +1,13 @@
-"""PyQt6용 주기 수집 타이머와 백그라운드 워커.
+"""GUI 안에서 도는 15분 주기 수집 타이머 (백그라운드 타이머 경로).
 
-무거운 작업을 GUI 스레드에서 돌리지 않는다는 원칙도 그대로다:
-- `df` 수집은 네트워크 파일시스템에서 느려질 수 있다.
-- 야간 상세 스캔은 몇 시간까지 갈 수 있다.
+DESIGN.md 2부 7절 3번: "15분 주기 경량 수집 (cron 또는 백그라운드
+타이머)". phase 1은 두 경로를 모두 제공한다 - cron은 `smvwp_cli.py collect`
+스크립트로, 백그라운드 타이머는 이 모듈로. GUI를 열어 두면 cron 설정 없이도
+바로 동작하고, cron을 등록해 두면 GUI를 닫아도 수집은 계속된다.
+
+df 호출이 느려질 수 있으므로(네트워크 파일시스템 등) 실제 수집은 별도
+스레드에서 실행해 GUI가 멈추지 않게 한다. PyQt5 시그널은 스레드 간에 안전하게
+쓸 수 있으므로, 작업 스레드가 끝나면 시그널로 결과를 메인 스레드에 전달한다.
 """
 
 from __future__ import annotations
@@ -10,10 +15,10 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from .. import nightly_scan
-from ..cycle import run_collection_cycle
+from . import nightly_scan
+from .cycle import run_collection_cycle
 
 
 class CollectorWorker(QObject):
@@ -87,12 +92,13 @@ class CollectorScheduler:
 class NightlyScanWorker(QObject):
     """야간 상세 스캔(`du`/`find`)을 백그라운드 스레드에서 실행한다.
 
-    중복 실행 방지는 이 클래스의 `_running` 플래그와 `smvwp.scan_lock`의 파일
-    잠금 두 겹으로 막는다 - 앞의 것은 이 창 안에서, 뒤의 것은 cron 등 다른
-    프로세스까지 포함해서.
+    상세 스캔은 15분 수집과 달리 몇 시간까지도 이어질 수 있으므로 GUI 스레드
+    에서 절대 돌리면 안 된다. 중복 실행 방지는 이 클래스의 `_running` 플래그와
+    `smvwp.scan_lock`의 파일 잠금 두 겹으로 막는다 - 앞의 것은 이 창 안에서,
+    뒤의 것은 cron 등 다른 프로세스까지 포함해서.
 
-    중지는 강제 종료가 아니라 run ID 매칭 요청 파일만 남기고, 스캐너가 다음
-    체크포인트에서 스스로 멈춘다.
+    중지는 강제 종료가 아니라 `nightly_scan.request_stop`(run ID 매칭 파일)로
+    요청만 하고, 스캐너가 다음 체크포인트에서 스스로 멈춘다 (DESIGN.md 1부 2-4).
     """
 
     finished = pyqtSignal(object)  # nightly_scan.RunSummary
@@ -137,53 +143,3 @@ class NightlyScanWorker(QObject):
 
     def request_stop(self) -> bool:
         return nightly_scan.request_stop(self._data_dir)
-
-
-class SearchIndexWorker(QObject):
-    """검색 인덱싱을 백그라운드에서 실행한다 (파일시스템 전체 순회)."""
-
-    finished = pyqtSignal(int)
-    failed = pyqtSignal(str)
-
-    def __init__(self, data_dir: Path, parent: QObject = None):
-        super().__init__(parent)
-        self._data_dir = data_dir
-        self._lock = threading.Lock()
-        self._running = False
-        self._stop = False
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._running
-
-    def request_stop(self) -> None:
-        self._stop = True
-
-    def run_async(self, account_id: str, account_path: Path) -> bool:
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-            self._stop = False
-        threading.Thread(
-            target=self._run, args=(account_id, account_path), daemon=True
-        ).start()
-        return True
-
-    def _run(self, account_id: str, account_path: Path) -> None:
-        from .. import search_index
-
-        conn = None
-        try:
-            conn = search_index.connect(self._data_dir)
-            count = search_index.index_account(
-                conn, account_id, account_path, should_stop=lambda: self._stop
-            )
-            self.finished.emit(count)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
-        finally:
-            if conn is not None:
-                conn.close()
-            with self._lock:
-                self._running = False
