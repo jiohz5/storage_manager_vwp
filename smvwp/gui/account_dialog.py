@@ -53,10 +53,15 @@ class AccountDialog(QDialog):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
 
-        root.addWidget(QLabel(i18n.t("accounts.registered")))
+        registered_label = QLabel(i18n.t("accounts.registered"))
+        registered_label.setObjectName("sectionTitle")
+        root.addWidget(registered_label)
         self.account_list = QListWidget()
         self.account_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        root.addWidget(self.account_list)
+        # 목록이 이 화면의 본체다. 아래 설정 폼에 밀려 두어 줄만 보이면 등록된
+        # 계정을 확인하려고 매번 스크롤해야 한다.
+        self.account_list.setMinimumHeight(180)
+        root.addWidget(self.account_list, 1)
 
         add_row = QHBoxLayout()
         self.name_edit = QLineEdit()

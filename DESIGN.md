@@ -328,7 +328,8 @@ storage_manager_vwp/
     admin_auth.py                                 # 관리자 PIN (UI 노출 제한)
     scheduler.py                                   # GUI 내부 타이머 (cron 부재 대비)
     gui/                                            # PyQt5 화면 (Qt 의존)
-      theme.py                                       # 자체 QSS 테마 (Fusion + 팔레트)
+      fonts/                                         # 번들 폰트 (Pretendard, OFL 1.1)
+      theme.py                                        # 폰트·팔레트·타이포·QSS
       main_window.py                                  # 대시보드 단일 화면
       account_dialog.py                                # 계정 등록/설정
       reports_dialog.py                                 # 보고서 보기/생성
@@ -350,6 +351,36 @@ storage_manager_vwp/
 이 구조는 이번 작업에서 임의로 정한 것이며 (2부 9절
 "모듈 분리 방식은 아직 열린 질문"), 다음 세션에서 사람이 바꾸기 쉽도록 각
 모듈의 책임을 최대한 좁게 나눠 두었다.
+
+### 화면 외양 (테마)
+
+"화면이 초보가 만든 것 같다"는 지적에서 출발해, 원인을 QSS 문법이 아니라
+**폰트·타이포 위계·여백·정보 배치** 네 가지로 보고 그쪽을 손봤다. 기성 테마
+패키지(qdarkstyle 등)를 얹는 방법도 있지만, 그것들은 색만 바꿀 뿐 위 네 가지를
+건드리지 않아 같은 인상이 남는다.
+
+- **폰트를 번들한다.** Pretendard Regular/Bold/ExtraBold를 `smvwp/gui/fonts/`에
+  두고 `QFontDatabase.addApplicationFont`로 싣는다. 시스템 한글 폰트는 장비마다
+  다르고 굵기 단계가 빈약해 무엇을 크게 써도 위계가 생기지 않는다.
+  - 가변폰트 한 벌이면 파일이 하나로 끝나지만 **Qt 5는 가변폰트를 Regular/Bold
+    두 단계로만 읽는다** (실측: weight를 Medium/Black으로 줘도 렌더가 Normal/
+    Bold와 픽셀 단위로 동일). 정적 세 벌이 파일도 더 작고(4.5MB vs 6.4MB)
+    굵기도 세 단계 나온다.
+  - 굵기는 반드시 weight로 고른다. `setStyleName("Bold")`은 이 조합에서 Regular로
+    떨어진다.
+- **타이포 스케일을 못박았다** (30/20/15/14/12). 그때그때 "조금 더 크게"를
+  정하면 화면마다 값이 달라진다.
+- **히어로를 뒀다.** 가장 높은 사용률을 큰 숫자로 먼저 보여준다. 예전에는 요약
+  문장 한 줄뿐이라 정작 궁금한 값이 본문과 같은 크기로 묻혔다.
+- **표 열 폭을 열마다 다르게 준다.** 전부 Stretch로 두면 열 개수로 균등 분배돼
+  값이 짧은 열(`파일시스템`='C:')이 공간을 낭비하는 동안 `경로`는 잘려 아무것도
+  안 보인다 (실측: 경로에 364px 필요, 균등 분배로는 166px). 사용률은 숫자 옆에
+  막대를 함께 그려 계정 간 비교가 눈으로 되게 했다.
+- **행 배경색은 델리게이트가 그린다.** QSS로 `::item`을 스타일링하면 Qt가
+  `QTableWidgetItem.setBackground()`를 무시한다. 두 방식이 충돌하지 않도록
+  `widgets.TierRowDelegate`에서 직접 칠한다.
+- **그림자를 쓰지 않는다.** Qt QSS에 box-shadow가 없기도 하고, 경계는 1px 선과
+  여백으로 충분하다.
 
 ### 구현 범위와 아직 안 만든 것
 

@@ -18,8 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -39,7 +40,7 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import diagnostics, forecast_notify, freshness, i18n, nightly_scan, quota, store, tiers
 from ..scheduler import CollectorScheduler, NightlyScanWorker
-from . import widgets
+from . import theme, widgets
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
 from .reports_dialog import ReportsDialog
@@ -75,24 +76,13 @@ GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"
 # 스캔이 도는 동안 진행 상황(남은 체크포인트 수)을 주기적으로 다시 읽는 간격.
 SCAN_STATUS_REFRESH_MS = 5000
 
-# 요약 배너 - 창을 열자마자 시선이 먼저 닿는 자리이므로, 상태를 색면으로
-# 보여주는 편이 판단이 빠르다. 색상은 등급별로 달라지므로 여기서만 인라인으로
-# 조립하고, 나머지 위젯 외양은 전부 theme.py가 담당한다.
-SUMMARY_STYLE = (
-    "font-size: 15pt; font-weight: bold; padding: 14px 16px;"
-    "border-radius: 10px; border: 1px solid {border};"
-    "background: {background}; color: {text};"
-)
-
-# 등급별 배너 배색 (배경, 테두리). 글자는 tiers가 정한 등급 기준색을 쓴다.
-BANNER_COLORS = {
-    tiers.NORMAL: ("#e9f7ec", "#b7e0c0"),
-    tiers.WARN: ("#fef6e0", "#f3d68b"),
-    tiers.ALERT: ("#fdefe3", "#f0bd8e"),
-    tiers.EMERGENCY: ("#fdeaea", "#efa9a9"),
-    tiers.FULL: ("#f5ecfa", "#d4aee4"),
-    tiers.UNKNOWN: ("#f1f3f5", "#dfe3e8"),
-}
+# 히어로 - 창을 열자마자 시선이 먼저 닿는 자리. "지금 가장 급한 것 하나"를
+# 큰 숫자로 못박고, 나머지는 그 아래 작은 글씨로 둔다. 표를 훑기 전에 판단이
+# 끝나는 것이 목표다.
+#
+# 등급별 왼쪽 띠 색만 여기서 정하고(등급에 따라 달라지므로), 나머지 외양은
+# 전부 theme.py가 담당한다.
+HERO_ACCENT_STYLE = "background: {color}; border-radius: 3px;"
 
 
 class MainWindow(QMainWindow):
@@ -106,7 +96,11 @@ class MainWindow(QMainWindow):
         self._scan_snapshot = None
         i18n.set_language(config.settings.language)
 
-        self.resize(1040, 640)
+        # 열이 10개인 표 + 히어로 + 스캔 섹션이 한 화면에 들어가려면 이 정도는
+        # 필요하다. 최소 크기를 함께 못박아, 창을 줄였을 때 표가 한 줄도 안
+        # 보이는 상태로 무너지지 않게 한다.
+        self.resize(1200, 820)
+        self.setMinimumSize(960, 700)
         self._build_ui()
         self.retranslate()
 
@@ -155,18 +149,10 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD)
+        layout.setSpacing(theme.GAP_SECTION)
 
-        # 한눈 요약 바
-        self.summary_label = QLabel()
-        self.summary_label.setWordWrap(True)
-        layout.addWidget(self.summary_label)
-
-        self.caveat_label = QLabel()
-        self.caveat_label.setObjectName("muted")
-        self.caveat_label.setWordWrap(True)
-        layout.addWidget(self.caveat_label)
+        layout.addWidget(self._build_hero())
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -195,23 +181,141 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
 
         self.table = QTableWidget(0, len(COLUMN_KEYS))
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self._configure_table_columns()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(False)  # 등급 색과 겹치면 판독을 방해한다
-        
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setShowGrid(False)
         self.table.itemSelectionChanged.connect(self._refresh_growth_table)
-        layout.addWidget(self.table, 3)
 
-        layout.addWidget(self._build_scan_section(), 2)
+        # 계정 표와 스캔 섹션을 스플리터로 묶는다.
+        #
+        # 그냥 세로로 쌓으면 스캔 섹션이 자기 sizeHint(365px)를 먼저 받아 가고
+        # 계정 표에는 남는 것만 돌아온다 - 실제로 재 보니 계정 5개에 260px가
+        # 필요한데 190px만 받아 행이 중간에서 잘렸다. 계정 수는 현장마다 다르니
+        # 비율을 코드로 못박기보다 사용자가 끌어서 정하게 두는 편이 낫다.
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
+        # 헤더 + 두 행 정도는 어떤 창 크기에서도 남긴다.
+        self.table.setMinimumHeight(140)
+        splitter.addWidget(self.table)
+        splitter.addWidget(self._build_scan_section())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([520, 280])
+        layout.addWidget(splitter, 1)
 
         self.status_bar_label = QLabel("")
         self.statusBar().addPermanentWidget(self.status_bar_label)
 
         self.setCentralWidget(central)
+
+    def _build_hero(self) -> QWidget:
+        """맨 위 요약 카드.
+
+        예전에는 색면 배너에 요약 문장 한 줄만 있었는데, 그러면 "지금 몇 %인가"
+        라는 가장 궁금한 값이 본문과 같은 크기로 묻혔다. 가장 높은 사용률을
+        큰 숫자로 못박고, 그 옆에 계정 수·주의 건수·마지막 수집을 붙인다."""
+
+        card = QFrame()
+        card.setObjectName("hero")
+        outer = QHBoxLayout(card)
+        outer.setContentsMargins(0, 0, theme.PAD_CARD, 0)
+        outer.setSpacing(0)
+
+        # 등급을 나타내는 왼쪽 띠. 색을 넓게 칠하는 대신 가늘게 세워 두면
+        # 상태는 전달되면서 배경 소음이 되지 않는다.
+        self.hero_accent = QFrame()
+        self.hero_accent.setFixedWidth(6)
+        outer.addWidget(self.hero_accent)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(theme.PAD_CARD, theme.PAD_CARD - 2, 0, theme.PAD_CARD - 2)
+        body.setSpacing(2)
+        outer.addLayout(body, 1)
+
+        self.hero_state_label = QLabel()
+        self.hero_state_label.setObjectName("caption")
+        self.hero_state_label.setWordWrap(True)
+        body.addWidget(self.hero_state_label)
+
+        self.hero_value_label = QLabel()
+        self.hero_value_label.setObjectName("display")
+        body.addWidget(self.hero_value_label)
+
+        self.hero_detail_label = QLabel()
+        self.hero_detail_label.setObjectName("muted")
+        self.hero_detail_label.setWordWrap(True)
+        body.addWidget(self.hero_detail_label)
+
+        divider = QFrame()
+        divider.setObjectName("divider")
+        divider.setFixedHeight(1)
+        body.addSpacing(10)
+        body.addWidget(divider)
+        body.addSpacing(8)
+
+        stats = QHBoxLayout()
+        stats.setSpacing(28)
+        self.hero_stats = {}
+        for key in ("accounts", "attention", "collected"):
+            column = QVBoxLayout()
+            column.setSpacing(1)
+            caption = QLabel()
+            caption.setObjectName("statLabel")
+            value = QLabel()
+            value.setObjectName("statValue")
+            column.addWidget(caption)
+            column.addWidget(value)
+            stats.addLayout(column)
+            self.hero_stats[key] = (caption, value)
+        stats.addStretch(1)
+        body.addLayout(stats)
+
+        # df 특성 안내는 히어로 숫자의 해석에 직접 걸리는 단서라 같은 카드에 둔다.
+        self.caveat_label = QLabel()
+        self.caveat_label.setObjectName("caption")
+        self.caveat_label.setWordWrap(True)
+        body.addSpacing(8)
+        body.addWidget(self.caveat_label)
+
+        return card
+
+    def _configure_table_columns(self) -> None:
+        """열마다 폭 정책을 따로 준다.
+
+        전부 `Stretch`로 두면 열 개수로 폭이 균등 분배되어, 값이 짧은 열
+        (`파일시스템`='C:', `quota`='-')이 공간을 낭비하는 동안 정작 길이가
+        필요한 `경로`는 'C:...'로 잘려 아무것도 안 보인다. 실제로 재 보면
+        경로에 364px가 필요한데 균등 분배로는 166px밖에 못 받았다."""
+
+        header = self.table.horizontalHeader()
+        # 폭이 모자랄 때 어떤 열도 글자 한 자 폭까지 찌그러지지 않게 한다
+        # (그 상태가 되면 가로 스크롤이 생기는데, 아무것도 안 보이는 것보다 낫다).
+        header.setMinimumSectionSize(80)
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        # 남는 폭은 경로가 가져간다 - 이 화면에서 가장 길고, 길이가 곧 정보다.
+        header.setSectionResizeMode(COL_PATH, QHeaderView.Stretch)
+        # 막대가 들어가는 칸은 내용 기준으로 재면 너무 좁아진다.
+        header.setSectionResizeMode(COL_BYTE, QHeaderView.Fixed)
+        self.table.setColumnWidth(COL_BYTE, 168)
+        # 배지는 칸 위젯이라 ResizeToContents가 크기를 계산에 넣지 못한다.
+        header.setSectionResizeMode(COL_TIER, QHeaderView.Fixed)
+        self.table.setColumnWidth(
+            COL_TIER, widgets.badge_column_width(self.table.fontMetrics())
+        )
+        header.setStretchLastSection(False)
+        header.setHighlightSections(False)
+
+        # 행 배경(등급 색)은 델리게이트가 그린다. 자세한 이유는
+        # widgets.TierRowDelegate 참고.
+        self._row_tints: Dict[int, str] = {}
+        self.table.setItemDelegate(
+            widgets.TierRowDelegate(self._row_tints.get, self.table)
+        )
 
     def _build_menu(self) -> None:
         """언어 메뉴 - 즉시 전환된다 (재시작 불필요)."""
@@ -268,10 +372,18 @@ class MainWindow(QMainWindow):
         box.addWidget(self.growth_caption)
 
         self.growth_table = QTableWidget(0, len(GROWTH_COLUMN_KEYS))
-        self.growth_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        growth_header = self.growth_table.horizontalHeader()
+        growth_header.setSectionResizeMode(0, QHeaderView.Stretch)
+        growth_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        growth_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        growth_header.setHighlightSections(False)
         self.growth_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.growth_table.verticalHeader().setVisible(False)
+        self.growth_table.verticalHeader().setDefaultSectionSize(34)
         self.growth_table.setShowGrid(False)
+        # 이 표는 보조 정보다. 최소 높이를 낮게 잡아 두지 않으면 계정 표(이
+        # 화면의 주인공)를 아래에서 밀어 올려 행이 잘린다.
+        self.growth_table.setMinimumHeight(80)
         box.addWidget(self.growth_table)
 
         return section
@@ -392,31 +504,50 @@ class MainWindow(QMainWindow):
         worst_account_label: Optional[str] = None
         warn_or_worse_count = 0
         dash = i18n.t("common.none")
+        # 히어로의 큰 숫자에 쓸 값 (가장 높은 사용률과 그 계정).
+        self._worst_pct: Optional[float] = None
+        self._worst_account_name: Optional[str] = None
+        # 행 수가 줄어든 경우 이전 행의 색이 남지 않도록 매번 비운다.
+        self._row_tints.clear()
 
         for row, account in enumerate(accounts):
             sample = latest.get(account.account_id)
-            self.table.setItem(row, COL_NAME, QTableWidgetItem(account.name))
-            self.table.setItem(row, COL_PATH, QTableWidgetItem(account.path))
+            name_item = QTableWidgetItem(account.name)
+            self.table.setItem(row, COL_NAME, name_item)
+            path_item = QTableWidgetItem(account.path)
+            # 폭이 모자라 잘리더라도 전체 경로는 확인할 수 있어야 한다.
+            path_item.setToolTip(account.path)
+            self.table.setItem(row, COL_PATH, path_item)
 
             if sample is None:
-                for column in (COL_FS, COL_BYTE, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):
+                for column in (COL_FS, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):
                     self.table.setItem(row, column, QTableWidgetItem(dash))
-                self.table.setCellWidget(row, COL_TIER, widgets.TierBadge(tiers.UNKNOWN, None))
+                self.table.setCellWidget(row, COL_BYTE, widgets.UsageBar(None, tiers.UNKNOWN))
+                self.table.setCellWidget(row, COL_TIER, widgets.badge_cell(tiers.UNKNOWN, None))
                 self.table.setItem(row, COL_STATUS, QTableWidgetItem(i18n.t("dashboard.not_collected")))
                 continue
 
             self.table.setItem(row, COL_FS, QTableWidgetItem(sample.filesystem or dash))
-            byte_text = f"{sample.byte_pct:.1f}%" if sample.byte_pct is not None else dash
             inode_text = (
                 f"{sample.inode_pct:.1f}%"
                 if sample.inode_pct is not None
                 else i18n.t("common.unknown_value")
             )
-            self.table.setItem(row, COL_BYTE, QTableWidgetItem(byte_text))
+            self.table.setCellWidget(
+                row, COL_BYTE, widgets.UsageBar(sample.byte_pct, sample.overall_tier)
+            )
             self.table.setItem(row, COL_INODE, QTableWidgetItem(inode_text))
             self.table.setItem(row, COL_QUOTA, QTableWidgetItem(quota.format_usage(sample)))
 
-            self.table.setCellWidget(row, COL_TIER, widgets.TierBadge(sample.overall_tier, sample.byte_pct))
+            self.table.setCellWidget(
+                row, COL_TIER, widgets.badge_cell(sample.overall_tier, sample.byte_pct)
+            )
+
+            if sample.byte_pct is not None and (
+                self._worst_pct is None or sample.byte_pct > self._worst_pct
+            ):
+                self._worst_pct = sample.byte_pct
+                self._worst_account_name = account.name
 
             forecast = self._forecasts.get(account.account_id)
             forecast_item = QTableWidgetItem(widgets.format_forecast_cell(forecast))
@@ -469,26 +600,26 @@ class MainWindow(QMainWindow):
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
 
     def _tint_row(self, row: int, tier: str) -> None:
-        """행 배경을 등급 색으로 옅게 칠한다 (정상/확인불가는 칠하지 않음).
+        """행 배경 색을 기록한다 (실제로 칠하는 것은 델리게이트).
 
-        등급은 배지 텍스트로도 보이므로, 색을 못 보는 환경에서도 정보가
-        사라지지 않는다 - 색은 어디를 먼저 볼지 알려주는 보조 수단이다."""
+        정상/확인불가는 칠하지 않는다 - 계정 대부분이 정상인 것이 보통이라
+        전부 칠하면 색이 배경 소음이 되어 문제 있는 행이 오히려 묻힌다."""
 
         background = tiers.row_background(tier)
         if background is None:
-            return
-        brush = QBrush(QColor(background))
-        for column in range(self.table.columnCount()):
-            item = self.table.item(row, column)
-            if item is not None:
-                item.setBackground(brush)
+            self._row_tints.pop(row, None)
+        else:
+            self._row_tints[row] = background
 
     def _update_summary(
         self, warn_or_worse_count: int, worst_account_label: Optional[str], worst_tier: str
     ) -> None:
         if not self._config.accounts:
-            self.summary_label.setText(i18n.t("dashboard.no_accounts"))
-            self._apply_banner(tiers.UNKNOWN)
+            self.hero_state_label.setText(i18n.t("dashboard.no_accounts"))
+            self.hero_value_label.setText(i18n.t("common.none"))
+            self.hero_detail_label.setText("")
+            self._apply_hero_tier(tiers.UNKNOWN)
+            self._update_hero_stats(0)
             return
 
         banner_tier = worst_tier if warn_or_worse_count else tiers.NORMAL
@@ -503,20 +634,44 @@ class MainWindow(QMainWindow):
         # "정상"이라고 판단하는 것이 가장 위험하다.
         warning = self._freshness_warning()
         if warning:
-            text = f"{warning}\n{text}"
+            text = f"{warning} · {text}"
             banner_tier = tiers.worse(banner_tier, tiers.ALERT)
-            self.summary_label.setWordWrap(True)
 
-        self.summary_label.setText(text)
-        self._apply_banner(banner_tier)
+        self.hero_state_label.setText(text)
 
-    def _apply_banner(self, tier: str) -> None:
-        background, border = BANNER_COLORS.get(tier, BANNER_COLORS[tiers.UNKNOWN])
-        self.summary_label.setStyleSheet(
-            SUMMARY_STYLE.format(
-                background=background, border=border, text=tiers.color(tier)
-            )
+        # 큰 숫자에는 "가장 높은 사용률"을 둔다. 여러 계정을 한 화면에서 볼 때
+        # 사람이 실제로 찾는 값이 그것이다.
+        self.hero_value_label.setText(
+            f"{self._worst_pct:.1f}%" if self._worst_pct is not None else i18n.t("common.none")
         )
+        self.hero_value_label.setStyleSheet(f"color: {tiers.color(banner_tier)};")
+        self.hero_detail_label.setText(
+            i18n.t("dashboard.hero_detail", account=self._worst_account_name)
+            if self._worst_account_name
+            else ""
+        )
+        self._apply_hero_tier(banner_tier)
+        self._update_hero_stats(warn_or_worse_count)
+
+    def _apply_hero_tier(self, tier: str) -> None:
+        self.hero_accent.setStyleSheet(HERO_ACCENT_STYLE.format(color=tiers.color(tier)))
+
+    def _update_hero_stats(self, warn_or_worse_count: int) -> None:
+        newest = [
+            info.age_seconds
+            for info in self._freshness.values()
+            if getattr(info, "age_seconds", None) is not None
+        ]
+        collected = freshness.format_age(min(newest)) if newest else i18n.t("common.none")
+
+        for key, value in (
+            ("accounts", str(len(self._config.accounts))),
+            ("attention", str(warn_or_worse_count)),
+            ("collected", collected),
+        ):
+            caption, value_label = self.hero_stats[key]
+            caption.setText(i18n.t(f"dashboard.stat.{key}"))
+            value_label.setText(value)
 
     # -- 이벤트 핸들러 --------------------------------------------------
     def _trigger_now(self) -> None:

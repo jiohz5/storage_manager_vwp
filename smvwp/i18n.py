@@ -69,6 +69,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.no_accounts": "등록된 계정이 없습니다. '계정 관리'에서 추가하세요.",
         "dashboard.all_normal": "모든 계정 정상 ({count}개 계정)",
         "dashboard.warn_summary": "주의 이상 계정 {count}개 - 가장 급함: {worst}",
+        "dashboard.hero_detail": "가장 높은 사용률 · {account}",
+        "dashboard.stat.accounts": "계정",
+        "dashboard.stat.attention": "주의 이상",
+        "dashboard.stat.collected": "마지막 수집",
         "dashboard.not_collected": "아직 수집되지 않음",
         "dashboard.collect_ok": "정상 수집",
         "dashboard.collect_failed": "수집 실패: {message}",
@@ -332,6 +336,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "last {hours}h. cron may not be running, so data is only collected when the "
             "GUI is open (check: crontab -l)"
         ),
+        "dashboard.hero_detail": "Highest usage · {account}",
+        "dashboard.stat.accounts": "Accounts",
+        "dashboard.stat.attention": "Warning+",
+        "dashboard.stat.collected": "Last collected",
         "freshness.notify_stale": (
             "[Collection stalled] {account} - last collected {age}. Check whether the "
             "collector is still running."
