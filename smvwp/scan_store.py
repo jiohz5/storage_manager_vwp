@@ -104,21 +104,32 @@ def db_path(data_dir: Path) -> Path:
 # 나중에 추가된 scan_runs 열. `CREATE TABLE IF NOT EXISTS`는 이미 있는 표에
 # 열을 더해 주지 않으므로, 기존 데이터 디렉터리에서도 열리도록 따로 채운다.
 # (데이터를 지우고 다시 만들게 하면 그동안 쌓인 스캔 이력이 날아간다.)
-_RUN_COLUMNS_ADDED = {
-    "cpu_system_percent_avg": "REAL",
-    "cpu_system_percent_peak": "REAL",
-    "cpu_top_percent_avg": "REAL",
-    "cpu_top_percent_peak": "REAL",
-    "load_avg_1m": "REAL",
-    "cpu_count": "INTEGER",
+_COLUMNS_ADDED = {
+    "scan_runs": {
+        "cpu_system_percent_avg": "REAL",
+        "cpu_system_percent_peak": "REAL",
+        "cpu_top_percent_avg": "REAL",
+        "cpu_top_percent_peak": "REAL",
+        "load_avg_1m": "REAL",
+        "cpu_count": "INTEGER",
+        "rss_peak_kb": "INTEGER",
+        "memory_total_kb": "INTEGER",
+        "memory_peak_percent": "REAL",
+    },
+    "account_scan_state": {
+        # 계정 목록에 "최근 스캔일"을 보여주려면 기준선을 언제 완주했는지가
+        # 필요하다. 기존에는 세대 번호만 남기고 시각은 안 남겼다.
+        "last_baseline_completed_at": "TEXT",
+    },
 }
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(scan_runs)")}
-    for column, sql_type in _RUN_COLUMNS_ADDED.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE scan_runs ADD COLUMN {column} {sql_type}")
+    for table, columns in _COLUMNS_ADDED.items():
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, sql_type in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
 
 
 def connect(data_dir: Path) -> sqlite3.Connection:
@@ -163,7 +174,9 @@ def finish_run(conn: sqlite3.Connection, run_id: str, status: str, load=None) ->
             "UPDATE scan_runs SET ended_at = ?, status = ?, "
             "cpu_system_percent_avg = ?, cpu_system_percent_peak = ?, "
             "cpu_top_percent_avg = ?, cpu_top_percent_peak = ?, "
-            "load_avg_1m = ?, cpu_count = ? WHERE run_id = ?",
+            "load_avg_1m = ?, cpu_count = ?, "
+            "rss_peak_kb = ?, memory_total_kb = ?, memory_peak_percent = ? "
+            "WHERE run_id = ?",
             (
                 utc_now_iso(),
                 status,
@@ -173,6 +186,9 @@ def finish_run(conn: sqlite3.Connection, run_id: str, status: str, load=None) ->
                 load.top_percent_peak,
                 load.load_avg_1m,
                 load.cpu_count,
+                load.rss_peak_kb,
+                load.memory_total_kb,
+                load.memory_peak_percent,
                 run_id,
             ),
         )
@@ -235,8 +251,9 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
 def mark_generation_completed(conn: sqlite3.Connection, account_id: str, generation: int) -> None:
     get_account_state(conn, account_id)  # 행이 없으면 만들어 둠
     conn.execute(
-        "UPDATE account_scan_state SET last_completed_generation = ? WHERE account_id = ?",
-        (generation, account_id),
+        "UPDATE account_scan_state SET last_completed_generation = ?, "
+        "last_baseline_completed_at = ? WHERE account_id = ?",
+        (generation, utc_now_iso(), account_id),
     )
     conn.commit()
 

@@ -125,5 +125,55 @@ class AccumulatorTests(unittest.TestCase):
         self.assertAlmostEqual(summary.top_percent_peak, 120.0)
 
 
+
+class MemoryTests(unittest.TestCase):
+    """메모리는 최고치를 남긴다 - du/find는 끝나면 사라져 사후 관측이 안 된다."""
+
+    def test_reads_vmrss_from_status(self):
+        status = (
+            "Name:\tpython3\nState:\tS (sleeping)\nVmPeak:\t  900000 kB\n"
+            "VmRSS:\t  412345 kB\nThreads:\t4\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(Path(tmp), "status", status)
+            with patch.object(loadstat, "PROC_SELF_STATUS", path):
+                self.assertEqual(loadstat._self_rss_kb(), 412345)
+
+    def test_missing_status_is_none(self):
+        with patch.object(loadstat, "PROC_SELF_STATUS", Path("/nonexistent/status")):
+            self.assertIsNone(loadstat._self_rss_kb())
+
+    def test_meminfo_uses_available_not_free(self):
+        """MemFree는 캐시 때문에 거의 항상 작게 나온다 - 그걸 부족으로 읽으면
+        매번 거짓 경보가 된다."""
+
+        meminfo = (
+            "MemTotal:       32000000 kB\nMemFree:          500000 kB\n"
+            "MemAvailable:   20000000 kB\nBuffers:          100000 kB\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(Path(tmp), "meminfo", meminfo)
+            with patch.object(loadstat, "PROC_MEMINFO", path):
+                total, available = loadstat._system_memory_kb()
+        self.assertEqual(total, 32000000)
+        self.assertEqual(available, 20000000)
+
+    def test_summary_reports_peak_and_percent(self):
+        accumulator = loadstat.Accumulator()
+        accumulator._rss_peak = 320000            # 320MB
+        with patch.object(loadstat, "_system_memory_kb", return_value=(32000000, None)):
+            summary = accumulator.summary()
+        self.assertEqual(summary.rss_peak_kb, 320000)
+        self.assertAlmostEqual(summary.memory_peak_percent, 1.0)
+
+    def test_percent_is_none_when_total_unknown(self):
+        """전체 메모리를 모르면 퍼센트를 지어내지 않는다."""
+
+        accumulator = loadstat.Accumulator()
+        accumulator._rss_peak = 320000
+        with patch.object(loadstat, "_system_memory_kb", return_value=(None, None)):
+            summary = accumulator.summary()
+        self.assertIsNone(summary.memory_peak_percent)
+
 if __name__ == "__main__":
     unittest.main()

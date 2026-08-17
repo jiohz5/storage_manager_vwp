@@ -248,6 +248,19 @@ QHeaderView::section {{
 }}
 QTableCornerButton::section {{ background: {SURFACE_SUNKEN}; border: none; }}
 
+/* ---------- 펼침 버튼 ---------- */
+/* 접힌 설정을 여는 버튼. 일반 버튼처럼 보이면 "눌러야 하는 것"으로 읽히므로,
+   테두리 없이 제목처럼 두고 화살표로만 상태를 알린다. */
+QToolButton#disclosure {{
+    border: none;
+    background: transparent;
+    padding: 6px 2px;
+    font-size: {FONT_SUBTITLE}px;
+    font-weight: {WEIGHT_BOLD};
+    color: {TEXT};
+}}
+QToolButton#disclosure:hover {{ color: {ACCENT}; }}
+
 /* ---------- 진행 막대 ---------- */
 /* 상세 스캔이 도는 동안만 보이는 불확정 막대. 얇게 둬서 "일하는 중"만
    알리고 화면의 주인공(계정 표)을 밀어내지 않게 한다. */

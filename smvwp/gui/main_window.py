@@ -663,12 +663,27 @@ class MainWindow(QMainWindow):
             return ""
         if avg is None or peak is None:
             return ""
-        return i18n.t(
+        text = i18n.t(
             "scan.cpu_usage",
             avg=f"{avg:.0f}",
             peak=f"{peak:.0f}",
             system=f"{system_avg:.1f}" if system_avg is not None else "-",
         )
+
+        # 메모리는 최고치만 붙인다. "스캔이 메모리를 위협했나"에 답하는 것은
+        # 평균이 아니라 순간 최대다.
+        try:
+            rss_kb = latest_run["rss_peak_kb"]
+            mem_pct = latest_run["memory_peak_percent"]
+        except (KeyError, IndexError):
+            return text
+        if rss_kb:
+            text += "  |  " + i18n.t(
+                "scan.memory_usage",
+                peak=widgets.format_kb(rss_kb),
+                percent=f"{mem_pct:.1f}" if mem_pct is not None else "-",
+            )
+        return text
 
     @staticmethod
     def _scan_failure_text(entry, account_name: str) -> str:

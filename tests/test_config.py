@@ -1,6 +1,8 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from smvwp import config as config_module
 
@@ -130,3 +132,52 @@ class RemoveAndFilterAccountTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AccountOwnershipTests(unittest.TestCase):
+    """계정을 누가 언제 넣었는지 남긴다.
+
+    파트별 담당자가 계정을 나눠 관리하는 형태라, 남이 등록한 계정을 볼 때
+    "이거 누가 넣었지"를 물어보지 않아도 되어야 한다. 인증 수단이 아니라
+    메모다 - OS 사용자명은 위조할 수 있고 앱은 그것을 검증하지 않는다.
+    """
+
+    def test_new_account_records_creator_and_date(self):
+        with patch("smvwp.config._current_user", return_value="hong"):
+            account = config_module.Account(name="project_a", path="/user/project_a")
+        self.assertEqual(account.created_by, "hong")
+        self.assertTrue(account.created_at)
+
+    def test_survives_round_trip_through_config_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            watched = Path(tmp) / "watched"
+            watched.mkdir(parents=True)
+            cfg = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            with patch("smvwp.config._current_user", return_value="hong"):
+                config_module.add_account(cfg, "project_a", str(watched))
+            config_module.save_config(data_dir, cfg)
+
+            reloaded = config_module.load_config(data_dir)
+        self.assertEqual(reloaded.accounts[0].created_by, "hong")
+
+    def test_old_config_without_creator_still_loads(self):
+        """기존 설치의 config.json에는 이 필드가 없다 - 열리기만 하면 된다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            raw = {
+                "settings": {},
+                "accounts": [
+                    {"name": "old", "path": "/user/old", "account_id": "abc",
+                     "created_at": "2026-01-01T00:00:00+00:00"}
+                ],
+            }
+            config_module.config_file(data_dir).write_text(
+                json.dumps(raw, ensure_ascii=False), encoding="utf-8"
+            )
+            loaded = config_module.load_config(data_dir)
+
+        self.assertEqual(loaded.accounts[0].name, "old")
+        # 모르는 값을 지어내지 않는다 - 빈 값이면 화면에서 '-'로 보인다.
+        self.assertFalse(loaded.accounts[0].created_by)

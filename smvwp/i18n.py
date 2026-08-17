@@ -139,6 +139,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "직전 스캔 CPU: 평균 {avg}% · 최대 {peak}% (top 기준, 코어 1개=100%) "
             "· 장비 전체의 {system}%"
         ),
+        "scan.memory_usage": "메모리 최대 {peak} (장비 전체의 {percent}%)",
         "scan.cpu_caveat": (
             "※ 이 값은 **이 장비에서 본 CPU**입니다. 상세 스캔의 실제 부담은 대개 "
             "파일서버 쪽 I/O인데 그것은 여기서 관측할 수 없습니다."
@@ -169,6 +170,12 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         # -- 계정 다이얼로그 ---------------------------------------
         "accounts.title": "계정 관리 / 설정",
         "accounts.registered": "등록된 계정",
+        "accounts.col.name": "이름",
+        "accounts.col.path": "경로",
+        "accounts.col.owner": "추가한 사람",
+        "accounts.col.added": "추가일",
+        "accounts.col.scanned": "최근 스캔일",
+        "accounts.advanced_settings": "상세 설정",
         "accounts.name_placeholder": "계정 이름 (예: project_a)",
         "accounts.path_placeholder": "모니터링 대상 경로 (예: /user/project_a)",
         "accounts.btn.browse": "경로 찾기...",
@@ -419,6 +426,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "Last scan CPU: {avg}% avg / {peak}% peak (top scale, 1 core = 100%) "
             "- {system}% of the whole machine"
         ),
+        "scan.memory_usage": "Memory peak {peak} ({percent}% of the machine)",
         "scan.cpu_caveat": (
             "Note: this is CPU **as seen on this client**. The real cost of a detail scan is "
             "usually file-server I/O, which cannot be observed from here."
@@ -449,6 +457,12 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         # -- Accounts dialog ---------------------------------------
         "accounts.title": "Accounts / Settings",
         "accounts.registered": "Registered accounts",
+        "accounts.col.name": "Name",
+        "accounts.col.path": "Path",
+        "accounts.col.owner": "Added by",
+        "accounts.col.added": "Added",
+        "accounts.col.scanned": "Last scan",
+        "accounts.advanced_settings": "Advanced settings",
         "accounts.name_placeholder": "Account name (e.g. project_a)",
         "accounts.path_placeholder": "Monitored path (e.g. /user/project_a)",
         "accounts.btn.browse": "Browse...",

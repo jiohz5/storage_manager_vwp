@@ -45,6 +45,8 @@ from typing import Optional
 
 PROC_STAT = Path("/proc/stat")
 PROC_SELF_STAT = Path("/proc/self/stat")
+PROC_SELF_STATUS = Path("/proc/self/status")
+PROC_MEMINFO = Path("/proc/meminfo")
 
 
 def available() -> bool:
@@ -151,6 +153,62 @@ class Sampler:
         )
 
 
+def _self_rss_kb() -> Optional[int]:
+    """지금 이 프로세스가 실제로 물고 있는 메모리 (VmRSS, KB)."""
+
+    try:
+        for line in PROC_SELF_STATUS.read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+    return None
+
+
+def _peak_rss_kb() -> Optional[int]:
+    """자기 자신과 **자식들**의 최대 RSS 중 큰 값 (KB).
+
+    `du`/`find`는 자식으로 돌다가 끝나면 사라져서, 그 순간의 RSS를 나중에
+    들여다볼 방법이 없다. `getrusage(RUSAGE_CHILDREN).ru_maxrss`는 거둬들인
+    자식들의 **최고치**를 커널이 기억해 주므로, 사후에도 "가장 많이 썼을 때
+    얼마였나"를 알 수 있다. 스캔이 메모리를 위협했는지는 평균이 아니라 최고치가
+    답하는 질문이다.
+    """
+
+    try:
+        import resource
+    except ImportError:  # Windows
+        return None
+    try:
+        me = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        kids = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    except (OSError, ValueError):  # pragma: no cover - 방어적 처리
+        return None
+    # 리눅스의 ru_maxrss 단위는 KB다 (macOS는 byte지만 반입 대상은 리눅스).
+    return max(me, kids)
+
+
+def _system_memory_kb() -> "tuple":
+    """(전체, 사용가능) KB. 못 읽으면 (None, None).
+
+    `MemFree`가 아니라 `MemAvailable`을 쓴다. 리눅스는 남는 메모리를 캐시로
+    채워 두므로 MemFree는 거의 항상 작게 나오고, 그것을 부족으로 읽으면 매번
+    거짓 경보가 된다."""
+
+    total = available = None
+    try:
+        for line in PROC_MEMINFO.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1])
+            elif line.startswith("MemAvailable:"):
+                available = int(line.split()[1])
+            if total is not None and available is not None:
+                break
+    except (OSError, IndexError, ValueError):
+        return None, None
+    return total, available
+
+
 def _load_avg() -> Optional[float]:
     try:
         return os.getloadavg()[0]
@@ -169,6 +227,11 @@ class Summary:
     top_percent_peak: Optional[float] = None
     load_avg_1m: Optional[float] = None
     cpu_count: int = 1
+    # 메모리는 평균이 아니라 **최고치**를 남긴다. "스캔이 메모리를 위협했나"는
+    # 순간 최대가 답하는 질문이고, du/find는 끝나면 사라져 사후 관측이 안 된다.
+    rss_peak_kb: Optional[int] = None
+    memory_total_kb: Optional[int] = None
+    memory_peak_percent: Optional[float] = None
 
 
 class Accumulator:
@@ -183,6 +246,7 @@ class Accumulator:
         self._system: list = []
         self._top: list = []
         self._last_load: Optional[float] = None
+        self._rss_peak: Optional[int] = None
         self.cpu_count = os.cpu_count() or 1
 
     def sample(self) -> None:
@@ -190,14 +254,31 @@ class Accumulator:
             return
         usage = self._sampler.take()
         self._last_load = usage.load_avg_1m
+
+        # 현재 RSS와 (거둬들인 자식 포함) 최고 RSS 중 큰 값을 계속 갱신한다.
+        for value in (_self_rss_kb(), _peak_rss_kb()):
+            if value is not None and (self._rss_peak is None or value > self._rss_peak):
+                self._rss_peak = value
         if usage.system_percent is None:
             return
         self._system.append(usage.system_percent)
         self._top.append(usage.top_percent)
 
     def summary(self) -> Summary:
+        total_kb, _available = _system_memory_kb()
+        peak_percent = None
+        if self._rss_peak is not None and total_kb:
+            peak_percent = self._rss_peak / total_kb * 100.0
+
         if not self._system:
-            return Summary(samples=0, load_avg_1m=self._last_load, cpu_count=self.cpu_count)
+            return Summary(
+                samples=0,
+                load_avg_1m=self._last_load,
+                cpu_count=self.cpu_count,
+                rss_peak_kb=self._rss_peak,
+                memory_total_kb=total_kb,
+                memory_peak_percent=peak_percent,
+            )
         return Summary(
             samples=len(self._system),
             system_percent_avg=sum(self._system) / len(self._system),
@@ -206,4 +287,7 @@ class Accumulator:
             top_percent_peak=max(self._top),
             load_avg_1m=self._last_load,
             cpu_count=self.cpu_count,
+            rss_peak_kb=self._rss_peak,
+            memory_total_kb=total_kb,
+            memory_peak_percent=peak_percent,
         )

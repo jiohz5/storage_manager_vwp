@@ -122,6 +122,17 @@ class Settings:
     freshness_min_expected_samples: int = 8  # 창 안 기대 표본이 이보다 적으면 판정 보류
 
 
+def _current_user() -> str:
+    """등록한 사람으로 기록할 OS 계정명. 못 알아내면 빈 문자열."""
+
+    try:
+        import getpass
+
+        return getpass.getuser()
+    except Exception:  # pragma: no cover - 환경변수가 전혀 없는 경우
+        return ""
+
+
 @dataclass
 class Account:
     name: str
@@ -129,6 +140,10 @@ class Account:
     enabled: bool = True
     account_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # 등록한 사람의 OS 계정. 파트마다 담당자가 한둘씩 있는 운영 형태라, 나중에
+    # "이 계정 누가 넣었지"를 물어볼 곳이 필요하다. 인증 수단이 아니라 메모다
+    # (OS 사용자명은 위조할 수 있고, 이 앱은 그것을 검증하지 않는다).
+    created_by: str = field(default_factory=lambda: _current_user())
     # 검색 인덱싱은 계정별 opt-in (기본 꺼짐) - 이름 인덱스는 별도 DB를 꽤
     # 차지할 수 있으므로 필요한 계정만 켠다.
     search_indexing: bool = False
@@ -259,6 +274,10 @@ def load_config(data_dir: Path) -> AppConfig:
     seen_ids = set()
     changed = False
     for item in raw.get("accounts", []):
+        # `created_by`가 없는 예전 설정을 읽을 때 기본값(현재 사용자)이 채워지면
+        # **남이 등록한 계정이 지금 파일을 연 사람 것으로 둔갑한다.** 모르는
+        # 값은 지어내지 않고 비워 두고, 화면에서 '-'로 보여 준다.
+        item = {"created_by": "", **item}
         account = Account(**item)
         if not account.account_id or account.account_id in seen_ids:
             account.account_id = uuid.uuid4().hex
