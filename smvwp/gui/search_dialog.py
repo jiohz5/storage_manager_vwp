@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import admin_auth, config as config_module
-from .. import i18n, search_index
+from .. import i18n, search_index, tiers
 from . import widgets
 from .pin_dialog import PinChangeDialog
 
@@ -128,7 +128,7 @@ class SearchDialog(QDialog):
 
         caveat_row = QHBoxLayout()
         caveat = QLabel(i18n.t("search.pin_caveat"))
-        caveat.setStyleSheet("color: #757575; font-size: 9pt;")
+        caveat.setObjectName("caption")
         caveat.setWordWrap(True)
         caveat_row.addWidget(caveat, 1)
         change_pin_btn = QPushButton(i18n.t("search.change_pin"))
@@ -138,7 +138,9 @@ class SearchDialog(QDialog):
 
         # 기본 PIN을 그대로 쓰고 있으면 눈에 띄게 알린다.
         self.pin_warning = QLabel(i18n.t("search.pin_default_warning"))
-        self.pin_warning.setStyleSheet("color: #ef6c00; font-size: 9pt; font-weight: bold;")
+        self.pin_warning.setStyleSheet(
+            f"color: {tiers.color(tiers.ALERT)}; font-weight: bold;"
+        )
         self.pin_warning.setWordWrap(True)
         self.pin_warning.setVisible(
             admin_auth.is_using_default(self._config.settings.admin_pin_hash)
@@ -178,8 +180,11 @@ class SearchDialog(QDialog):
         root.addLayout(query_row)
 
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #424242; font-size: 9pt;")
+        self.status_label.setObjectName("muted")
         self.status_label.setWordWrap(True)
+        # 상태 줄은 이 화면에서 유일한 피드백 통로다. 글자 수에 따라 높이가
+        # 오르내리며 아래 표가 흔들리지 않게 최소 높이를 준다.
+        self.status_label.setMinimumHeight(36)
         root.addWidget(self.status_label)
 
         self.results = QTableWidget(0, 2)
@@ -187,7 +192,12 @@ class SearchDialog(QDialog):
             [i18n.t("search.col.path"), i18n.t("search.col.kind")]
         )
         self.results.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.results.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.results.horizontalHeader().setHighlightSections(False)
         self.results.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.results.verticalHeader().setVisible(False)
+        self.results.verticalHeader().setDefaultSectionSize(34)
+        self.results.setShowGrid(False)
         root.addWidget(self.results)
 
         close_btn = QPushButton(i18n.t("common.close"))
@@ -239,8 +249,12 @@ class SearchDialog(QDialog):
 
         if account.search_indexing:
             # 켜면 바로 한 번 인덱싱한다 (백그라운드).
-            self._worker.run_async(account.account_id, Path(account.path))
-            self.status_label.setText(i18n.t("scan.started"))
+            started = self._worker.run_async(account.account_id, Path(account.path))
+            self.status_label.setText(
+                i18n.t("search.indexing_started", account=account.name)
+                if started
+                else i18n.t("search.indexing_in_progress")
+            )
         else:
             conn = search_index.connect(self._data_dir)
             try:
@@ -250,20 +264,47 @@ class SearchDialog(QDialog):
             self._refresh_state()
 
     def _run_search(self) -> None:
+        """검색을 실행한다.
+
+        어떤 경로로 끝나든 **반드시 상태 줄에 무슨 일이 있었는지 남긴다.**
+        아무 반응이 없으면 사용자는 앱이 멈춘 것인지, 결과가 없는 것인지,
+        누르기는 한 것인지 구분할 수 없다."""
+
         account = self._selected_account()
         if account is None:
+            self.results.setRowCount(0)
+            self.status_label.setText(i18n.t("search.no_account"))
             return
         if not account.search_indexing:
-            self.status_label.setText(i18n.t("search.not_indexed"))
+            self.results.setRowCount(0)
+            self.status_label.setText(i18n.t("search.not_indexed_hint"))
             return
+        if self._worker.is_running():
+            # 인덱싱 중에는 결과가 계속 변한다 - 지금 나온 결과가 전부인 것처럼
+            # 보이면 "없다"고 잘못 판단하게 된다.
+            self.status_label.setText(i18n.t("search.indexing_in_progress"))
+            return
+
+        query = self.query_edit.text().strip()
+        if not query:
+            self.results.setRowCount(0)
+            self.status_label.setText(i18n.t("search.empty_query"))
+            return
+
+        # 검색은 동기로 돈다. contains 모드는 인덱스를 못 써 느릴 수 있으므로,
+        # 조회 전에 "검색 중"을 실제로 그려 둔다 (repaint를 부르지 않으면 조회가
+        # 끝난 뒤에야 화면에 반영되어 아무 의미가 없다).
+        self.status_label.setText(i18n.t("search.searching"))
+        self.status_label.repaint()
 
         limit = self._config.settings.search_result_limit
         conn = search_index.connect(self._data_dir)
         try:
+            indexed = search_index.entry_count(conn, account.account_id)
             hits = search_index.search(
                 conn,
                 account.account_id,
-                self.query_edit.text().strip(),
+                query,
                 mode=self.mode_combo.currentData(),
                 limit=limit,
             )
@@ -274,7 +315,18 @@ class SearchDialog(QDialog):
         for row, hit in enumerate(hits):
             self.results.setItem(row, 0, QTableWidgetItem(hit.relative_path))
             self.results.setItem(row, 1, QTableWidgetItem(hit.kind))
-        self.status_label.setText(i18n.t("search.result_count", count=len(hits), limit=limit))
+
+        if hits:
+            self.status_label.setText(
+                i18n.t("search.result_count", count=len(hits), limit=limit)
+            )
+        elif indexed == 0:
+            # "결과 없음"과 "아직 인덱스가 비어 있음"은 사용자가 할 일이 다르다.
+            self.status_label.setText(i18n.t("search.index_empty"))
+        else:
+            self.status_label.setText(
+                i18n.t("search.no_results", query=query, indexed=indexed)
+            )
 
     def _change_pin(self) -> None:
         dialog = PinChangeDialog(self._data_dir, self._config, parent=self)
@@ -285,9 +337,14 @@ class SearchDialog(QDialog):
 
     def _on_index_finished(self, count: int) -> None:
         self._refresh_state()
+        # _refresh_state는 현재 상태(크기·건수)만 적는다. 방금 인덱싱이 끝났다는
+        # 사실은 따로 알려야 사용자가 검색해도 되는 시점을 안다.
+        self.status_label.setText(
+            f"{i18n.t('search.index_done', count=count)}  |  {self.status_label.text()}"
+        )
 
     def _on_index_failed(self, message: str) -> None:
-        self.status_label.setText(message)
+        self.status_label.setText(i18n.t("search.index_failed", message=message))
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._worker.request_stop()

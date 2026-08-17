@@ -268,6 +268,19 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "search.mode.contains": "포함",
         "search.enable_indexing": "이 계정 검색 인덱싱 켜기",
         "search.not_indexed": "이 계정은 검색 인덱싱이 꺼져 있습니다.",
+        "search.not_indexed_hint": (
+            "이 계정은 검색 인덱싱이 꺼져 있습니다. 위 '검색 인덱싱 사용'을 켜면 "
+            "인덱싱을 시작합니다 (파일 이름·확장자·경로만 저장하며 내용은 저장하지 않습니다)."
+        ),
+        "search.no_account": "검색할 계정이 없습니다. '계정 관리'에서 먼저 등록하세요.",
+        "search.empty_query": "검색어를 입력한 뒤 Enter를 누르거나 '검색'을 누르세요.",
+        "search.searching": "검색 중...",
+        "search.no_results": "'{query}'와 일치하는 항목이 없습니다 (인덱스 {indexed:,}건 중). 검색 방식을 '부분 일치'로 바꿔 보세요.",
+        "search.index_empty": "인덱스가 비어 있습니다. 인덱싱이 끝난 뒤 다시 검색하세요.",
+        "search.indexing_started": "{account} 인덱싱을 시작했습니다. 끝나면 알려 드립니다.",
+        "search.indexing_in_progress": "인덱싱이 진행 중입니다. 끝난 뒤 검색하세요 (지금 결과는 일부일 수 있습니다).",
+        "search.index_done": "인덱싱 완료: {count:,}건",
+        "search.index_failed": "인덱싱 실패: {message}",
         "search.col.path": "상대 경로",
         "search.col.kind": "종류",
         "search.result_count": "결과 {count}건 (최대 {limit}건까지 표시)",
@@ -523,6 +536,19 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "search.mode.contains": "Contains",
         "search.enable_indexing": "Enable search indexing for this account",
         "search.not_indexed": "Search indexing is off for this account.",
+        "search.not_indexed_hint": (
+            "Search indexing is off for this account. Turn on 'Enable search indexing' above "
+            "to start (only names, extensions and paths are stored - never file contents)."
+        ),
+        "search.no_account": "No account to search. Register one from 'Accounts / Settings' first.",
+        "search.empty_query": "Type a query, then press Enter or click Search.",
+        "search.searching": "Searching...",
+        "search.no_results": "Nothing matches '{query}' (out of {indexed:,} indexed entries). Try the 'contains' mode.",
+        "search.index_empty": "The index is empty. Search again once indexing finishes.",
+        "search.indexing_started": "Started indexing {account}. You will be notified when it finishes.",
+        "search.indexing_in_progress": "Indexing is in progress. Search after it finishes (results may be partial now).",
+        "search.index_done": "Indexing finished: {count:,} entries",
+        "search.index_failed": "Indexing failed: {message}",
         "search.col.path": "Relative path",
         "search.col.kind": "Kind",
         "search.result_count": "{count} result(s) (showing up to {limit})",
