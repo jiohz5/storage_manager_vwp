@@ -599,6 +599,22 @@ class MainWindow(QMainWindow):
 
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
 
+    @staticmethod
+    def _scan_failure_text(entry, account_name: str) -> str:
+        """스캔에서 재지 못한 경로를 사유와 함께 몇 개 보여 준다.
+
+        개수만 알려 주면 "왜?"에 답하지 못해 사용자가 할 수 있는 일이 없다.
+        경로와 사유를 함께 보여 주면 권한 요청이든 대상 제외든 바로 판단할 수
+        있다."""
+
+        lines = [i18n.t("scan.failed_warning", count=entry.failed_count)]
+        for path, message in entry.failed_paths[:3]:
+            first_line = (message or "").strip().splitlines()[0] if message else ""
+            lines.append(f"  · {path} — {first_line}" if first_line else f"  · {path}")
+        if entry.failed_count > 3:
+            lines.append(i18n.t("scan.failed_more", count=entry.failed_count - 3))
+        return "\n".join(lines)
+
     def _tint_row(self, row: int, tier: str) -> None:
         """행 배경 색을 기록한다 (실제로 칠하는 것은 델리게이트).
 
@@ -771,7 +787,13 @@ class MainWindow(QMainWindow):
         )
         if entry is None or entry.last_completed_generation is None:
             self.growth_table.setRowCount(0)
-            self.growth_caption.setText(i18n.t("scan.no_baseline", account=account.name))
+            # 기준선이 없는 이유가 "아직 안 돌았다"가 아니라 "돌았는데 전부
+            # 실패했다"일 수 있다. 그 경우 실패 사유를 보여 주지 않으면 스캔이
+            # 즉시 끝나 버린 것처럼만 보인다.
+            if entry is not None and entry.failed_count:
+                self.growth_caption.setText(self._scan_failure_text(entry, account.name))
+            else:
+                self.growth_caption.setText(i18n.t("scan.no_baseline", account=account.name))
             return
 
         activity_note = ""
@@ -783,6 +805,8 @@ class MainWindow(QMainWindow):
             activity_note += "\n" + i18n.t(
                 "scan.partial_warning", count=len(entry.partial_paths)
             )
+        if entry.failed_count:
+            activity_note += "\n" + self._scan_failure_text(entry, account.name)
 
         if entry.growth:
             self.growth_caption.setText(

@@ -303,6 +303,32 @@ def partial_paths(conn: sqlite3.Connection, account_id: str, generation: int) ->
     return [row["path"] for row in rows]
 
 
+def failed_paths(
+    conn: sqlite3.Connection, account_id: str, generation: int, limit: int = 20
+) -> List[tuple]:
+    """이번 세대에서 아예 재지 못한 경로와 사유 `[(path, message), ...]`.
+
+    `partial_paths`(일부만 읽혀 값은 남은 경우)와 구분한다. 이쪽은 값이 아예
+    없으므로, 왜 못 쟀는지 사용자에게 보여 주지 않으면 "스캔이 그냥 실패했다"로만
+    보인다."""
+
+    rows = conn.execute(
+        "SELECT path, error_message FROM scan_checkpoints WHERE account_id = ? "
+        "AND kind = 'baseline' AND generation = ? AND status = 'error' "
+        "ORDER BY path LIMIT ?",
+        (account_id, generation, limit),
+    ).fetchall()
+    return [(row["path"], row["error_message"] or "") for row in rows]
+
+
+def failed_count(conn: sqlite3.Connection, account_id: str, generation: int) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM scan_checkpoints WHERE account_id = ? AND kind = 'baseline' "
+        "AND generation = ? AND status = 'error'",
+        (account_id, generation),
+    ).fetchone()[0]
+
+
 def mark_error(conn: sqlite3.Connection, checkpoint_id: int, message: str) -> None:
     conn.execute(
         "UPDATE scan_checkpoints SET status = 'error', error_message = ?, scanned_at = ? WHERE id = ?",

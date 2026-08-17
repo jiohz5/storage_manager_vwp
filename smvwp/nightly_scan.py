@@ -442,6 +442,10 @@ class AccountScanSnapshot:
     # 권한 등으로 일부만 읽어 실제보다 작게 측정된 경로들. 비어 있지 않으면
     # 화면에 알려야 한다 - 모르고 보면 증가량을 잘못 해석하게 된다.
     partial_paths: List[str] = field(default_factory=list)
+    # 아예 재지 못한 경로와 사유 `[(path, message), ...]`. 이것을 안 보여 주면
+    # 사용자에게는 "스캔이 그냥 실패했다"로만 보인다.
+    failed_paths: List[tuple] = field(default_factory=list)
+    failed_count: int = 0
 
 
 @dataclass
@@ -506,6 +510,15 @@ def get_status_snapshot(
                         scan_store.partial_paths(conn, account.account_id, current_gen)
                         if current_gen
                         else []
+                    ),
+                    # 실패는 **작업 중인 세대** 기준으로 본다. 전부 실패하면
+                    # 완료 세대가 아예 생기지 않아, 완료 세대로 조회하면 정작
+                    # 사용자가 겪는 실패가 하나도 안 보인다.
+                    failed_paths=scan_store.failed_paths(
+                        conn, account.account_id, state.working_generation
+                    ),
+                    failed_count=scan_store.failed_count(
+                        conn, account.account_id, state.working_generation
                     ),
                 )
             )

@@ -37,6 +37,87 @@ class RunDuTests(unittest.TestCase):
         self.assertIn("Permission denied", outcome.error_message)
 
 
+class PriorityPrefixTests(unittest.TestCase):
+    """`nice`/`ionice`가 **있는데 안 되는** 장비에서도 스캔이 돌아야 한다.
+
+    `shutil.which`는 파일이 있는지만 본다. `ionice -c3`은 커널/정책에 따라
+    설치돼 있어도 실패하는데, 그러면 접두사가 붙은 `du`는 실행조차 안 되고
+    exit 1만 남는다. 그 상태가 현장에서는 "상세 스캔이 0.1초 만에 전부 실패"로
+    나타난다."""
+
+    def setUp(self):
+        detail_scan.reset_priority_prefix()
+        self.addCleanup(detail_scan.reset_priority_prefix)
+
+    def _which(self, name):
+        return f"/usr/bin/{name}"
+
+    def test_drops_ionice_when_it_does_not_work(self):
+        def run(command, **kwargs):
+            argv = list(command)
+            if "ionice" in argv:
+                return support.completed(argv, stderr="ionice: Permission denied", returncode=1)
+            return support.completed(argv)
+
+        with patch("smvwp.detail_scan.shutil.which", side_effect=self._which):
+            with patch("smvwp.detail_scan.subprocess.run", side_effect=run):
+                prefix = detail_scan.build_priority_prefix()
+
+        self.assertNotIn("ionice", prefix)
+        self.assertIn("nice", prefix)
+
+    def test_falls_back_to_no_prefix_when_nothing_works(self):
+        with patch("smvwp.detail_scan.shutil.which", side_effect=self._which):
+            with patch(
+                "smvwp.detail_scan.subprocess.run",
+                return_value=support.completed(["x"], returncode=1),
+            ):
+                prefix = detail_scan.build_priority_prefix()
+
+        self.assertEqual(prefix, [])
+
+    def test_du_retries_without_prefix_when_prefixed_run_dies(self):
+        """접두사 때문에 죽은 것이면 접두사 없이 다시 해서 결과를 살린다."""
+
+        def run(command, **kwargs):
+            argv = list(command)
+            if "ionice" in argv:
+                # 접두사가 죽으면 du는 실행조차 안 되어 stdout이 비고 exit 1만 남는다.
+                return support.completed(argv, stderr="ionice: Permission denied", returncode=1)
+            return support.completed(argv, stdout="777\t/acct/a\n")
+
+        with patch(
+            "smvwp.detail_scan.build_priority_prefix", return_value=["ionice", "-c3"]
+        ):
+            with patch("smvwp.detail_scan.subprocess.run", side_effect=run):
+                outcome = detail_scan.run_du("/acct/a", 60)
+
+        self.assertTrue(outcome.ok)
+        self.assertEqual(outcome.size_kb, 777)
+        self.assertFalse(outcome.partial)
+
+    def test_real_failure_is_not_masked_by_the_retry(self):
+        """재시도해도 안 되면 그건 접두사 탓이 아니므로 실패로 남긴다."""
+
+        with patch(
+            "smvwp.detail_scan.build_priority_prefix", return_value=["ionice", "-c3"]
+        ):
+            with patch(
+                "smvwp.detail_scan.subprocess.run",
+                return_value=support.completed(
+                    ["du"],
+                    stdout="",
+                    stderr="du: cannot read directory '/acct/a': Permission denied",
+                    returncode=1,
+                ),
+            ):
+                outcome = detail_scan.run_du("/acct/a", 60)
+
+        self.assertFalse(outcome.ok)
+        # 권한 문제는 고장이 아니라 '이 사용자로는 못 본다'는 뜻이므로 그렇게 읽혀야 한다.
+        self.assertIn("읽기 권한이 없어", outcome.error_message)
+
+
 class ListImmediateSubdirsTests(unittest.TestCase):
     def test_lists_only_directories(self):
         with tempfile.TemporaryDirectory() as tmp:

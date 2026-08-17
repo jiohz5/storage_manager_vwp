@@ -171,5 +171,51 @@ class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):
         self.assertEqual(remaining_generations, {2, 3})
 
 
+class FailedPathsTests(ScanStoreTestCase):
+    """재지 못한 경로를 사유와 함께 돌려주는지.
+
+    이게 없으면 화면에는 "기준선이 아직 없습니다"만 뜬다 - 스캔이 돌긴 했고
+    전부 실패했다는 사실도, 그 이유도 사용자에게 닿지 않는다."""
+
+    def test_reports_errored_paths_with_reason(self):
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a", "/b"])
+        first = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_error(conn, first["id"], "읽기 권한이 없어 크기를 잴 수 없습니다")
+        second = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_done(conn, second["id"], size_kb=10)
+
+        failed = scan_store.failed_paths(conn, "acct-1", 1)
+        self.assertEqual(len(failed), 1)
+        path, message = failed[0]
+        self.assertEqual(path, first["path"])
+        self.assertIn("읽기 권한", message)
+        self.assertEqual(scan_store.failed_count(conn, "acct-1", 1), 1)
+
+    def test_no_failures_reports_nothing(self):
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
+        checkpoint = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_done(conn, checkpoint["id"], size_kb=10)
+
+        self.assertEqual(scan_store.failed_paths(conn, "acct-1", 1), [])
+        self.assertEqual(scan_store.failed_count(conn, "acct-1", 1), 0)
+
+    def test_limit_caps_the_listing_but_not_the_count(self):
+        """전부 실패했을 때 목록이 화면을 뒤덮지 않아야 한다 (개수는 정확히)."""
+
+        conn = self.conn
+        paths = [f"/a/{i}" for i in range(30)]
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, paths)
+        while True:
+            checkpoint = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+            if checkpoint is None:
+                break
+            scan_store.mark_error(conn, checkpoint["id"], "Permission denied")
+
+        self.assertEqual(len(scan_store.failed_paths(conn, "acct-1", 1, limit=5)), 5)
+        self.assertEqual(scan_store.failed_count(conn, "acct-1", 1), 30)
+
+
 if __name__ == "__main__":
     unittest.main()

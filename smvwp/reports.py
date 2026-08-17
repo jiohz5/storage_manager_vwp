@@ -134,6 +134,28 @@ def build_daily_report(
     return "\n".join(lines) + "\n"
 
 
+# 보고서에 적을 실패 경로 최대 개수. 전부 적으면 계정 하나가 보고서를 뒤덮는다
+# (수천 개가 나올 수 있다). 개수는 정확히 적고 목록만 자른다.
+FAILED_PATHS_IN_REPORT = 50
+
+
+def _append_failures(lines: List[str], failed: List[tuple], total: int) -> None:
+    """재지 못한 경로를 사유와 함께 적는다.
+
+    사유를 같이 적어야 사용자가 다음 행동(권한 요청 / 대상 제외 / 진짜 오류
+    신고)을 고를 수 있다. 개수만 적으면 아무것도 못 한다."""
+
+    if not total:
+        return
+    lines.append(f"    {i18n.t('reports.scan_failed_header', count=total)}")
+    for path, message in failed:
+        first_line = (message or "").strip().splitlines()[0] if message else "-"
+        lines.append(f"      {path}")
+        lines.append(f"        {first_line}")
+    if total > len(failed):
+        lines.append(f"      ... {total - len(failed)}")
+
+
 def build_weekly_report(
     data_dir: Path, config: config_module.AppConfig, now: Optional[datetime] = None
 ) -> str:
@@ -149,8 +171,21 @@ def build_weekly_report(
         for account in config.accounts:
             state = scan_store.get_account_state(conn, account.account_id)
             current = state.last_completed_generation
+
+            # 재지 못한 경로를 먼저 적는다. 이걸 빼면 "기준선 없음"만 남아서,
+            # 스캔이 돌긴 했는데 전부 실패했다는 사실이 보고서에서 사라진다.
+            failed = scan_store.failed_paths(
+                conn, account.account_id, state.working_generation, limit=FAILED_PATHS_IN_REPORT
+            )
+            failed_total = scan_store.failed_count(
+                conn, account.account_id, state.working_generation
+            )
+
             if not current:
-                lines.append(f"- {account.name}: {i18n.t('scan.no_baseline', account=account.name)}")
+                # scan.no_baseline 문구가 이미 계정명으로 시작한다 - 앞에 또 붙이면
+                # "project_a: project_a: ..."가 된다.
+                lines.append(f"- {i18n.t('scan.no_baseline', account=account.name)}")
+                _append_failures(lines, failed, failed_total)
                 continue
             previous = current - 1 if current > 1 else None
             rows = (
@@ -163,6 +198,7 @@ def build_weekly_report(
                 )
             )
             lines.append(f"- {account.name} (generation {current})")
+            _append_failures(lines, failed, failed_total)
             if not rows:
                 lines.append("    -")
                 continue

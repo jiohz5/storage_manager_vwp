@@ -131,6 +131,12 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "⚠ 경로 {count}곳은 읽을 수 없는 하위 디렉터리가 있어 실제보다 작게 "
             "측정되었습니다 (권한 부족). 증가량도 그만큼 축소될 수 있습니다."
         ),
+        "scan.failed_warning": (
+            "⚠ 경로 {count}곳은 크기를 재지 못했습니다. 아래 사유를 확인하세요 "
+            "(권한 부족이면 관리자에게 읽기 권한을 요청하거나 대상에서 제외하면 됩니다)."
+        ),
+        "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
+        "reports.scan_failed_header": "[!] 크기를 재지 못한 경로 {count}곳:",
         "scan.new_path": "신규 (이전 세대에 없음)",
         "scan.no_change": "변화 없음",
         "scan.confirm_title": "상세 스캔 실행",
@@ -317,6 +323,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.no_accounts": "No accounts registered. Add one from 'Accounts / Settings'.",
         "dashboard.all_normal": "All accounts normal ({count} accounts)",
         "dashboard.warn_summary": "{count} account(s) at warning or worse - most urgent: {worst}",
+        "dashboard.hero_detail": "Highest usage · {account}",
+        "dashboard.stat.accounts": "Accounts",
+        "dashboard.stat.attention": "Warning+",
+        "dashboard.stat.collected": "Last collected",
         "dashboard.not_collected": "Not collected yet",
         "dashboard.collect_ok": "Collected",
         "dashboard.collect_failed": "Collection failed: {message}",
@@ -336,10 +346,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "last {hours}h. cron may not be running, so data is only collected when the "
             "GUI is open (check: crontab -l)"
         ),
-        "dashboard.hero_detail": "Highest usage · {account}",
-        "dashboard.stat.accounts": "Accounts",
-        "dashboard.stat.attention": "Warning+",
-        "dashboard.stat.collected": "Last collected",
         "freshness.notify_stale": (
             "[Collection stalled] {account} - last collected {age}. Check whether the "
             "collector is still running."
@@ -380,6 +386,12 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "! {count} path(s) contain unreadable subdirectories, so their sizes are "
             "under-measured (insufficient permissions). Growth figures may be understated."
         ),
+        "scan.failed_warning": (
+            "! {count} path(s) could not be measured. Check the reasons below "
+            "(if it is a permission problem, request read access or drop the path)."
+        ),
+        "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
+        "reports.scan_failed_header": "[!] {count} path(s) could not be measured:",
         "scan.new_path": "New (absent in previous generation)",
         "scan.no_change": "No change",
         "scan.confirm_title": "Run detail scan",
