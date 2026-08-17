@@ -20,10 +20,89 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
+import time
+from pathlib import Path
 from typing import Optional, Sequence
 
 ENCODING = "utf-8"
+
+# 지금 이 프로세스가 띄워 둔 자식들.
+#
+# 창을 닫을 때 `du`/`find`를 같이 정리하려면 핸들이 있어야 한다. 부모가 그냥
+# 종료하면 자식은 죽지 않고 init에 재부모화되어 끝까지 도는데 (실제로 재현해
+# 확인했다), 그러면 창을 껐는데도 파일서버 부하가 계속된다.
+#
+# DESIGN.md 1부 2-4절의 "강제 kill 없음"은 **임의의 PID에 신호를 보내지 않는다**는
+# 뜻이고, 같은 문장이 "실행 중인 하위 프로세스만 정리한다"고 명시한다. 여기서
+# 정리하는 것은 우리가 띄운 자식뿐이라 그 원칙 안에 있다.
+PROC_DIR = Path("/proc")
+
+
+def live_child_pids() -> "list":
+    """지금 살아 있는 **내 직계 자식**들의 pid.
+
+    `/proc/<pid>/status`의 `PPid`가 내 pid인 것만 고른다. Popen 핸들을 따로
+    모아 두지 않는 이유는 이 저장소의 테스트가 `subprocess.run`을 모킹하는
+    규약을 쓰고 있어서다 - 호출 방식을 바꾸면 무관한 테스트 수십 개가 같이
+    깨진다. 커널이 이미 부모-자식 관계를 알고 있으니 그것을 읽는 편이 낫다.
+
+    리눅스 전용이다. 다른 OS에서는 빈 목록을 돌려주고, 호출부는 "정리할 것이
+    없었다"로 취급한다."""
+
+    if not PROC_DIR.exists():
+        return []
+    me = os.getpid()
+    children = []
+    for entry in PROC_DIR.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            for line in (entry / "status").read_text(encoding="utf-8").splitlines():
+                if line.startswith("PPid:"):
+                    if int(line.split()[1]) == me:
+                        children.append(int(entry.name))
+                    break
+        except (OSError, ValueError, IndexError):
+            # 훑는 도중 사라지는 것은 정상이다 (경쟁 상태).
+            continue
+    return children
+
+
+def terminate_children(timeout: float = 3.0) -> int:
+    """내가 띄운 자식들을 정리하고 정리한 개수를 돌려준다.
+
+    먼저 SIGTERM으로 부탁하고, 그래도 안 끝나면 SIGKILL로 끊는다. `du`는
+    시그널을 받으면 바로 끝나므로 대개 첫 단계에서 정리된다.
+
+    **다른 사람의 프로세스는 절대 건드리지 않는다** - 대상은 커널이 내
+    자식이라고 말해 주는 pid뿐이다."""
+
+    targets = live_child_pids()
+    if not targets:
+        return 0
+
+    for pid in targets:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:  # 이미 끝났음
+            pass
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not any(pid in set(live_child_pids()) for pid in targets):
+            return len(targets)
+        time.sleep(0.1)
+
+    for pid in live_child_pids():
+        if pid in targets:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:  # pragma: no cover
+                pass
+    return len(targets)
 
 
 def run_utf8(
@@ -39,7 +118,7 @@ def run_utf8(
     반환 타입은 `subprocess.run(text=True)`와 같아서 호출부는 그대로 `.stdout`,
     `.returncode`를 쓰면 된다. 예외(`TimeoutExpired`, `FileNotFoundError` 등)도
     그대로 올라가므로 각 호출부가 기존처럼 처리한다.
-    """
+"""
 
     completed = subprocess.run(
         list(command),

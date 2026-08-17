@@ -8,9 +8,14 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from smvwp import procio
 
@@ -82,3 +87,48 @@ class Utf8RoundTripTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChildCleanupTests(unittest.TestCase):
+    """창을 닫을 때 우리가 띄운 자식만 정리한다.
+
+    부모가 그냥 종료하면 자식(du/find)은 죽지 않고 init에 재부모화되어 끝까지
+    돈다 - 창을 껐는데도 파일서버 부하가 계속되는 상태다.
+    """
+
+    def test_lists_only_my_own_children(self):
+        me = os.getpid()
+        proc_dir = None
+        with tempfile.TemporaryDirectory() as tmp:
+            proc_dir = Path(tmp)
+            # 내 자식 하나, 남의 자식 하나, 그리고 숫자가 아닌 항목
+            for pid, ppid in (("111", me), ("222", 99999)):
+                entry = proc_dir / pid
+                entry.mkdir()
+                (entry / "status").write_text(
+                    f"Name:\tdu\nState:\tR\nPPid:\t{ppid}\n", encoding="utf-8"
+                )
+            (proc_dir / "self").mkdir()
+
+            with patch.object(procio, "PROC_DIR", proc_dir):
+                found = procio.live_child_pids()
+
+        self.assertEqual(found, [111])
+
+    def test_no_proc_filesystem_is_empty_not_error(self):
+        """리눅스가 아니면 조용히 '정리할 것 없음'이어야 한다."""
+
+        with patch.object(procio, "PROC_DIR", Path("/nonexistent-proc")):
+            self.assertEqual(procio.live_child_pids(), [])
+            self.assertEqual(procio.terminate_children(), 0)
+
+    def test_terminate_signals_each_child_once(self):
+        killed = []
+
+        with patch.object(procio, "live_child_pids", side_effect=[[7, 9], [], []]):
+            with patch("smvwp.procio.os.kill", side_effect=lambda pid, sig: killed.append((pid, sig))):
+                count = procio.terminate_children(timeout=0.5)
+
+        self.assertEqual(count, 2)
+        self.assertEqual([pid for pid, _ in killed], [7, 9])
+        self.assertTrue(all(sig == signal.SIGTERM for _, sig in killed))

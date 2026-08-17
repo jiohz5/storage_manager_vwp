@@ -224,3 +224,54 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MarkInterruptedRunTests(unittest.TestCase):
+    """창을 닫아 스캔 스레드가 잘렸을 때 실행 상태를 마감한다.
+
+    이걸 안 하면 `finally`가 못 돌아 실행 행이 영영 `running`으로 남고, 다음에
+    GUI를 열었을 때 "지금 뭔가 돌고 있다"로 오해하게 된다.
+    """
+
+    def test_running_row_becomes_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            conn = scan_store.connect(data_dir)
+            try:
+                scan_store.start_run(conn, "run-1", "gui")
+            finally:
+                conn.close()
+
+            self.assertTrue(nightly_scan.mark_interrupted_run(data_dir))
+
+            conn = scan_store.connect(data_dir)
+            try:
+                row = scan_store.latest_run(conn)
+                self.assertEqual(row["status"], "stopped")
+                self.assertIsNotNone(row["ended_at"])
+            finally:
+                conn.close()
+
+    def test_already_finished_run_is_left_alone(self):
+        """정상 종료된 실행을 나중에 stopped로 덮어쓰면 이력이 거짓이 된다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            conn = scan_store.connect(data_dir)
+            try:
+                scan_store.start_run(conn, "run-1", "cron")
+                scan_store.finish_run(conn, "run-1", "completed")
+            finally:
+                conn.close()
+
+            self.assertFalse(nightly_scan.mark_interrupted_run(data_dir))
+
+            conn = scan_store.connect(data_dir)
+            try:
+                self.assertEqual(scan_store.latest_run(conn)["status"], "completed")
+            finally:
+                conn.close()
+
+    def test_no_runs_at_all_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(nightly_scan.mark_interrupted_run(Path(tmp)))

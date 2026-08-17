@@ -64,7 +64,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.btn.collect_now": "새로고침",
         "dashboard.btn.collect_now_tooltip": (
             "df로 사용률을 다시 읽어 표를 갱신합니다. 즉시 끝나며 대상 파일시스템에 "
-            "부하를 주지 않습니다 (디렉터리를 훑는 것은 아래 '상세 스캔'입니다)."
+            "부하를 주지 않습니다 (디렉터리를 훑는 것은 '상세 스캔' 탭입니다)."
         ),
         "dashboard.btn.accounts": "계정 관리 / 설정...",
         "dashboard.btn.diagnose": "진단...",
@@ -100,6 +100,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "[수집 지연] {account} - 마지막 수집이 {age}입니다. 수집기가 멈췄는지 확인하세요."
         ),
         # -- 메뉴 --------------------------------------------------
+        "tab.home": "홈",
+        "tab.scan": "상세 스캔",
         "menu.language": "언어",
         "menu.file": "파일",
         # -- 상세 스캔 ---------------------------------------------
@@ -120,6 +122,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.latest_run": "최근 실행: {status} ({started_at})",
         "scan.pending_tasks": "남은 디렉터리 작업 {count}개",
         "scan.status_error": "스캔 상태를 읽을 수 없습니다: {message}",
+        "scan.account_label": "계정",
         "scan.col.path": "경로",
         "scan.col.current_size": "현재 크기",
         "scan.col.delta": "이전 세대 대비",
@@ -150,6 +153,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
         "reports.scan_failed_header": "[!] 크기를 재지 못한 경로 {count}곳:",
+        "scan.close_while_running_title": "상세 스캔 실행 중",
+        "scan.close_while_running_body": (
+            "상세 스캔이 돌고 있습니다. 창을 닫으면 스캔도 함께 멈춥니다.\n\n"
+            "지금까지 끝낸 디렉터리 결과는 남고, 진행 중이던 디렉터리 하나만 "
+            "다음 스캔에서 다시 처리합니다.\n\n닫을까요?"
+        ),
+        "scan.stopped_on_close": "실행 중이던 작업 {count}개를 정리했습니다.",
         "scan.new_path": "신규 (이전 세대에 없음)",
         "scan.no_change": "변화 없음",
         "scan.confirm_title": "상세 스캔 실행",
@@ -350,7 +360,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.btn.collect_now": "Refresh",
         "dashboard.btn.collect_now_tooltip": (
             "Re-reads usage with df and updates the table. Finishes immediately and puts "
-            "no load on the monitored filesystem (directory walks are the 'detail scan' below)."
+            "no load on the monitored filesystem (directory walks are the 'Detail scan' tab)."
         ),
         "dashboard.btn.accounts": "Accounts / Settings...",
         "dashboard.btn.diagnose": "Diagnostics...",
@@ -387,6 +397,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "collector is still running."
         ),
         # -- Menu --------------------------------------------------
+        "tab.home": "Home",
+        "tab.scan": "Detail scan",
         "menu.language": "Language",
         "menu.file": "File",
         # -- Detail scan -------------------------------------------
@@ -407,6 +419,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.latest_run": "Last run: {status} ({started_at})",
         "scan.pending_tasks": "{count} directory task(s) remaining",
         "scan.status_error": "Cannot read scan status: {message}",
+        "scan.account_label": "Account",
         "scan.col.path": "Path",
         "scan.col.current_size": "Current size",
         "scan.col.delta": "vs previous generation",
@@ -437,6 +450,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
         "reports.scan_failed_header": "[!] {count} path(s) could not be measured:",
+        "scan.close_while_running_title": "Detail scan running",
+        "scan.close_while_running_body": (
+            "A detail scan is running. Closing the window stops it too.\n\n"
+            "Directories already finished are kept; only the one in progress is "
+            "redone on the next scan.\n\nClose?"
+        ),
+        "scan.stopped_on_close": "Stopped {count} running task(s).",
         "scan.new_path": "New (absent in previous generation)",
         "scan.no_change": "No change",
         "scan.confirm_title": "Run detail scan",

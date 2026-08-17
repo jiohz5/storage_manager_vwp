@@ -1,12 +1,14 @@
-"""대시보드 단일 화면 (GUI의 중심).
+"""메인 창 - 홈(현황) / 상세 스캔 두 탭.
 
-DESIGN.md 2부 6절 결정 사항을 반영:
-- 화면 구조: 대시보드 단일 화면 (탭 없음). 계정 등록/설정은 다이얼로그.
-- "한눈 요약 우선" (1차 채택): 최상단에 "경고 이상 계정 수 / 가장 급한 계정"
-  요약을 배치해 표를 스크롤/정렬하지 않아도 위험 상태를 바로 파악할 수 있게
-  한다.
-- 상세 스캔(야간 du/find) 영역도 탭을 새로 만들지 않고 같은 화면 아래쪽에
-  붙인다.
+DESIGN.md 2부 6절은 "대시보드 단일 화면(탭 없음)"으로 결정했었다. 실제로 써
+보니 **상세 스캔 영역이 세로 공간을 너무 많이 가져가** 매일 보는 현황이 가끔
+보는 스캔에 밀렸다. 스플리터로 비율을 조절하게 해 봤지만 그건 "매번 사용자가
+정리해야 한다"는 뜻이라 근본 해결이 아니었다. 그래서 탭 둘로 나눴다 (3부
+"화면 구조 - 단일 화면에서 탭 둘로" 참고).
+
+유지되는 것:
+- "한눈 요약 우선": 홈 탭 최상단에 히어로(가장 높은 사용률 + 주의 이상 건수).
+- 계정 등록/설정·보고서·검색은 여전히 다이얼로그다 (탭을 더 늘리지 않는다).
 
 모든 표시 문자열은 `i18n.t`를 거친다. 언어를 바꾸면 `retranslate()`가 정적
 문자열을, 이어지는 갱신이 동적 문자열을 다시 그린다 - 앱을 다시 시작할 필요가
@@ -18,11 +20,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -31,7 +34,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSplitter,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -39,7 +42,17 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import config as config_module
-from .. import diagnostics, forecast_notify, freshness, i18n, nightly_scan, quota, store, tiers
+from .. import (
+    diagnostics,
+    forecast_notify,
+    freshness,
+    i18n,
+    nightly_scan,
+    procio,
+    quota,
+    store,
+    tiers,
+)
 from ..scheduler import CollectorScheduler, NightlyScanWorker
 from . import theme, widgets
 from .account_dialog import AccountDialog
@@ -154,8 +167,19 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         self._build_menu()
 
-        central = QWidget()
-        layout = QVBoxLayout(central)
+        # 탭 두 개: 홈(현황) / 상세 스캔.
+        #
+        # 원래는 한 화면에 세로로 쌓았는데(DESIGN.md 2부 6절 "대시보드 단일
+        # 화면"), 실제로 써 보니 **상세 스캔 영역이 세로 공간을 너무 많이
+        # 가져갔다.** 매일 보는 것은 현황이고 상세 스캔은 밤에 돌아간 결과를
+        # 가끔 확인하는 것인데, 자주 보는 쪽이 가끔 보는 쪽에 밀리는 구조였다.
+        # 스플리터로 비율을 조절하게 해 봤지만 그건 "매번 사용자가 정리해야
+        # 한다"는 뜻이라 근본 해결이 아니었다.
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        home = QWidget()
+        layout = QVBoxLayout(home)
         layout.setContentsMargins(theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD)
         layout.setSpacing(theme.GAP_SECTION)
 
@@ -195,30 +219,24 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setShowGrid(False)
-        self.table.itemSelectionChanged.connect(self._refresh_growth_table)
+        self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
 
-        # 계정 표와 스캔 섹션을 스플리터로 묶는다.
-        #
-        # 그냥 세로로 쌓으면 스캔 섹션이 자기 sizeHint(365px)를 먼저 받아 가고
-        # 계정 표에는 남는 것만 돌아온다 - 실제로 재 보니 계정 5개에 260px가
-        # 필요한데 190px만 받아 행이 중간에서 잘렸다. 계정 수는 현장마다 다르니
-        # 비율을 코드로 못박기보다 사용자가 끌어서 정하게 두는 편이 낫다.
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(10)
-        # 헤더 + 두 행 정도는 어떤 창 크기에서도 남긴다.
+        # 홈 탭에서는 계정 표가 세로 공간을 전부 가져간다.
         self.table.setMinimumHeight(140)
-        splitter.addWidget(self.table)
-        splitter.addWidget(self._build_scan_section())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([520, 280])
-        layout.addWidget(splitter, 1)
+        layout.addWidget(self.table, 1)
+        self.tabs.addTab(home, "")
+
+        scan_tab = QWidget()
+        scan_layout = QVBoxLayout(scan_tab)
+        scan_layout.setContentsMargins(
+            theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD
+        )
+        scan_layout.setSpacing(theme.GAP_SECTION)
+        scan_layout.addWidget(self._build_scan_section(), 1)
+        self.tabs.addTab(scan_tab, "")
 
         self.status_bar_label = QLabel("")
         self.statusBar().addPermanentWidget(self.status_bar_label)
-
-        self.setCentralWidget(central)
 
     def _fit_path_column(self) -> None:
         """경로 열에 남는 폭을 몰아주되 최소 폭은 지킨다.
@@ -375,6 +393,19 @@ class MainWindow(QMainWindow):
         self.scan_title_label.setObjectName("sectionTitle")
         box.addWidget(self.scan_title_label)
 
+        # 계정 선택은 이 탭 안에 둔다. 홈 표에서 고른 것과 서로 따라간다.
+        account_row = QHBoxLayout()
+        account_row.setSpacing(8)
+        self.scan_account_label = QLabel()
+        self.scan_account_label.setObjectName("muted")
+        self.scan_account_combo = QComboBox()
+        self.scan_account_combo.setMinimumWidth(200)
+        self.scan_account_combo.currentIndexChanged.connect(self._refresh_growth_table)
+        account_row.addWidget(self.scan_account_label)
+        account_row.addWidget(self.scan_account_combo)
+        account_row.addStretch(1)
+        box.addLayout(account_row)
+
         self.scan_status_label = QLabel()
         self.scan_status_label.setWordWrap(True)
         box.addWidget(self.scan_status_label)
@@ -436,6 +467,8 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(i18n.t("app.title"))
         self.language_menu.setTitle(i18n.t("menu.language"))
+        self.tabs.setTabText(0, i18n.t("tab.home"))
+        self.tabs.setTabText(1, i18n.t("tab.scan"))
         self.caveat_label.setText(i18n.t("dashboard.df_caveat"))
         self.collect_btn.setText(i18n.t("dashboard.btn.collect_now"))
         self.collect_btn.setToolTip(i18n.t("dashboard.btn.collect_now_tooltip"))
@@ -446,6 +479,8 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
 
         self.scan_title_label.setText(i18n.t("scan.section_title"))
+        self.scan_account_label.setText(i18n.t("scan.account_label"))
+        self._sync_scan_account_combo()
         self.scan_run_btn.setText(i18n.t("scan.btn.run_now"))
         self.scan_run_btn.setToolTip(i18n.t("scan.btn.run_now_tooltip"))
         self.scan_stop_btn.setText(i18n.t("scan.btn.stop"))
@@ -822,10 +857,39 @@ class MainWindow(QMainWindow):
 
     # -- 상세 스캔 영역 --------------------------------------------------
     def _selected_account(self) -> Optional[config_module.Account]:
+        """증가 경로를 보여줄 계정.
+
+        탭을 나누면서 선택 수단이 두 개가 됐다: 홈 탭의 표와 상세 스캔 탭의
+        콤보. **콤보를 진실의 원천으로 삼고** 표에서 고르면 콤보를 따라오게
+        한다 - 상세 스캔 탭만 열어 놓고도 계정을 바꿀 수 있어야 하기 때문이다
+        (탭을 나눠 놓고 "선택은 저쪽 탭에서 하세요"는 말이 안 된다)."""
+
+        account_id = self.scan_account_combo.currentData()
+        return config_module.find_account(self._config, account_id) if account_id else None
+
+    def _sync_scan_account_combo(self) -> None:
+        """계정 목록이 바뀌면 콤보를 다시 채운다 (현재 선택은 유지)."""
+
+        current = self.scan_account_combo.currentData()
+        self.scan_account_combo.blockSignals(True)
+        self.scan_account_combo.clear()
+        for account in self._config.accounts:
+            self.scan_account_combo.addItem(account.name, account.account_id)
+        index = self.scan_account_combo.findData(current)
+        self.scan_account_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.scan_account_combo.blockSignals(False)
+
+    def _on_table_selection_changed(self) -> None:
+        """홈 표에서 행을 고르면 상세 스캔 탭의 계정도 같이 맞춘다."""
+
         row = self.table.currentRow()
-        if row < 0 or row >= len(self._config.accounts):
-            return None
-        return self._config.accounts[row]
+        if 0 <= row < len(self._config.accounts):
+            account_id = self._config.accounts[row].account_id
+            index = self.scan_account_combo.findData(account_id)
+            if index >= 0 and index != self.scan_account_combo.currentIndex():
+                self.scan_account_combo.setCurrentIndex(index)
+                return  # currentIndexChanged가 갱신을 이어서 한다
+        self._refresh_growth_table()
 
     def _refresh_scan_section(self) -> None:
         """스캔 상태를 DB에서 읽어 표시한다 (읽기 전용 - 여기서 스캔을 돌리지
@@ -980,10 +1044,46 @@ class MainWindow(QMainWindow):
         self._refresh_scan_section()
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt 콜백 이름 규칙)
+        """창을 닫을 때 우리가 띄운 작업을 확실히 정리한다.
+
+        예전에는 중지 '요청'만 써 두고 바로 닫았는데, 그러면 `du`가 계속 돌았다.
+        요청은 체크포인트 **사이**에서만 확인되는데 시간의 대부분은 `du`가 도는
+        중이고, 창이 닫히면 파이썬이 종료되면서 daemon 스레드는 잘리지만 자식
+        프로세스는 init에 재부모화되어 끝까지 돈다. 사용자에게는 "껐는데도
+        파일서버가 계속 느린" 상태로 나타난다.
+        """
+
+        if self._scan_worker.is_running():
+            answer = QMessageBox.question(
+                self,
+                i18n.t("scan.close_while_running_title"),
+                i18n.t("scan.close_while_running_body"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+
         self._scheduler.stop()
         self._scan_status_timer.stop()
-        # 실행 중인 상세 스캔이 있으면 안전 중지를 요청해 둔다 - 창을 닫는다고
-        # 강제로 죽이지는 않는다 (체크포인트를 남기고 스스로 멈추게 한다).
         if self._scan_worker.is_running():
-            self._scan_worker.request_stop()
+            self._stop_scan_for_shutdown()
         super().closeEvent(event)
+
+    def _stop_scan_for_shutdown(self) -> None:
+        """스캔을 멈추고 흔적을 정리한다 (창을 닫는 경로 전용).
+
+        순서가 중요하다. 먼저 중지 요청을 써 둬야, 자식을 죽인 뒤 스캐너가
+        잠깐 더 진행하더라도 다음 체크포인트에서 확실히 멈춘다."""
+
+        self._scan_worker.request_stop()
+        # 진행 중이던 디렉터리 하나의 결과는 잃지만, 그 체크포인트는 pending으로
+        # 남아 다음 스캔이 거기서 이어받는다. 창을 닫는 사람의 의도는 "그만"이다.
+        terminated = procio.terminate_children()
+        try:
+            nightly_scan.mark_interrupted_run(self._data_dir)
+        except Exception:  # pragma: no cover - 종료 경로에서 예외로 막히면 안 된다
+            pass
+        if terminated:
+            self.status_bar_label.setText(i18n.t("scan.stopped_on_close", count=terminated))

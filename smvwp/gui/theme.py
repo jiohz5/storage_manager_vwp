@@ -248,6 +248,28 @@ QHeaderView::section {{
 }}
 QTableCornerButton::section {{ background: {SURFACE_SUNKEN}; border: none; }}
 
+/* ---------- 탭 ---------- */
+/* 선택된 탭만 카드처럼 띄우고 나머지는 배경에 눕힌다. 탭이 둘뿐이라
+   지금 어디에 있는지가 한눈에 보여야 한다. */
+QTabWidget::pane {{
+    border: none;
+    background: {BG};
+    top: -1px;
+}}
+QTabBar {{ background: transparent; }}
+QTabBar::tab {{
+    background: transparent;
+    color: {TEXT_MUTED};
+    border: none;
+    padding: 10px 20px;
+    margin-right: 2px;
+    font-weight: {WEIGHT_BOLD};
+    border-top-left-radius: {RADIUS};
+    border-top-right-radius: {RADIUS};
+}}
+QTabBar::tab:selected {{ background: {BG}; color: {ACCENT}; }}
+QTabBar::tab:hover:!selected {{ color: {TEXT}; }}
+
 /* ---------- 펼침 버튼 ---------- */
 /* 접힌 설정을 여는 버튼. 일반 버튼처럼 보이면 "눌러야 하는 것"으로 읽히므로,
    테두리 없이 제목처럼 두고 화살표로만 상태를 알린다. */

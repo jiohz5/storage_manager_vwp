@@ -547,6 +547,31 @@ def get_status_snapshot(
     )
 
 
+def mark_interrupted_run(data_dir: Path) -> bool:
+    """진행 중이던 실행을 `stopped`로 마감하고 잠금을 푼다.
+
+    창을 닫아 스캔 스레드가 잘리면 `run_nightly_scan`의 `finally`가 돌지 못해
+    실행 행이 영영 `running`으로 남는다. 다음에 GUI를 열었을 때 "최근 실행:
+    running"이 계속 보이면 지금 뭔가 돌고 있는 것으로 오해하게 된다.
+
+    잠금도 함께 푼다. `is_locked`가 pid 생존을 확인하므로 남아 있어도 다음
+    스캔을 막지는 않지만, 실제 상태와 파일을 굳이 어긋나게 둘 이유가 없다.
+    """
+
+    conn = scan_store.connect(data_dir)
+    try:
+        row = scan_store.latest_run(conn)
+        if row is None or row["status"] != "running":
+            return False
+        run_id = row["run_id"]
+        scan_store.finish_run(conn, run_id, STATUS_STOPPED)
+    finally:
+        conn.close()
+
+    scan_lock.release_lock(data_dir, run_id)
+    return True
+
+
 def request_stop(data_dir: Path) -> bool:
     """현재 실행 중인 야간 스캔에 안전 중지를 요청한다. 실행 중인 게 없으면
     False."""
