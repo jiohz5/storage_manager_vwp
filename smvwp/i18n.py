@@ -61,7 +61,11 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.col.collected_at": "최근 수집",
         "dashboard.col.status": "상태",
         "dashboard.waiting": "수집 대기 중...",
-        "dashboard.btn.collect_now": "지금 수집",
+        "dashboard.btn.collect_now": "새로고침",
+        "dashboard.btn.collect_now_tooltip": (
+            "df로 사용률을 다시 읽어 표를 갱신합니다. 즉시 끝나며 대상 파일시스템에 "
+            "부하를 주지 않습니다 (디렉터리를 훑는 것은 아래 '상세 스캔'입니다)."
+        ),
         "dashboard.btn.accounts": "계정 관리 / 설정...",
         "dashboard.btn.diagnose": "진단...",
         "dashboard.btn.reports": "보고서...",
@@ -130,6 +134,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.partial_warning": (
             "⚠ 경로 {count}곳은 읽을 수 없는 하위 디렉터리가 있어 실제보다 작게 "
             "측정되었습니다 (권한 부족). 증가량도 그만큼 축소될 수 있습니다."
+        ),
+        "scan.cpu_usage": (
+            "직전 스캔 CPU: 평균 {avg}% · 최대 {peak}% (top 기준, 코어 1개=100%) "
+            "· 장비 전체의 {system}%"
+        ),
+        "scan.cpu_caveat": (
+            "※ 이 값은 **이 장비에서 본 CPU**입니다. 상세 스캔의 실제 부담은 대개 "
+            "파일서버 쪽 I/O인데 그것은 여기서 관측할 수 없습니다."
         ),
         "scan.failed_warning": (
             "⚠ 경로 {count}곳은 크기를 재지 못했습니다. 아래 사유를 확인하세요 "
@@ -328,7 +340,11 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.col.collected_at": "Last collected",
         "dashboard.col.status": "Status",
         "dashboard.waiting": "Waiting for first collection...",
-        "dashboard.btn.collect_now": "Collect now",
+        "dashboard.btn.collect_now": "Refresh",
+        "dashboard.btn.collect_now_tooltip": (
+            "Re-reads usage with df and updates the table. Finishes immediately and puts "
+            "no load on the monitored filesystem (directory walks are the 'detail scan' below)."
+        ),
         "dashboard.btn.accounts": "Accounts / Settings...",
         "dashboard.btn.diagnose": "Diagnostics...",
         "dashboard.btn.reports": "Reports...",
@@ -398,6 +414,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.partial_warning": (
             "! {count} path(s) contain unreadable subdirectories, so their sizes are "
             "under-measured (insufficient permissions). Growth figures may be understated."
+        ),
+        "scan.cpu_usage": (
+            "Last scan CPU: {avg}% avg / {peak}% peak (top scale, 1 core = 100%) "
+            "- {system}% of the whole machine"
+        ),
+        "scan.cpu_caveat": (
+            "Note: this is CPU **as seen on this client**. The real cost of a detail scan is "
+            "usually file-server I/O, which cannot be observed from here."
         ),
         "scan.failed_warning": (
             "! {count} path(s) could not be measured. Check the reasons below "

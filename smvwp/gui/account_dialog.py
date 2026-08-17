@@ -34,6 +34,12 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import i18n, readability
 
+# 계정 경로의 관례 접두사. 이름을 입력하면 `<접두사><이름>`으로 경로를 채워
+# 준다. 사내 관례가 다른 곳에 반입한다면 이 한 줄만 고치면 된다 (설정 항목으로
+# 빼지 않은 이유: 한 장비에서 두 관례를 섞어 쓸 일이 없고, 설정이 하나 늘면
+# 최초 설치 때 사용자가 판단할 것도 하나 는다).
+ACCOUNT_PATH_PREFIX = "/user/"
+
 
 class AccountDialog(QDialog):
     """계정 목록 관리 + 수집 주기/알림/quota 등 전역 설정."""
@@ -68,6 +74,13 @@ class AccountDialog(QDialog):
         self.name_edit.setPlaceholderText(i18n.t("accounts.name_placeholder"))
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText(i18n.t("accounts.path_placeholder"))
+        # 이름을 치면 경로를 관례대로 채워 준다. 대부분의 계정이
+        # `<접두사>/<이름>` 형태라 매번 같은 것을 두 번 입력하게 되기 때문.
+        # `textEdited`는 사용자가 직접 친 경우에만 발생하므로(setText로는 안
+        # 울린다) 자동 채움이 자기 자신을 다시 트리거하지 않는다.
+        self._path_touched = False
+        self.name_edit.textEdited.connect(self._autofill_path)
+        self.path_edit.textEdited.connect(self._on_path_edited)
         browse_btn = QPushButton(i18n.t("accounts.btn.browse"))
         browse_btn.clicked.connect(self._browse_path)
         add_btn = QPushButton(i18n.t("accounts.btn.add"))
@@ -165,6 +178,21 @@ class AccountDialog(QDialog):
         if selected:
             self.path_edit.setText(selected)
 
+    def _autofill_path(self, name: str) -> None:
+        """이름에서 관례 경로를 만들어 경로 칸에 채운다.
+
+        사용자가 경로를 한 번이라도 직접 고쳤으면 더 이상 건드리지 않는다 -
+        입력한 것을 앱이 덮어쓰는 것만큼 짜증나는 동작이 없다. 경로를 비우면
+        "관례대로 해 달라"는 뜻으로 보고 자동 채움을 다시 켠다."""
+
+        if self._path_touched:
+            return
+        name = name.strip()
+        self.path_edit.setText(f"{ACCOUNT_PATH_PREFIX}{name}" if name else "")
+
+    def _on_path_edited(self, text: str) -> None:
+        self._path_touched = bool(text.strip())
+
     def _add_account(self) -> None:
         name = self.name_edit.text().strip()
         path = self.path_edit.text().strip()
@@ -188,6 +216,7 @@ class AccountDialog(QDialog):
             return
         self.name_edit.clear()
         self.path_edit.clear()
+        self._path_touched = False  # 다음 계정도 관례대로 채워 준다
         self._reload_list()
 
     def _confirm_readability(self, path: str) -> bool:

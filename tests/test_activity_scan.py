@@ -102,3 +102,29 @@ class ProcessOneCheckpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SnapshotExclusionTests(unittest.TestCase):
+    def test_find_prunes_snapshot_dirs(self):
+        """`-prune`은 그 디렉터리로 내려가지 않는다는 뜻이다. 스냅샷 안의
+        파일은 과거 사본이라 '최근 변경'으로 셀 대상이 아니고, 세대만큼
+        중복으로 잡혀 변경 건수를 부풀린다."""
+
+        command = activity_scan.find_command("/user/project_a", "2026-01-01T00:00:00")
+        self.assertIn("-prune", command)
+        self.assertIn(".snapshot", command)
+        # prune 대상이 -newermt 조건보다 앞에 와야 실제로 가지치기가 된다.
+        self.assertLess(command.index("-prune"), command.index("-newermt"))
+        self.assertEqual(command[-1], "-print")
+
+    def test_run_find_passes_the_prune(self):
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["argv"] = list(command)
+            return support.completed(list(command), stdout="")
+
+        with patch("smvwp.activity_scan.subprocess.run", side_effect=fake_run):
+            activity_scan.run_find_changed("/acct/a", "2026-01-01T00:00:00", 60)
+
+        self.assertIn("-prune", captured["argv"])

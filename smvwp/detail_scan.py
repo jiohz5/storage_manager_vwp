@@ -97,6 +97,24 @@ def reset_priority_prefix() -> None:
     _priority_prefix_cache = None
 
 
+def du_command(path: str) -> List[str]:
+    """`du -sk` 명령 argv.
+
+    스냅샷 디렉터리를 `--exclude`로 뺀다. 큐에서 빼는 것만으로는 부족한데,
+    `du`는 주어진 디렉터리 아래를 스스로 전부 걸어 내려가므로 큐와 무관하게
+    `.snapshot` 안까지 세기 때문이다. 즉 제외는 **명령 자체에** 걸어야 한다.
+
+    `--exclude`는 경로 전체가 아니라 이름(basename)에 대해 모든 깊이에서
+    맞춰진다. NetApp처럼 디렉터리마다 `.snapshot`이 붙는 파일시스템을
+    감안한 것이다."""
+
+    command = ["du", "-sk"]
+    for name in sorted(SNAPSHOT_DIR_NAMES):
+        command.append(f"--exclude={name}")
+    command += ["--", path]
+    return command
+
+
 def _parse_du_total(stdout: str) -> Optional[int]:
     """`du -sk` 출력의 마지막 줄에서 총계(KB)를 뽑는다."""
 
@@ -130,7 +148,7 @@ def run_du(path: str, timeout_seconds: int) -> DuOutcome:
     try:
         # du 출력에는 파일 경로가 들어간다 - 비ASCII 경로가 로케일 인코딩으로
         # 깨지지 않도록 UTF-8을 명시한다 (smvwp.procio 참고).
-        proc = procio.run_utf8(prefix + ["du", "-sk", "--", path], timeout=timeout_seconds)
+        proc = procio.run_utf8(prefix + du_command(path), timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         return DuOutcome(ok=False, timed_out=True)
     except FileNotFoundError:
@@ -144,7 +162,7 @@ def run_du(path: str, timeout_seconds: int) -> DuOutcome:
     # 그때 되면 접두사를 이번 실행 내내 쓰지 않는다.
     if size_kb is None and prefix and proc.returncode != 0:
         try:
-            bare = procio.run_utf8(["du", "-sk", "--", path], timeout=timeout_seconds)
+            bare = procio.run_utf8(du_command(path), timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             return DuOutcome(ok=False, timed_out=True)
         except FileNotFoundError:
@@ -185,14 +203,32 @@ def run_du(path: str, timeout_seconds: int) -> DuOutcome:
     return DuOutcome(ok=True, size_kb=size_kb)
 
 
-def list_immediate_subdirs(path: str) -> List[str]:
+# 스냅샷/백업 산출물 디렉터리. 스캔에서 제외한다.
+#
+# 이것들은 파일시스템이 만들어 둔 과거 시점의 사본이라, 세면 같은 데이터를 두
+# 번(스냅샷 세대만큼 여러 번) 세게 되어 계정 크기가 실제보다 몇 배로 부풀고
+# "증가 경로"도 엉뚱하게 잡힌다. 게다가 대개 읽기 전용이라 사용자가 정리할 수
+# 있는 대상도 아니다 - 즉 세어 봐야 부하만 늘고 판단에는 해롭다.
+SNAPSHOT_DIR_NAMES = {".snapshot", ".zfs", ".ckpt"}
+
+
+def is_snapshot_dir(name: str) -> bool:
+    return name in SNAPSHOT_DIR_NAMES
+
+
+def list_immediate_subdirs(path: str, skip_snapshots: bool = True) -> List[str]:
     """분할 시 다음 큐에 넣을 바로 아래 자식 디렉터리 목록. 권한 오류 등은
-    조용히 빈 리스트로 처리한다 (그 지점에서는 더 쪼갤 수 없다는 뜻)."""
+    조용히 빈 리스트로 처리한다 (그 지점에서는 더 쪼갤 수 없다는 뜻).
+
+    `skip_snapshots`면 `.snapshot` 같은 스냅샷 디렉터리를 뺀다."""
 
     try:
         with os.scandir(path) as entries:
             return sorted(
-                entry.path for entry in entries if entry.is_dir(follow_symlinks=False)
+                entry.path
+                for entry in entries
+                if entry.is_dir(follow_symlinks=False)
+                and not (skip_snapshots and is_snapshot_dir(entry.name))
             )
     except OSError:
         return []

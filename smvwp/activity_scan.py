@@ -15,7 +15,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
 
-from . import procio, scan_store
+from . import detail_scan, procio, scan_store
 from .detail_scan import build_priority_prefix, list_immediate_subdirs
 
 
@@ -37,10 +37,33 @@ class FindOutcome:
 MAX_COUNTED_FILES = 5000
 
 
-def run_find_changed(path: str, since_iso: str, timeout_seconds: int) -> FindOutcome:
-    """`find <path> -newermt <since_iso> -type f`로 변경된 파일 개수를 센다."""
+def find_command(path: str, since_iso: str) -> List[str]:
+    """변경 파일을 세는 `find` argv.
 
-    command = build_priority_prefix() + ["find", path, "-newermt", since_iso, "-type", "f"]
+    스냅샷 디렉터리는 `-prune`으로 아예 내려가지 않는다. 스냅샷 안의 파일은
+    과거 시점의 사본이라 "최근 변경"으로 셀 대상이 아니고, 세대만큼 중복으로
+    잡혀 변경 건수를 크게 부풀린다 (`detail_scan.SNAPSHOT_DIR_NAMES` 참고).
+
+    `-prune`은 그 디렉터리로 **내려가지 않는다**는 뜻이라, 안쪽을 훑고 버리는
+    것이 아니라 처음부터 읽지 않는다 - 부하도 그만큼 준다."""
+
+    names: List[str] = []
+    for index, name in enumerate(sorted(detail_scan.SNAPSHOT_DIR_NAMES)):
+        if index:
+            names.append("-o")
+        names += ["-name", name]
+
+    return (
+        ["find", path, "("]
+        + names
+        + [")", "-prune", "-o", "-newermt", since_iso, "-type", "f", "-print"]
+    )
+
+
+def run_find_changed(path: str, since_iso: str, timeout_seconds: int) -> FindOutcome:
+    """`find`로 변경된 파일 개수를 센다 (스냅샷 디렉터리는 제외)."""
+
+    command = build_priority_prefix() + find_command(path, since_iso)
     try:
         # find는 경로를 그대로 출력한다 - UTF-8을 명시해 비ASCII 경로에서
         # 디코딩이 깨지지 않게 한다 (smvwp.procio 참고).

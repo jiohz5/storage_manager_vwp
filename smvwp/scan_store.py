@@ -101,12 +101,33 @@ def db_path(data_dir: Path) -> Path:
     return data_dir / "detail_scan.db"
 
 
+# 나중에 추가된 scan_runs 열. `CREATE TABLE IF NOT EXISTS`는 이미 있는 표에
+# 열을 더해 주지 않으므로, 기존 데이터 디렉터리에서도 열리도록 따로 채운다.
+# (데이터를 지우고 다시 만들게 하면 그동안 쌓인 스캔 이력이 날아간다.)
+_RUN_COLUMNS_ADDED = {
+    "cpu_system_percent_avg": "REAL",
+    "cpu_system_percent_peak": "REAL",
+    "cpu_top_percent_avg": "REAL",
+    "cpu_top_percent_peak": "REAL",
+    "load_avg_1m": "REAL",
+    "cpu_count": "INTEGER",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(scan_runs)")}
+    for column, sql_type in _RUN_COLUMNS_ADDED.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE scan_runs ADD COLUMN {column} {sql_type}")
+
+
 def connect(data_dir: Path) -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
 
@@ -125,11 +146,36 @@ def start_run(conn: sqlite3.Connection, run_id: str, triggered_by: str) -> None:
     conn.commit()
 
 
-def finish_run(conn: sqlite3.Connection, run_id: str, status: str) -> None:
-    conn.execute(
-        "UPDATE scan_runs SET ended_at = ?, status = ? WHERE run_id = ?",
-        (utc_now_iso(), status, run_id),
-    )
+def finish_run(conn: sqlite3.Connection, run_id: str, status: str, load=None) -> None:
+    """실행을 마감한다. `load`(loadstat.Summary)를 주면 CPU 점유도 함께 남긴다.
+
+    점유율을 기록해 두는 이유: 상세 스캔이 얼마나 무거운 작업인지는 계정 크기·
+    파일 수·파일시스템에 따라 달라서 **미리 예측할 수 없다.** 대신 실제로 돈
+    기록이 쌓이면 "이 환경에서는 이 정도"라고 말할 수 있게 된다."""
+
+    if load is None or not load.samples:
+        conn.execute(
+            "UPDATE scan_runs SET ended_at = ?, status = ? WHERE run_id = ?",
+            (utc_now_iso(), status, run_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE scan_runs SET ended_at = ?, status = ?, "
+            "cpu_system_percent_avg = ?, cpu_system_percent_peak = ?, "
+            "cpu_top_percent_avg = ?, cpu_top_percent_peak = ?, "
+            "load_avg_1m = ?, cpu_count = ? WHERE run_id = ?",
+            (
+                utc_now_iso(),
+                status,
+                load.system_percent_avg,
+                load.system_percent_peak,
+                load.top_percent_avg,
+                load.top_percent_peak,
+                load.load_avg_1m,
+                load.cpu_count,
+                run_id,
+            ),
+        )
     conn.commit()
 
 

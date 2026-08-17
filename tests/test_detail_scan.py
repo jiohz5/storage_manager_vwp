@@ -279,3 +279,47 @@ class PermissionDeniedTests(unittest.TestCase):
                 self.assertEqual(scan_store.partial_paths(conn, "acct-1", 1), [])
             finally:
                 conn.close()
+
+
+class SnapshotExclusionTests(unittest.TestCase):
+    """`.snapshot` 같은 스냅샷 디렉터리는 세지 않는다.
+
+    스냅샷은 파일시스템이 만든 과거 시점 사본이라, 세면 같은 데이터를 세대
+    수만큼 중복으로 세게 되어 계정 크기가 몇 배로 부풀고 '증가 경로'도 엉뚱하게
+    잡힌다. 대개 읽기 전용이라 사용자가 정리할 수 있는 대상도 아니다.
+    """
+
+    def test_du_command_excludes_snapshot_dirs(self):
+        """큐에서 빼는 것만으로는 부족하다 - du가 스스로 내려가기 때문에
+        명령 자체에 --exclude가 있어야 한다."""
+
+        command = detail_scan.du_command("/user/project_a")
+        self.assertIn("--exclude=.snapshot", command)
+        # 경로는 옵션 뒤, `--` 다음에 와야 한다 (하이픈으로 시작하는 경로 방어)
+        self.assertEqual(command[-2:], ["--", "/user/project_a"])
+
+    def test_run_du_actually_passes_the_exclude(self):
+        captured = {}
+
+        def fake_run(command, **kwargs):
+            captured["argv"] = list(command)
+            return support.completed(list(command), stdout="10\t/acct/a\n")
+
+        with patch("smvwp.detail_scan.subprocess.run", side_effect=fake_run):
+            detail_scan.run_du("/acct/a", 60)
+
+        self.assertTrue(any(a.startswith("--exclude=.snapshot") for a in captured["argv"]))
+
+    def test_subdir_listing_skips_snapshot_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data").mkdir()
+            (root / ".snapshot").mkdir()
+            (root / ".zfs").mkdir()
+
+            kept = detail_scan.list_immediate_subdirs(str(root))
+            self.assertEqual([Path(p).name for p in kept], ["data"])
+
+            # 필요하면 끌 수 있어야 한다 (진단/복구 경로용)
+            everything = detail_scan.list_immediate_subdirs(str(root), skip_snapshots=False)
+            self.assertEqual(len(everything), 3)

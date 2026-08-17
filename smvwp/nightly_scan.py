@@ -28,6 +28,7 @@ from . import (
     detail_scan,
     notifications,
     reports,
+    loadstat,
     scan_lock,
     scan_store,
     scan_window,
@@ -91,6 +92,7 @@ def _process_baseline(
     should_stop: Callable[[], bool],
     deadline_reached: Callable[[], bool],
     top_level_lister: Callable[[str], List[str]],
+    load=None,
 ) -> "tuple[str, int]":
     state = scan_store.get_account_state(conn, account.account_id)
     generation = state.working_generation
@@ -108,6 +110,8 @@ def _process_baseline(
         if checkpoint is None:
             break
         detail_scan.process_one_checkpoint(conn, checkpoint, settings.detail_task_timeout_seconds)
+        if load is not None:
+            load.sample()
 
     rows = scan_store.leaf_results(conn, account.account_id, generation)
     if rows:
@@ -131,6 +135,7 @@ def _process_activity(
     should_stop: Callable[[], bool],
     deadline_reached: Callable[[], bool],
     top_level_lister: Callable[[str], List[str]],
+    load=None,
 ) -> "tuple[str, int]":
     state = scan_store.get_account_state(conn, account.account_id)
     pass_no = state.working_activity_pass
@@ -151,6 +156,8 @@ def _process_activity(
         if checkpoint is None:
             break
         activity_scan.process_one_checkpoint(conn, checkpoint, since_iso, settings.detail_task_timeout_seconds)
+        if load is not None:
+            load.sample()
 
     total = activity_scan.total_changed(conn, account.account_id, pass_no)
     new_cursor = _iso(clock())
@@ -168,9 +175,10 @@ def _process_account(
     should_stop: Callable[[], bool],
     deadline_reached: Callable[[], bool],
     top_level_lister: Callable[[str], List[str]],
+    load=None,
 ) -> AccountOutcome:
     baseline_status, generation = _process_baseline(
-        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister
+        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load
     )
     if baseline_status == "interrupted":
         return AccountOutcome(
@@ -183,7 +191,7 @@ def _process_account(
         )
 
     activity_status, pass_no = _process_activity(
-        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister
+        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load
     )
     search_status, search_entries = _process_search_index(
         data_dir, account, should_stop, deadline_reached
@@ -277,6 +285,9 @@ def run_nightly_scan(
     conn = scan_store.connect(data_dir)
     outcomes: List[AccountOutcome] = []
     status = STATUS_COMPLETED
+    # 체크포인트 하나가 끝날 때마다 CPU 점유를 표본으로 모은다 (작은 파일
+    # 두 개를 읽는 것이 전부라 재는 행위가 부하가 되지는 않는다).
+    load = loadstat.Accumulator()
     try:
         scan_store.start_run(conn, run_id, triggered_by)
 
@@ -305,6 +316,7 @@ def run_nightly_scan(
                 should_stop,
                 deadline_reached,
                 top_level_lister,
+                load,
             )
             outcomes.append(outcome)
             if outcome.baseline_status == "interrupted" or outcome.activity_status == "interrupted":
@@ -314,7 +326,7 @@ def run_nightly_scan(
         logger.exception("야간 상세 스캔 중 예외 발생")
         status = STATUS_ERROR
     finally:
-        scan_store.finish_run(conn, run_id, status)
+        scan_store.finish_run(conn, run_id, status, load=load.summary())
         conn.close()
         scan_lock.release_lock(data_dir, run_id)
 

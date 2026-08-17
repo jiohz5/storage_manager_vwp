@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -70,6 +71,12 @@ COLUMN_KEYS = [
     COL_TIME,
     COL_STATUS,
 ) = range(10)
+
+# 경로 열의 최저 폭. 칸 좌우 여백(QSS `::item` padding 8px씩)을 빼고도 실제
+# 운영 경로(`/user/project_a` 계열, 실측 약 110px)가 넉넉히 들어간다.
+# 이보다 긴 경로는 잘리지만 툴팁에 전체가 남는다 - 열 하나가 표를 다 먹는
+# 것보다는 낫다.
+PATH_MIN_WIDTH = 240
 
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
 
@@ -213,6 +220,25 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+    def _fit_path_column(self) -> None:
+        """경로 열에 남는 폭을 몰아주되 최소 폭은 지킨다.
+
+        다른 열은 내용에 맞춰 잡히므로, 그러고 남은 자리를 경로가 받는다.
+        남은 자리가 최소 폭보다 좁으면 최소 폭을 쓰고 가로 스크롤을 감수한다 -
+        경로가 'C:...'로 잘려 아무것도 안 보이는 것보다 낫다."""
+
+        others = sum(
+            self.table.columnWidth(column)
+            for column in range(self.table.columnCount())
+            if column != COL_PATH
+        )
+        available = self.table.viewport().width() - others
+        self.table.setColumnWidth(COL_PATH, max(PATH_MIN_WIDTH, available))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 규약
+        super().resizeEvent(event)
+        self._fit_path_column()
+
     def _build_hero(self) -> QWidget:
         """맨 위 요약 카드.
 
@@ -297,8 +323,10 @@ class MainWindow(QMainWindow):
         # (그 상태가 되면 가로 스크롤이 생기는데, 아무것도 안 보이는 것보다 낫다).
         header.setMinimumSectionSize(80)
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        # 남는 폭은 경로가 가져간다 - 이 화면에서 가장 길고, 길이가 곧 정보다.
-        header.setSectionResizeMode(COL_PATH, QHeaderView.Stretch)
+        # 경로는 남는 폭을 가져가되 **최소 폭은 보장**한다. Stretch로 두면
+        # 나머지 열이 내용대로 다 가져간 뒤 남은 것만 받아서, 창이 조금만
+        # 좁아도 다시 'C:...'로 잘린다. 여기서는 직접 계산해 넣는다.
+        header.setSectionResizeMode(COL_PATH, QHeaderView.Interactive)
         # 막대가 들어가는 칸은 내용 기준으로 재면 너무 좁아진다.
         header.setSectionResizeMode(COL_BYTE, QHeaderView.Fixed)
         self.table.setColumnWidth(COL_BYTE, 168)
@@ -348,9 +376,22 @@ class MainWindow(QMainWindow):
         box.addWidget(self.scan_title_label)
 
         self.scan_status_label = QLabel()
-        
         self.scan_status_label.setWordWrap(True)
         box.addWidget(self.scan_status_label)
+
+        # 스캔이 도는 동안 좌우로 오가는 막대.
+        #
+        # 일부러 **불확정(indeterminate)** 막대를 쓴다. 남은 체크포인트 수는
+        # 알지만 전체 분모는 모른다 - 디렉터리를 분할하면 작업이 늘어나서
+        # 진행률이 뒤로 갈 수도 있다. 그럴 바에는 퍼센트를 지어내지 않고
+        # "지금 일하는 중"만 정직하게 보여준다 (DESIGN.md 1부 "과장하지 않는
+        # UI"). 남은 작업 수는 옆 상태 줄에 숫자 그대로 나온다.
+        self.scan_progress = QProgressBar()
+        self.scan_progress.setRange(0, 0)
+        self.scan_progress.setTextVisible(False)
+        self.scan_progress.setFixedHeight(6)
+        self.scan_progress.setVisible(False)
+        box.addWidget(self.scan_progress)
 
         scan_buttons = QHBoxLayout()
         scan_buttons.setSpacing(8)
@@ -397,6 +438,7 @@ class MainWindow(QMainWindow):
         self.language_menu.setTitle(i18n.t("menu.language"))
         self.caveat_label.setText(i18n.t("dashboard.df_caveat"))
         self.collect_btn.setText(i18n.t("dashboard.btn.collect_now"))
+        self.collect_btn.setToolTip(i18n.t("dashboard.btn.collect_now_tooltip"))
         self.accounts_btn.setText(i18n.t("dashboard.btn.accounts"))
         self.reports_btn.setText(i18n.t("dashboard.btn.reports"))
         self.search_btn.setText(i18n.t("dashboard.btn.search"))
@@ -597,7 +639,36 @@ class MainWindow(QMainWindow):
                         f"{account.name} ({tiers.display_text(sample.overall_tier, sample.byte_pct)})"
                     )
 
+        self._fit_path_column()
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
+
+    @staticmethod
+    def _scan_cpu_text(latest_run) -> str:
+        """직전 스캔이 이 장비 CPU를 얼마나 썼는지.
+
+        상세 스캔이 얼마나 무거운지는 계정 크기·파일 수·파일시스템에 따라
+        달라서 **미리 예측할 수 없다.** 대신 실제로 돈 결과를 남겨 두면 다음
+        실행 전에 "지난번엔 이 정도였다"로 판단할 수 있다.
+
+        `top` 기준(코어 1개 = 100%)을 함께 적는 이유: 사용자가 top을 띄워 놓고
+        대조할 때 숫자가 맞아야 하기 때문."""
+
+        if not latest_run:
+            return ""
+        try:
+            avg = latest_run["cpu_top_percent_avg"]
+            peak = latest_run["cpu_top_percent_peak"]
+            system_avg = latest_run["cpu_system_percent_avg"]
+        except (KeyError, IndexError):
+            return ""
+        if avg is None or peak is None:
+            return ""
+        return i18n.t(
+            "scan.cpu_usage",
+            avg=f"{avg:.0f}",
+            peak=f"{peak:.0f}",
+            system=f"{system_avg:.1f}" if system_avg is not None else "-",
+        )
 
     @staticmethod
     def _scan_failure_text(entry, account_name: str) -> str:
@@ -768,7 +839,14 @@ class MainWindow(QMainWindow):
             # 퍼센트로 부풀리지 않고 남은 작업 수 그대로 보여준다 - 전체 분모를
             # 아직 모르기 때문 (DESIGN.md 1부 "과장하지 않는 UI").
             parts.append(i18n.t("scan.pending_tasks", count=pending_total))
+        cpu_text = self._scan_cpu_text(latest)
+        if cpu_text:
+            parts.append(cpu_text)
         self.scan_status_label.setText("  |  ".join(parts))
+
+        # 막대는 도는 동안에만 보인다. 멈춰 있는데도 계속 떠 있으면 "뭔가
+        # 돌고 있나?"라는 오해를 만든다.
+        self.scan_progress.setVisible(running)
 
         self.scan_run_btn.setEnabled(not running)
         self.scan_stop_btn.setEnabled(running)

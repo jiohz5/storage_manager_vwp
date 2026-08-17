@@ -248,6 +248,16 @@ QHeaderView::section {{
 }}
 QTableCornerButton::section {{ background: {SURFACE_SUNKEN}; border: none; }}
 
+/* ---------- 진행 막대 ---------- */
+/* 상세 스캔이 도는 동안만 보이는 불확정 막대. 얇게 둬서 "일하는 중"만
+   알리고 화면의 주인공(계정 표)을 밀어내지 않게 한다. */
+QProgressBar {{
+    background: {BORDER};
+    border: none;
+    border-radius: 3px;
+}}
+QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
+
 /* ---------- 스크롤바 ---------- */
 /* 기본 스크롤바가 가장 '초보 티' 나는 부분이라 손본다 */
 QScrollBar:vertical {{ background: transparent; width: 12px; margin: 3px; }}
