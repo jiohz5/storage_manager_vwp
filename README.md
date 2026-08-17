@@ -110,13 +110,13 @@ chmod +x run.csh setup_cron.csh
 | Python **3.12 이상** | 반영 |
 | 표준 모듈 (`json`, `sqlite3`, `subprocess`, `dataclasses`, `uuid`, `argparse`, `threading`) | 반영 |
 | 데이터 디렉터리 쓰기 권한 | 반영 (**미지정은 정상** — GUI가 최초 실행 때 묻습니다) |
-| GUI 툴킷 (PyQt6 + qfluentwidgets) | **반영 안 함** — 없어도 수집 전용 CLI는 동작하므로 |
+| GUI 툴킷 (PyQt5) + 화면 플러그인 로드 | **반영 안 함** — 없어도 수집 전용 CLI는 동작하므로 |
 
 `종합 결과: OK`면 준비된 것입니다. GUI 툴킷이 없으면 종합은 `OK`라도 별도 줄로
 "GUI는 실행할 수 없습니다"라고 표시되니 그 줄을 꼭 확인하세요.
 
-GUI 툴킷이 없으면 무엇을 설치하면 되는지 안내가 나옵니다 (아래 "GUI" 절 참고).
-Qt 설치가 어려운 장비라면 수집만 돌리고 화면은 다른 장비에서 열 수 있습니다.
+PyQt5는 사내에 이미 있는 것을 그대로 씁니다 (추가 설치 없음 — 아래 "GUI" 절 참고).
+지정한 Python에 PyQt5가 없다면 수집만 돌리고 화면은 다른 장비에서 열 수 있습니다.
 
 GUI가 열리면 계정이 없을 때 **시작 안내**가 뜹니다. `계정 등록하기`를 눌러
 계정명과 경로를 넣으세요 (예: `project_a` / `/user/project_a`).
@@ -262,9 +262,9 @@ PIN은 **화면 노출 제한**이지 보안 경계가 아닙니다 — 검색 D
 | `STORAGE_MANAGER_PYTHON_BIN이 설정되지 않았습니다` | 3단계 환경변수 지정 |
 | `지정한 Python 실행 파일을 실행할 수 없습니다` | 경로가 prefix가 아닌 `bin/python3`인지, 실행 권한이 있는지 |
 | 진단에서 Python 버전 FAIL | 3.12 이상 경로인지 (`$STORAGE_MANAGER_PYTHON_BIN -V`) |
-| `Could not load the Qt platform plugin "xcb"` | **Qt를 6.4로 내리면 해결됩니다** (`pip install "PyQt6==6.4.2" "PyQt6-Qt6==6.4.3" "PyQt6-sip==13.4.1"`). Qt 6.5부터 필요해진 `libxcb-cursor`는 시스템 라이브러리라 pip으로 못 넣는데, 6.4에는 그 요구사항이 없습니다 — **sudo가 없어도 됩니다.** 관리자 권한이 있다면 `yum install xcb-util-cursor libxkbcommon-x11`로 최신 Qt를 그대로 써도 됩니다 |
-| GUI가 안 뜸 | 실행하면 무엇을 설치하면 되는지 안내가 나옵니다. Fluent를 쓰려면 `python -m pip install PyQt6 "PyQt6-Fluent-Widgets[full]" pyqtdarktheme` |
-| Fluent 대신 클래식이 뜸 | Fluent 패키지가 없거나 import에 실패한 것입니다. `./smvwp_cli.py gui6`로 강제 실행하면 원인이 그대로 보입니다 |
+| `Could not load the Qt platform plugin "xcb"` | 플러그인 파일은 있는데 그것이 의존하는 시스템 `.so`가 없다는 뜻입니다. `./run.csh --diagnose`가 `ldd`로 **빠진 라이브러리 이름을 그대로 찍어 줍니다** — 그 목록을 관리자에게 전달하세요 (흔한 것: `libxkbcommon-x11`) |
+| 진단에 `DISPLAY가 비어 있습니다` | 원격 세션 **안에서** 실행해야 합니다 (X11 전달이 되는 접속인지 확인) |
+| GUI가 안 뜸 | 실행하면 무엇이 없는지 안내가 나옵니다. PyQt5가 없는 Python을 가리키고 있는 경우가 대부분이니 `STORAGE_MANAGER_PYTHON_BIN`을 확인하세요 |
 | 진단에 `데이터 디렉터리: 미지정` | 정상입니다. GUI가 최초 실행 때 물어봅니다 (cron을 쓸 거면 미리 지정 필요) |
 | inode가 `확인불가` | 일부 파일시스템(NFS 등)이 inode를 보고하지 않음 — 정상 |
 | 요약줄에 `최근 24시간 중 N%만 수집됐습니다` | **cron이 안 돌고 있을 가능성이 높습니다.** `crontab -l`로 등록을 확인하고, 없으면 `./setup_cron.csh` 재실행. 등록돼 있는데도 그렇다면 사내에서 cron 사용이 제한됐을 수 있습니다(관리자 문의) — 그동안은 GUI를 켜 두면 내부 타이머가 대신 수집합니다 |

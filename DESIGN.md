@@ -286,9 +286,12 @@
 
 ## 3부. 구현 결과
 
-> 1·2부는 **작업 당시의 판단 기록**이라 그대로 둔다. PyQt5를 전제로 쓴 대목이
-> 남아 있는데, 이후 사내 프록시로 pip이 가능한 것이 확인되어 GUI를 PyQt6
-> Fluent로 옮기고 PyQt5는 제거했다. 아래는 **현재 상태**다.
+> 1·2부는 **작업 당시의 판단 기록**이라 그대로 둔다. 그 사이 사내 프록시로
+> pip이 된다는 것이 확인되어 GUI를 PyQt6 Fluent로 옮겼다가, 사내 저장소의 Qt가
+> 6.9라 `libxcb-cursor`(시스템 라이브러리, pip 불가)가 필요해지는 것을 보고
+> **되돌렸다.** 설치 마찰을 없애자던 원래 제약을 툴킷 교체가 깨뜨렸기 때문이다.
+> 지금은 이미 깔려 있는 **PyQt5**를 쓰고 외양은 자체 QSS 테마로 해결한다.
+> 아래는 **현재 상태**다.
 
 ### 디렉터리 구조
 
@@ -296,8 +299,7 @@
 storage_manager_vwp/
   run.csh              # 단일 진입점 (진단 + 실행)
   setup_cron.csh        # 15분 주기 수집 cron 등록 도우미
-  app.py                # GUI 진입점
-  smvwp_cli.py           # 단일 진입점 (gui/collect/scan/notify)
+  smvwp_cli.py          # 단일 진입점 (gui/collect/scan/notify)
   smvwp/                  # 애플리케이션 패키지
     tiers.py               # 사용률 등급 계산 (정상/주의/경고/긴급/FULL)
     paths.py                 # 데이터 디렉터리 탐색/기억/쓰기 안전성
@@ -324,14 +326,16 @@ storage_manager_vwp/
     nightly_scan.py                             # 야간 스캔 오케스트레이터
     search_index.py                              # 이름 검색 인덱스 (별도 DB)
     admin_auth.py                                 # 관리자 PIN (UI 노출 제한)
-    gui/                                            # PyQt6 Fluent 화면 (Qt 의존)
-      main_window.py                                 # 대시보드 단일 화면
-      account_dialog.py                               # 계정 등록/설정
-      reports_dialog.py                                # 보고서 보기/생성
-      search_dialog.py                                  # 관리자 검색
-      pin_dialog.py                                      # 관리자 PIN 변경
-      first_run.py                                        # 최초 실행 안내
-      widgets.py                                           # 등급 배지 / 크기 표기
+    scheduler.py                                   # GUI 내부 타이머 (cron 부재 대비)
+    gui/                                            # PyQt5 화면 (Qt 의존)
+      theme.py                                       # 자체 QSS 테마 (Fusion + 팔레트)
+      main_window.py                                  # 대시보드 단일 화면
+      account_dialog.py                                # 계정 등록/설정
+      reports_dialog.py                                 # 보고서 보기/생성
+      search_dialog.py                                   # 관리자 검색
+      pin_dialog.py                                       # 관리자 PIN 변경
+      first_run.py                                         # 최초 실행 안내
+      widgets.py                                            # 등급 배지 / 크기 표기
   tests/                # unittest 기반 단위 테스트 (Qt 불필요)
     support.py            # 공용 테스트 헬퍼 (bytes stdout, 단일 명령 러너)
 ```
@@ -461,9 +465,9 @@ storage_manager_vwp/
   `df`/`du`/`find`도 있어서 GUI 실행, 15분 수집, 상세 스캔(`--now`)까지
   실제로 돌려 확인했다. 다만 `df -Pi`가 NTFS에서 inode를 보고하지 않아
   inode 등급은 `확인불가`로 표시된다 - 숫자를 지어내지 않는 정상 동작이다.
-- 실제 VWP(RHEL, Python 3.12)에서 재확인이 필요한 것: Python 3.12 + PyQt6
-  조합, `crontab` 등록 권한, `nice`/`ionice` 존재 여부, 대용량 계정에서의
-  실제 스캔 소요 시간과 06:00 인계 동작.
+- 실제 VWP(RHEL, Python 3.12)에서 재확인이 필요한 것: Python 3.12 + PyQt5
+  조합과 xcb 플러그인 로드, `crontab` 등록 권한, `nice`/`ionice` 존재 여부,
+  대용량 계정에서의 실제 스캔 소요 시간과 06:00 인계 동작.
 - `run.csh` / `setup_cron.csh`는 csh 스크립트라 Windows에서 직접 실행/검증할
   수 없었다 - 로직은 기존 루트 `run.csh`의 검증된 패턴(진단 실패 시 exit 2,
   `PYTHONHOME` 경고 후 제거 등)을 그대로 계승했다.

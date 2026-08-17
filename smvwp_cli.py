@@ -35,23 +35,16 @@ from smvwp import paths  # noqa: E402
 # 이보다 적으면 경고한다 (막지는 않는다 - 폐쇄망에서 선택지가 적을 수 있다).
 MIN_RECOMMENDED_FREE_BYTES = 500 * 1024 * 1024  # 500MB
 
-NO_GUI_TOOLKIT_MESSAGE = """\
-ERROR: GUI 툴킷을 하나도 불러올 수 없습니다.
+PYQT5_MISSING_MESSAGE = """\
+ERROR: PyQt5를 불러올 수 없습니다 ({error}).
 
-  PyQt6 Fluent: {fluent_error}
-  PyQt5       : {classic_error}
+지금 쓰고 있는 Python은 다음입니다:
 
-둘 중 하나는 있어야 화면을 띄울 수 있습니다. 사내 프록시로 설치할 수 있다면
-Fluent 쪽을 권합니다:
+  {python}
 
-  {python} -m pip install PyQt6 "PyQt6-Fluent-Widgets[full]" pyqtdarktheme
-
-PyQt6가 DLL 오류를 내면 검증된 조합으로 내려 쓰세요:
-
-  {python} -m pip install "PyQt6==6.7.1" "PyQt6-Qt6==6.7.3" "PyQt6-sip==13.8.0"
-
-이미 설치된 다른 Python을 쓰시려면 STORAGE_MANAGER_PYTHON_BIN을 그쪽 실행
-파일로 다시 지정하면 됩니다.
+이 앱의 화면은 PyQt5만 씁니다 (추가 테마 패키지 없이 자체 QSS를 입힙니다).
+사내에 PyQt5가 들어 있는 Python이 따로 있다면 STORAGE_MANAGER_PYTHON_BIN을
+그쪽 실행 파일로 다시 지정하세요.
 
 전체 진단은 다음으로 볼 수 있습니다 (GUI 없이 동작합니다):
 
