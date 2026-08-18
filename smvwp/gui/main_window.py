@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAction,
@@ -63,7 +63,7 @@ from .search_dialog import SearchDialog
 COLUMN_KEYS = [
     "dashboard.col.name",
     "dashboard.col.path",
-    "dashboard.col.filesystem",
+    "dashboard.col.size",
     "dashboard.col.byte_pct",
     "dashboard.col.inode_pct",
     "dashboard.col.quota",
@@ -75,7 +75,7 @@ COLUMN_KEYS = [
 (
     COL_NAME,
     COL_PATH,
-    COL_FS,
+    COL_SIZE,
     COL_BYTE,
     COL_INODE,
     COL_QUOTA,
@@ -84,6 +84,10 @@ COLUMN_KEYS = [
     COL_TIME,
     COL_STATUS,
 ) = range(10)
+
+# `파일시스템` 열은 뺐다. 값이 거의 항상 같아서(계정 대부분이 같은 파일시스템에
+# 있다) 열 하나를 통째로 쓰면서 정보는 거의 주지 않았다. 대신 경로 툴팁에
+# 넣는다 - 필요한 순간(어느 파일시스템인지 확인할 때)에만 보면 되는 값이다.
 
 # 경로 열의 최저 폭. 칸 좌우 여백(QSS `::item` padding 8px씩)을 빼고도 실제
 # 운영 경로(`/user/project_a` 계열, 실측 약 110px)가 넉넉히 들어간다.
@@ -593,28 +597,44 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, COL_NAME, name_item)
             path_item = QTableWidgetItem(account.path)
             # 폭이 모자라 잘리더라도 전체 경로는 확인할 수 있어야 한다.
-            path_item.setToolTip(account.path)
+            # 파일시스템/마운트 지점도 여기 붙인다 (열을 없앤 대신).
+            path_item.setToolTip(self._path_tooltip(account, sample))
             self.table.setItem(row, COL_PATH, path_item)
 
             if sample is None:
-                for column in (COL_FS, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):
-                    self.table.setItem(row, column, QTableWidgetItem(dash))
+                for column in (COL_SIZE, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):
+                    item = QTableWidgetItem(dash)
+                    self._style_value_item(item, column)
+                    self.table.setItem(row, column, item)
                 self.table.setCellWidget(row, COL_BYTE, widgets.UsageBar(None, tiers.UNKNOWN))
                 self.table.setCellWidget(row, COL_TIER, widgets.badge_cell(tiers.UNKNOWN, None))
                 self.table.setItem(row, COL_STATUS, QTableWidgetItem(i18n.t("dashboard.not_collected")))
                 continue
 
-            self.table.setItem(row, COL_FS, QTableWidgetItem(sample.filesystem or dash))
+            # 퍼센트 왼쪽에 실제 크기를 둔다. "95%"만으로는 남은 것이 5GB인지
+            # 5TB인지 알 수 없어 급한 정도를 판단할 수 없다.
+            size_item = QTableWidgetItem(
+                widgets.format_size_pair(sample.used_kb, sample.total_kb)
+            )
+            size_item.setToolTip(self._size_tooltip(sample))
+            self._style_value_item(size_item, COL_SIZE)
+            self.table.setItem(row, COL_SIZE, size_item)
+
             inode_text = (
                 f"{sample.inode_pct:.1f}%"
                 if sample.inode_pct is not None
                 else i18n.t("common.unknown_value")
             )
-            self.table.setCellWidget(
-                row, COL_BYTE, widgets.UsageBar(sample.byte_pct, sample.overall_tier)
-            )
-            self.table.setItem(row, COL_INODE, QTableWidgetItem(inode_text))
-            self.table.setItem(row, COL_QUOTA, QTableWidgetItem(quota.format_usage(sample)))
+            usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier)
+            usage_bar.setToolTip(self._size_tooltip(sample))
+            self.table.setCellWidget(row, COL_BYTE, usage_bar)
+            inode_item = QTableWidgetItem(inode_text)
+            self._style_value_item(inode_item, COL_INODE)
+            self.table.setItem(row, COL_INODE, inode_item)
+
+            quota_item = QTableWidgetItem(quota.format_usage(sample))
+            self._style_value_item(quota_item, COL_QUOTA)
+            self.table.setItem(row, COL_QUOTA, quota_item)
 
             self.table.setCellWidget(
                 row, COL_TIER, widgets.badge_cell(sample.overall_tier, sample.byte_pct)
@@ -640,6 +660,8 @@ class MainWindow(QMainWindow):
                 )
                 if imminent_tier is not None:
                     forecast_item.setForeground(QColor(tiers.color(imminent_tier)))
+            if self._is_placeholder(forecast_item.text()):
+                forecast_item.setForeground(QColor(theme.TEXT_FAINT))
             self.table.setItem(row, COL_FORECAST, forecast_item)
 
             # 절대 시각보다 "얼마나 오래됐나"가 판단에 직접 쓰인다. 원본
@@ -676,6 +698,56 @@ class MainWindow(QMainWindow):
 
         self._fit_path_column()
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
+
+    # 숫자 열은 오른쪽으로 붙인다. 여러 계정을 위에서 아래로 훑을 때 자릿수가
+    # 맞아야 "어느 쪽이 큰가"가 읽지 않고도 보인다. 왼쪽 정렬이면 `0.8 TB`와
+    # `12.4 TB`의 시작점이 같아 매번 숫자를 읽어야 한다.
+    NUMERIC_COLUMNS = (COL_SIZE, COL_INODE, COL_QUOTA)
+
+    # 값이 없다는 뜻의 문구들. 실제 값과 같은 색으로 두면 눈이 먼저 가는 곳이
+    # 흐려진다 - 대부분의 행이 `확인불가`인 환경(inode 미지원 파일시스템)에서
+    # 특히 그렇다.
+    @staticmethod
+    def _is_placeholder(text: str) -> bool:
+        return text in {
+            i18n.t("common.none"),
+            i18n.t("common.unknown_value"),
+        } or text.startswith(i18n.t("forecast.unavailable"))
+
+    def _style_value_item(self, item, column: int) -> None:
+        if column in self.NUMERIC_COLUMNS:
+            item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        if self._is_placeholder(item.text()):
+            item.setForeground(QColor(theme.TEXT_FAINT))
+
+    @staticmethod
+    def _path_tooltip(account, sample) -> str:
+        """경로 칸 툴팁: 전체 경로 + 파일시스템/마운트 지점.
+
+        `파일시스템` 열을 없앤 대신이다. 계정 대부분이 같은 파일시스템에 있어
+        열로 두면 같은 값이 반복되며 자리만 차지했는데, 정작 확인하고 싶은
+        순간(이 계정이 어느 볼륨인가)에는 여기 있으면 충분하다."""
+
+        lines = [account.path]
+        if sample is not None:
+            if sample.filesystem:
+                lines.append(i18n.t("dashboard.tip.filesystem", value=sample.filesystem))
+            if sample.mount_point:
+                lines.append(i18n.t("dashboard.tip.mount", value=sample.mount_point))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _size_tooltip(sample) -> str:
+        """사용량/총량/남은 용량. 막대와 크기 칸 양쪽에 붙인다."""
+
+        avail = sample.avail_kb
+        return "\n".join(
+            [
+                i18n.t("dashboard.tip.used", value=widgets.format_kb(sample.used_kb)),
+                i18n.t("dashboard.tip.total", value=widgets.format_kb(sample.total_kb)),
+                i18n.t("dashboard.tip.free", value=widgets.format_kb(avail)),
+            ]
+        )
 
     @staticmethod
     def _scan_cpu_text(latest_run) -> str:

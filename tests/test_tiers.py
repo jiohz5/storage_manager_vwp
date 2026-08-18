@@ -116,3 +116,41 @@ class RowBackgroundTests(unittest.TestCase):
         for tier in (tiers.WARN, tiers.ALERT, tiers.EMERGENCY, tiers.FULL):
             with self.subTest(tier=tier):
                 self.assertTrue(tiers.display_text(tier, 95.0).strip())
+
+
+class FormatSizePairTests(unittest.TestCase):
+    """사용량/총 용량을 한 칸에 보여주는 표기.
+
+    두 값이 **같은 단위**여야 한다. 각자 단위를 고르면 `950.0 GB / 1.0 TB`처럼
+    나와서, 비교하라고 붙여 놓은 표시가 오히려 암산을 요구한다.
+    """
+
+    def test_uses_one_shared_unit(self):
+        from smvwp.gui import widgets
+
+        # 950GB / 1TB - 예전이라면 단위가 갈렸을 조합
+        text = widgets.format_size_pair(950 * 1024 ** 2, 1024 ** 3)
+        self.assertEqual(text, "0.9 / 1.0 TB")
+
+    def test_unit_follows_the_total_not_the_used(self):
+        from smvwp.gui import widgets
+
+        # 사용량이 아주 작아도 총량 단위를 따라간다 (열 안에서 자릿수가 맞도록)
+        self.assertEqual(widgets.format_size_pair(1024, 40 * 1024 ** 3), "0.0 / 40.0 TB")
+
+    def test_unknown_total_falls_back_to_used_only(self):
+        from smvwp.gui import widgets
+
+        self.assertEqual(widgets.format_size_pair(5000, None), "4.9 MB")
+
+    def test_unknown_used_is_marked_not_guessed(self):
+        """모르는 값을 0으로 채우면 '안 쓰고 있다'로 잘못 읽힌다."""
+
+        from smvwp.gui import widgets
+
+        self.assertEqual(widgets.format_size_pair(None, 1024 ** 3), "? / 1.0 TB")
+
+    def test_both_unknown(self):
+        from smvwp.gui import widgets
+
+        self.assertEqual(widgets.format_size_pair(None, None), "-")

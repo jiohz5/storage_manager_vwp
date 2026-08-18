@@ -45,6 +45,36 @@ def format_kb(size_kb: Optional[int]) -> str:
     return f"{value:,.1f} PB"  # pragma: no cover - 위 루프에서 반환됨
 
 
+
+def format_size_pair(used_kb: Optional[int], total_kb: Optional[int]) -> str:
+    """`12.4 / 40.0 TB` 처럼 사용량과 총 용량을 한 칸에 보여준다.
+
+    **두 값에 같은 단위를 쓴다.** 각자 알아서 단위를 고르게 하면
+    `950.0 GB / 1.0 TB`처럼 나와서, 한눈에 비교하라고 붙여 놓은 표시가 오히려
+    암산을 요구하게 된다. 큰 쪽(총 용량)의 단위로 맞춘다.
+    """
+
+    if total_kb is None:
+        return format_kb(used_kb) if used_kb is not None else "-"
+
+    unit, divisor = _unit_for(total_kb)
+    used_text = f"{used_kb / divisor:,.1f}" if used_kb is not None else "?"
+    return f"{used_text} / {total_kb / divisor:,.1f} {unit}"
+
+
+def _unit_for(size_kb: int) -> "tuple":
+    """이 크기를 읽기 좋은 단위와 그 나눗수."""
+
+    value = float(size_kb)
+    divisor = 1.0
+    for unit in ("KB", "MB", "GB", "TB", "PB"):
+        if abs(value) < 1024 or unit == "PB":
+            return unit, divisor
+        value /= 1024
+        divisor *= 1024
+    return "PB", divisor  # pragma: no cover - 위 루프에서 반환됨
+
+
 def _unavailable_text(prediction) -> str:
     reason_key = f"forecast.reason.{prediction.reason}" if prediction.reason else ""
     reason = i18n.t(reason_key) if reason_key else ""
