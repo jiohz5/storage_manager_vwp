@@ -138,6 +138,27 @@ class FormatSizePairTests(unittest.TestCase):
         # 사용량이 아주 작아도 총량 단위를 따라간다 (열 안에서 자릿수가 맞도록)
         self.assertEqual(widgets.format_size_pair(1024, 40 * 1024 ** 3), "0.0 / 40.0 TB")
 
+    def test_stops_at_tb_so_large_volumes_stay_readable(self):
+        """실제 계정은 많아야 수십 TB다. PB로 올라가면 `0.0 / 0.0 PB`처럼
+        뭉개져 아무것도 못 읽는다."""
+
+        from smvwp.gui import widgets
+
+        # 100TB 중 99.1% - 예전 표기라면 `1.5 / 1.5 PB`가 아니라 여기서도
+        # TB로 남아야 남은 용량 차이가 보인다.
+        text = widgets.format_size_pair(int(1024 ** 3 * 100 * 0.991), 1024 ** 3 * 100)
+        self.assertEqual(text, "99.1 / 100.0 TB")
+
+    def test_small_volumes_still_use_a_smaller_unit(self):
+        """TB 상한이 작은 볼륨까지 TB로 끌어올리면 안 된다."""
+
+        from smvwp.gui import widgets
+
+        self.assertEqual(
+            widgets.format_size_pair(int(1024 ** 2 * 500 * 0.6), 1024 ** 2 * 500),
+            "300.0 / 500.0 GB",
+        )
+
     def test_unknown_total_falls_back_to_used_only(self):
         from smvwp.gui import widgets
 

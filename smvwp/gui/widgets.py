@@ -47,32 +47,40 @@ def format_kb(size_kb: Optional[int]) -> str:
 
 
 def format_size_pair(used_kb: Optional[int], total_kb: Optional[int]) -> str:
-    """`12.4 / 40.0 TB` 처럼 사용량과 총 용량을 한 칸에 보여준다.
+    """`17.2 / 40.0 TB` 처럼 사용량과 총 용량을 한 칸에 보여준다.
 
     **두 값에 같은 단위를 쓴다.** 각자 알아서 단위를 고르게 하면
     `950.0 GB / 1.0 TB`처럼 나와서, 한눈에 비교하라고 붙여 놓은 표시가 오히려
     암산을 요구하게 된다. 큰 쪽(총 용량)의 단위로 맞춘다.
+
+    **단위는 TB에서 멈춘다.** 실제 계정은 많아야 수십 TB라 PB로 올라가면
+    `0.0 / 0.0 PB`처럼 뭉개져 아무것도 못 읽는다. 100TB대까지는 TB로 두는 편이
+    훨씬 잘 읽힌다 (`99.1 / 100.0 TB`).
     """
 
     if total_kb is None:
         return format_kb(used_kb) if used_kb is not None else "-"
 
-    unit, divisor = _unit_for(total_kb)
+    unit, divisor = _unit_for(total_kb, max_unit="TB")
     used_text = f"{used_kb / divisor:,.1f}" if used_kb is not None else "?"
     return f"{used_text} / {total_kb / divisor:,.1f} {unit}"
 
 
-def _unit_for(size_kb: int) -> "tuple":
-    """이 크기를 읽기 좋은 단위와 그 나눗수."""
+_UNITS = ("KB", "MB", "GB", "TB", "PB")
 
+
+def _unit_for(size_kb: int, max_unit: str = "PB") -> "tuple":
+    """이 크기를 읽기 좋은 단위와 그 나눗수. `max_unit`에서 올라가기를 멈춘다."""
+
+    limit = _UNITS.index(max_unit)
     value = float(size_kb)
     divisor = 1.0
-    for unit in ("KB", "MB", "GB", "TB", "PB"):
-        if abs(value) < 1024 or unit == "PB":
+    for index, unit in enumerate(_UNITS):
+        if abs(value) < 1024 or index >= limit:
             return unit, divisor
         value /= 1024
         divisor *= 1024
-    return "PB", divisor  # pragma: no cover - 위 루프에서 반환됨
+    return max_unit, divisor  # pragma: no cover - 위 루프에서 반환됨
 
 
 def _unavailable_text(prediction) -> str:
