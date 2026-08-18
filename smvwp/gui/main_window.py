@@ -58,6 +58,7 @@ from . import theme, widgets
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
 from .reports_dialog import ReportsDialog
+from .scan_progress_dialog import ScanProgressDialog
 from .search_dialog import SearchDialog
 
 COLUMN_KEYS = [
@@ -188,6 +189,29 @@ class MainWindow(QMainWindow):
         layout.setSpacing(theme.GAP_SECTION)
 
         layout.addWidget(self._build_hero())
+
+        # 스캔이 도는 동안에는 홈에서도 보이게 한다. 탭을 나눈 뒤로 상세 스캔
+        # 탭을 열지 않으면 밤새 뭐가 도는지 알 수 없어졌기 때문이다. 여기서는
+        # 한 줄 + 막대까지만 보여 주고 자세한 것은 그 탭에서 본다.
+        self.home_scan_banner = QFrame()
+        self.home_scan_banner.setObjectName("card")
+        self.home_scan_banner.setVisible(False)
+        banner_box = QHBoxLayout(self.home_scan_banner)
+        banner_box.setContentsMargins(14, 10, 14, 10)
+        banner_box.setSpacing(12)
+        self.home_scan_label = QLabel()
+        self.home_scan_label.setObjectName("muted")
+        self.home_scan_label.setWordWrap(True)
+        self.home_scan_progress = QProgressBar()
+        self.home_scan_progress.setRange(0, 0)
+        self.home_scan_progress.setTextVisible(False)
+        self.home_scan_progress.setFixedSize(120, 6)
+        self.home_scan_link = QPushButton()
+        self.home_scan_link.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        banner_box.addWidget(self.home_scan_progress)
+        banner_box.addWidget(self.home_scan_label, 1)
+        banner_box.addWidget(self.home_scan_link)
+        layout.addWidget(self.home_scan_banner)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -421,6 +445,12 @@ class MainWindow(QMainWindow):
         # 진행률이 뒤로 갈 수도 있다. 그럴 바에는 퍼센트를 지어내지 않고
         # "지금 일하는 중"만 정직하게 보여준다 (DESIGN.md 1부 "과장하지 않는
         # UI"). 남은 작업 수는 옆 상태 줄에 숫자 그대로 나온다.
+        self.scan_current_label = QLabel()
+        self.scan_current_label.setObjectName("caption")
+        self.scan_current_label.setWordWrap(True)
+        self.scan_current_label.setVisible(False)
+        box.addWidget(self.scan_current_label)
+
         self.scan_progress = QProgressBar()
         self.scan_progress.setRange(0, 0)
         self.scan_progress.setTextVisible(False)
@@ -437,8 +467,11 @@ class MainWindow(QMainWindow):
         # 아니지만, 실수로 누르면 진행 중인 밤을 날린다).
         self.scan_stop_btn.setObjectName("danger")
         self.scan_stop_btn.clicked.connect(self._request_scan_stop)
+        self.scan_detail_btn = QPushButton()
+        self.scan_detail_btn.clicked.connect(self._open_scan_progress)
         scan_buttons.addWidget(self.scan_run_btn)
         scan_buttons.addWidget(self.scan_stop_btn)
+        scan_buttons.addWidget(self.scan_detail_btn)
         scan_buttons.addStretch(1)
         box.addLayout(scan_buttons)
 
@@ -489,6 +522,9 @@ class MainWindow(QMainWindow):
         self.scan_run_btn.setToolTip(i18n.t("scan.btn.run_now_tooltip"))
         self.scan_stop_btn.setText(i18n.t("scan.btn.stop"))
         self.scan_stop_btn.setToolTip(i18n.t("scan.btn.stop_tooltip"))
+        self.home_scan_link.setText(i18n.t("tab.scan"))
+        self.scan_detail_btn.setText(i18n.t("scan.btn.progress"))
+        self.scan_detail_btn.setToolTip(i18n.t("scan.btn.progress_tooltip"))
         self.growth_table.setHorizontalHeaderLabels([i18n.t(key) for key in GROWTH_COLUMN_KEYS])
 
     def _change_language(self, language: str) -> None:
@@ -719,6 +755,40 @@ class MainWindow(QMainWindow):
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         if self._is_placeholder(item.text()):
             item.setForeground(QColor(theme.TEXT_FAINT))
+
+    def _current_target_text(self, latest_run) -> str:
+        """지금 훑고 있는 경로 한 줄."""
+
+        if not latest_run:
+            return ""
+        try:
+            path = latest_run["current_path"]
+            kind = latest_run["current_kind"]
+            account_id = latest_run["current_account_id"]
+        except (KeyError, IndexError):
+            return ""
+        if not path:
+            return ""
+        account = config_module.find_account(self._config, account_id) if account_id else None
+        kind_text = i18n.t(
+            "progress.kind.activity" if kind == "activity" else "progress.kind.baseline"
+        )
+        return i18n.t(
+            "scan.current_target",
+            account=account.name if account else i18n.t("common.none"),
+            kind=kind_text,
+            path=path,
+        )
+
+    def _open_scan_progress(self) -> None:
+        account = self._selected_account()
+        dialog = ScanProgressDialog(
+            self._data_dir,
+            self._config,
+            account_id=account.account_id if account else None,
+            parent=self,
+        )
+        dialog.exec_()
 
     @staticmethod
     def _path_tooltip(account, sample) -> str:
@@ -994,6 +1064,23 @@ class MainWindow(QMainWindow):
         if cpu_text:
             parts.append(cpu_text)
         self.scan_status_label.setText("  |  ".join(parts))
+
+        # 지금 어느 경로를 훑고 있는지. `du` 하나가 몇 분씩 걸릴 수 있어서,
+        # "실행 중"만 떠 있으면 멈춘 것인지 진행 중인지 구분되지 않는다.
+        current = self._current_target_text(latest) if running else ""
+        self.scan_current_label.setText(current)
+        self.scan_current_label.setVisible(bool(current))
+
+        self.home_scan_banner.setVisible(running)
+        if running:
+            path = ""
+            try:
+                path = latest["current_path"] if latest else ""
+            except (KeyError, IndexError):
+                path = ""
+            self.home_scan_label.setText(
+                i18n.t("scan.scanning_now", path=path) if path else i18n.t("scan.started")
+            )
 
         # 막대는 도는 동안에만 보인다. 멈춰 있는데도 계속 떠 있으면 "뭔가
         # 돌고 있나?"라는 오해를 만든다.

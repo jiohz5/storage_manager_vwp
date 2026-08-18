@@ -219,3 +219,72 @@ class FailedPathsTests(ScanStoreTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CurrentTargetTests(ScanStoreTestCase):
+    """지금 훑고 있는 경로를 실행 행에 남긴다.
+
+    체크포인트에 'running' 상태를 새로 만들지 않은 것은 의도다 - 재개
+    가능성이 "pending만 보면 된다"는 단순한 불변식에 기대고 있는데, 중간
+    상태를 넣으면 프로세스가 죽었을 때 그 행을 되돌리는 복구 로직이 따로
+    필요해진다.
+    """
+
+    def test_records_and_clears_current_path(self):
+        conn = self.conn
+        scan_store.start_run(conn, "run-1", "gui")
+
+        scan_store.set_current_target(conn, "run-1", "acct-1", scan_store.BASELINE, "/user/a/x")
+        row = scan_store.latest_run(conn)
+        self.assertEqual(row["current_path"], "/user/a/x")
+        self.assertEqual(row["current_kind"], scan_store.BASELINE)
+        self.assertEqual(row["current_account_id"], "acct-1")
+        self.assertIsNotNone(row["current_started_at"])
+
+        # 끝나면 비운다 - 남아 있으면 "아직 그걸 하고 있다"로 오해된다.
+        scan_store.set_current_target(conn, "run-1", None, None, None)
+        row = scan_store.latest_run(conn)
+        self.assertIsNone(row["current_path"])
+        self.assertIsNone(row["current_started_at"])
+
+    def test_checkpoint_status_is_untouched(self):
+        """위치 기록이 체크포인트 상태를 건드리면 재개 규칙이 깨진다."""
+
+        conn = self.conn
+        scan_store.start_run(conn, "run-1", "gui")
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a", "/b"])
+        before = scan_store.checkpoint_progress(conn, "acct-1", scan_store.BASELINE, 1)
+
+        scan_store.set_current_target(conn, "run-1", "acct-1", scan_store.BASELINE, "/a")
+        after = scan_store.checkpoint_progress(conn, "acct-1", scan_store.BASELINE, 1)
+
+        self.assertEqual(before, after)
+        self.assertEqual(after["pending"], 2)
+
+
+class CheckpointProgressTests(ScanStoreTestCase):
+    def test_counts_by_status(self):
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a", "/b", "/c"])
+        first = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_done(conn, first["id"], size_kb=100)
+        second = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_error(conn, second["id"], "권한 없음")
+
+        counts = scan_store.checkpoint_progress(conn, "acct-1", scan_store.BASELINE, 1)
+        self.assertEqual(counts["done"], 1)
+        self.assertEqual(counts["error"], 1)
+        self.assertEqual(counts["pending"], 1)
+        self.assertEqual(counts["total"], 3)
+
+    def test_recent_puts_processed_first_and_pending_last(self):
+        """알고 싶은 것은 '어디까지 했나'이고 대기 목록은 그 다음이다."""
+
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a", "/b", "/c"])
+        first = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_done(conn, first["id"], size_kb=100)
+
+        rows = scan_store.recent_checkpoints(conn, "acct-1", scan_store.BASELINE, 1)
+        self.assertEqual(rows[0]["path"], "/a")
+        self.assertEqual([r["status"] for r in rows[1:]], ["pending", "pending"])

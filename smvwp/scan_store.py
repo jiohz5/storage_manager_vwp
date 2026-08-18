@@ -115,6 +115,15 @@ _COLUMNS_ADDED = {
         "rss_peak_kb": "INTEGER",
         "memory_total_kb": "INTEGER",
         "memory_peak_percent": "REAL",
+        # 지금 어느 경로를 훑고 있는지. **체크포인트에 'running' 상태를 새로
+        # 만들지 않은 것은 의도다** - 재개 가능성이 "pending만 보면 된다"는
+        # 단순한 불변식에 기대고 있는데(1부 7절), 중간 상태를 넣으면 프로세스가
+        # 죽었을 때 그 행을 되돌리는 복구 로직이 따로 필요해진다. 실행 행에
+        # 적어 두면 그런 위험 없이 표시용 정보만 얻는다.
+        "current_path": "TEXT",
+        "current_kind": "TEXT",
+        "current_account_id": "TEXT",
+        "current_started_at": "TEXT",
     },
     "account_scan_state": {
         # 계정 목록에 "최근 스캔일"을 보여주려면 기준선을 언제 완주했는지가
@@ -193,6 +202,63 @@ def finish_run(conn: sqlite3.Connection, run_id: str, status: str, load=None) ->
             ),
         )
     conn.commit()
+
+
+def set_current_target(
+    conn: sqlite3.Connection,
+    run_id: str,
+    account_id: Optional[str],
+    kind: Optional[str],
+    path: Optional[str],
+) -> None:
+    """지금 훑고 있는 경로를 실행 행에 적는다 (표시 전용).
+
+    `du` 하나가 몇 분씩 걸릴 수 있어서, 그동안 화면에 "실행 중"만 떠 있으면
+    멈춘 것인지 진행 중인지 구분할 수 없다. 어디를 보고 있는지가 보이면
+    그 자체로 진행의 증거가 된다."""
+
+    conn.execute(
+        "UPDATE scan_runs SET current_account_id = ?, current_kind = ?, "
+        "current_path = ?, current_started_at = ? WHERE run_id = ?",
+        (account_id, kind, path, utc_now_iso() if path else None, run_id),
+    )
+    conn.commit()
+
+
+def checkpoint_progress(
+    conn: sqlite3.Connection, account_id: str, kind: str, generation: int
+) -> dict:
+    """계정 하나의 체크포인트 진행 상황 (상태별 개수)."""
+
+    rows = conn.execute(
+        "SELECT status, COUNT(*) AS n FROM scan_checkpoints "
+        "WHERE account_id = ? AND kind = ? AND generation = ? GROUP BY status",
+        (account_id, kind, generation),
+    ).fetchall()
+    counts = {row["status"]: row["n"] for row in rows}
+    return {
+        "pending": counts.get(STATUS_PENDING, 0),
+        "done": counts.get(STATUS_DONE, 0),
+        "split": counts.get(STATUS_SPLIT, 0),
+        "error": counts.get(STATUS_ERROR, 0),
+        "total": sum(counts.values()),
+    }
+
+
+def recent_checkpoints(
+    conn: sqlite3.Connection, account_id: str, kind: str, generation: int, limit: int = 200
+) -> List[sqlite3.Row]:
+    """최근에 처리한 체크포인트부터 (진행 상황 보기용).
+
+    아직 처리 안 한 것(`scanned_at`이 없는 것)은 뒤로 보낸다 - 사용자가 알고
+    싶은 것은 "어디까지 했나"이고, 대기 목록은 그 다음이다."""
+
+    return conn.execute(
+        "SELECT path, status, size_kb, changed_count, error_message, scanned_at "
+        "FROM scan_checkpoints WHERE account_id = ? AND kind = ? AND generation = ? "
+        "ORDER BY (scanned_at IS NULL), scanned_at DESC, id LIMIT ?",
+        (account_id, kind, generation, limit),
+    ).fetchall()
 
 
 def latest_run(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:

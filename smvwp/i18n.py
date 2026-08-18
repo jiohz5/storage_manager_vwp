@@ -165,6 +165,30 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "다음 스캔에서 다시 처리합니다.\n\n닫을까요?"
         ),
         "scan.stopped_on_close": "실행 중이던 작업 {count}개를 정리했습니다.",
+        "scan.btn.progress": "진행 상황 보기...",
+        "scan.btn.progress_tooltip": (
+            "선택한 계정이 어디까지 훑었는지 경로 단위로 봅니다 (읽기 전용)."
+        ),
+        "scan.current_target": "지금: {account} · {kind} · {path}",
+        "scan.scanning_now": "상세 스캔 진행 중 · {path}",
+        "progress.title": "상세 스캔 진행 상황",
+        "progress.kind_label": "종류",
+        "progress.kind.baseline": "크기 스캔(du)",
+        "progress.kind.activity": "변경 파일(find)",
+        "progress.btn.refresh": "새로고침",
+        "progress.summary": (
+            "세대 {generation} · 완료 {done} / 대기 {pending} / 분할 {split} / "
+            "실패 {error} (전체 {total})"
+        ),
+        "progress.col.path": "경로",
+        "progress.col.status": "상태",
+        "progress.col.result": "결과",
+        "progress.col.scanned_at": "처리 시각",
+        "progress.status.pending": "대기",
+        "progress.status.done": "완료",
+        "progress.status.split": "분할됨",
+        "progress.status.error": "실패",
+        "progress.changed": "변경 {count:,}개",
         "scan.new_path": "신규 (이전 세대에 없음)",
         "scan.no_change": "변화 없음",
         "scan.confirm_title": "상세 스캔 실행",
@@ -467,6 +491,30 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "redone on the next scan.\n\nClose?"
         ),
         "scan.stopped_on_close": "Stopped {count} running task(s).",
+        "scan.btn.progress": "View progress...",
+        "scan.btn.progress_tooltip": (
+            "Shows how far the selected account has been walked, path by path (read-only)."
+        ),
+        "scan.current_target": "Now: {account} - {kind} - {path}",
+        "scan.scanning_now": "Detail scan running - {path}",
+        "progress.title": "Detail scan progress",
+        "progress.kind_label": "Kind",
+        "progress.kind.baseline": "Size scan (du)",
+        "progress.kind.activity": "Changed files (find)",
+        "progress.btn.refresh": "Refresh",
+        "progress.summary": (
+            "Generation {generation} - done {done} / pending {pending} / split {split} / "
+            "failed {error} (total {total})"
+        ),
+        "progress.col.path": "Path",
+        "progress.col.status": "Status",
+        "progress.col.result": "Result",
+        "progress.col.scanned_at": "Processed at",
+        "progress.status.pending": "Pending",
+        "progress.status.done": "Done",
+        "progress.status.split": "Split",
+        "progress.status.error": "Failed",
+        "progress.changed": "{count:,} changed",
         "scan.new_path": "New (absent in previous generation)",
         "scan.no_change": "No change",
         "scan.confirm_title": "Run detail scan",

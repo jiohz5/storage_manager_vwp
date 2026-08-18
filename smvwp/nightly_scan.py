@@ -93,6 +93,7 @@ def _process_baseline(
     deadline_reached: Callable[[], bool],
     top_level_lister: Callable[[str], List[str]],
     load=None,
+    run_id: Optional[str] = None,
 ) -> "tuple[str, int]":
     state = scan_store.get_account_state(conn, account.account_id)
     generation = state.working_generation
@@ -109,6 +110,10 @@ def _process_baseline(
         checkpoint = scan_store.next_pending(conn, account.account_id, scan_store.BASELINE, generation)
         if checkpoint is None:
             break
+        if run_id:
+            scan_store.set_current_target(
+                conn, run_id, account.account_id, scan_store.BASELINE, checkpoint["path"]
+            )
         detail_scan.process_one_checkpoint(conn, checkpoint, settings.detail_task_timeout_seconds)
         if load is not None:
             load.sample()
@@ -136,6 +141,7 @@ def _process_activity(
     deadline_reached: Callable[[], bool],
     top_level_lister: Callable[[str], List[str]],
     load=None,
+    run_id: Optional[str] = None,
 ) -> "tuple[str, int]":
     state = scan_store.get_account_state(conn, account.account_id)
     pass_no = state.working_activity_pass
@@ -155,6 +161,10 @@ def _process_activity(
         checkpoint = scan_store.next_pending(conn, account.account_id, scan_store.ACTIVITY, pass_no)
         if checkpoint is None:
             break
+        if run_id:
+            scan_store.set_current_target(
+                conn, run_id, account.account_id, scan_store.ACTIVITY, checkpoint["path"]
+            )
         activity_scan.process_one_checkpoint(conn, checkpoint, since_iso, settings.detail_task_timeout_seconds)
         if load is not None:
             load.sample()
@@ -176,9 +186,10 @@ def _process_account(
     deadline_reached: Callable[[], bool],
     top_level_lister: Callable[[str], List[str]],
     load=None,
+    run_id: Optional[str] = None,
 ) -> AccountOutcome:
     baseline_status, generation = _process_baseline(
-        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load
+        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load, run_id
     )
     if baseline_status == "interrupted":
         return AccountOutcome(
@@ -191,7 +202,7 @@ def _process_account(
         )
 
     activity_status, pass_no = _process_activity(
-        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load
+        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load, run_id
     )
     search_status, search_entries = _process_search_index(
         data_dir, account, should_stop, deadline_reached
@@ -317,6 +328,7 @@ def run_nightly_scan(
                 deadline_reached,
                 top_level_lister,
                 load,
+                run_id,
             )
             outcomes.append(outcome)
             if outcome.baseline_status == "interrupted" or outcome.activity_status == "interrupted":
@@ -326,6 +338,7 @@ def run_nightly_scan(
         logger.exception("야간 상세 스캔 중 예외 발생")
         status = STATUS_ERROR
     finally:
+        scan_store.set_current_target(conn, run_id, None, None, None)
         scan_store.finish_run(conn, run_id, status, load=load.summary())
         conn.close()
         scan_lock.release_lock(data_dir, run_id)
