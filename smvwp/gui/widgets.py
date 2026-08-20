@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QStyle,
     QStyledItemDelegate,
+    QTableWidgetItem,
     QWidget,
 )
 
@@ -218,6 +219,34 @@ def badge_column_width(font_metrics) -> int:
         widest = max(widest, font_metrics.width(text))
     # 배지 좌우 padding(10*2) + 컨테이너 여백(6*2) + 여유
     return widest + 20 + 12 + 10
+
+
+
+class NumericItem(QTableWidgetItem):
+    """숫자로 정렬되는 표 항목.
+
+    기본 `QTableWidgetItem`은 **보이는 글자**로 정렬한다. 그러면 `900.0 MB`가
+    `1.5 GB`보다 크게 잡히고, `9.0%`가 `10.0%`보다 뒤로 간다 - 크기를 보려고
+    정렬했는데 결과가 거짓이 된다. 정렬용 숫자를 따로 들고 그걸로 비교한다.
+
+    값이 없는 행(`-`)은 항상 아래로 보낸다. 오름차순으로 정렬했을 때 빈 칸이
+    맨 위를 차지하면 정작 보려던 것이 화면 밖으로 밀린다.
+    """
+
+    def __init__(self, text: str, value=None):
+        super().__init__(text)
+        self._value = value
+
+    def __lt__(self, other) -> bool:  # noqa: D105 - Qt 정렬 훅
+        mine = self._value
+        theirs = getattr(other, "_value", None)
+        if mine is None and theirs is None:
+            return self.text() < other.text()
+        if mine is None:
+            return False   # 값 없음은 항상 뒤로
+        if theirs is None:
+            return True
+        return mine < theirs
 
 
 class TierRowDelegate(QStyledItemDelegate):

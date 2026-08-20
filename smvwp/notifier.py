@@ -28,6 +28,10 @@ from . import i18n, paths, popup_queue, tiers
 AUTOSTART_FILENAME = "storage-manager-vwp-notifier.desktop"
 DEFAULT_POLL_SECONDS = 60
 
+# 즉시 알림 풍선을 띄워 두는 시간. 일반 알림보다 길게 잡는다 - 자리를 비운
+# 사이에 사라져 버리면 가장 급한 경고를 못 보게 된다.
+URGENT_POPUP_MS = 30000
+
 
 def autostart_dir() -> Path:
     xdg_config = os.environ.get("XDG_CONFIG_HOME")
@@ -136,16 +140,35 @@ def run_tray(data_dir: Path, config: config_module.AppConfig, poll_seconds: int 
         if not new_items:
             return
         shown_event_ids.update(item.event_id for item in new_items)
-        if len(new_items) == 1:
-            item = new_items[0]
+
+        # 즉시 알림(임계 사용률 초과)은 **묶지 않고 따로, 마지막에** 띄운다.
+        #
+        # 요약에 섞이면 "- ..." 한 줄이 되어 다른 경고와 구분되지 않는다.
+        # 마지막에 띄우는 이유는 트레이 풍선이 한 번에 하나만 보이기 때문이다 -
+        # 나중에 띄운 것이 앞의 것을 덮으므로 가장 급한 것이 화면에 남는다.
+        urgent = [item for item in new_items if item.urgent]
+        normal = [item for item in new_items if not item.urgent]
+
+        if len(normal) == 1:
+            item = normal[0]
             tray.showMessage(f"[{item.tier_label}] {item.account_name}", item.message)
-        else:
+        elif normal:
             # 로그아웃 중 쌓인 것들은 하나씩 띄우지 않고 한 번에 요약한다.
-            summary = "\n".join(f"- {item.message}" for item in new_items[:5])
-            more = len(new_items) - 5
+            summary = "\n".join(f"- {item.message}" for item in normal[:5])
+            more = len(normal) - 5
             if more > 0:
                 summary += f"\n... (+{more})"
-            tray.showMessage(f"{i18n.t('app.title')} ({len(new_items)})", summary)
+            tray.showMessage(f"{i18n.t('app.title')} ({len(normal)})", summary)
+
+        for item in urgent:
+            # 이미 떠 있는 풍선을 덮어쓴다. 같은 계정이 15분마다 다시 올라오면
+            # 새 풍선이 앞의 것을 대체하므로 화면에는 항상 하나만 남는다.
+            tray.showMessage(
+                f"[{i18n.t('notify.urgent_prefix')}] {item.account_name}",
+                item.message,
+                QSystemTrayIcon.Critical,
+                URGENT_POPUP_MS,
+            )
 
     def acknowledge() -> None:
         # 사용자가 실제로 확인했을 때만 읽음 처리한다.

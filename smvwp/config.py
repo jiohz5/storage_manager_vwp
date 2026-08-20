@@ -78,6 +78,11 @@ class Settings:
     notification_command: List[str] = field(default_factory=list)
     notification_webhook_url: str = ""
     notification_timeout_seconds: int = 10
+    # 이 사용률 이상이면 cooldown을 무시하고 **매 수집마다 즉시** 알린다.
+    # 등급(긴급 98%)과 따로 두는 이유: 등급은 '어느 색으로 보여줄까'의 기준이고
+    # 이 값은 '조용히 있어도 되는가'의 기준이라 성격이 다르다. 98%에서 한 시간에
+    # 한 번은 적절하지만 99%를 넘으면 그 한 시간 안에 꽉 찬다.
+    immediate_notify_pct: float = 99.0
     # quota 조회 argv (shell 없이 실행). 비어 있으면 quota 열은 '-'로 남는다.
     quota_command: List[str] = field(default_factory=list)
     # 보고서 / 정리 후보 기준

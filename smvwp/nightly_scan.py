@@ -464,6 +464,11 @@ class AccountScanSnapshot:
     last_activity_completed_at: Optional[str]
     pending_baseline_count: int
     pending_activity_count: int
+    # 진행률을 보여주기 위한 개수. 분모(total)는 **진행 중 늘어날 수 있다** -
+    # 시간 초과로 디렉터리를 쪼개면 작업이 추가되기 때문이다. 그래서 화면에
+    # 그 사실을 함께 적는다 (숨기면 진행률이 뒤로 가는 것처럼 보인다).
+    baseline_done: int = 0
+    baseline_total: int = 0
     # 권한 등으로 일부만 읽어 실제보다 작게 측정된 경로들. 비어 있지 않으면
     # 화면에 알려야 한다 - 모르고 보면 증가량을 잘못 해석하게 된다.
     partial_paths: List[str] = field(default_factory=list)
@@ -515,6 +520,9 @@ def get_status_snapshot(
                 "AND generation = ? AND status = 'pending'",
                 (account.account_id, state.working_generation),
             ).fetchone()[0]
+            baseline_counts = scan_store.checkpoint_progress(
+                conn, account.account_id, scan_store.BASELINE, state.working_generation
+            )
             pending_activity_count = conn.execute(
                 "SELECT COUNT(*) FROM scan_checkpoints WHERE account_id = ? AND kind = 'activity' "
                 "AND generation = ? AND status = 'pending'",
@@ -531,6 +539,8 @@ def get_status_snapshot(
                     last_activity_completed_at=state.last_activity_completed_at,
                     pending_baseline_count=pending_baseline_count,
                     pending_activity_count=pending_activity_count,
+                    baseline_done=baseline_counts["done"] + baseline_counts["error"],
+                    baseline_total=baseline_counts["total"],
                     partial_paths=(
                         scan_store.partial_paths(conn, account.account_id, current_gen)
                         if current_gen

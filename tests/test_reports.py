@@ -184,3 +184,63 @@ class CleanupCandidateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScheduledReportTests(unittest.TestCase):
+    """일간 보고서는 **수집 경로**에서 만들어져야 한다.
+
+    예전에는 야간 상세 스캔이 끝날 때만 만들었는데, 스캔은 시간창 밖이거나
+    잠금이 잡혀 있으면 아예 시작하지 않고 그대로 돌아간다. 그러면 일간
+    보고서까지 함께 사라졌다 - 정작 그 내용은 df 표본 요약이라 스캔과 아무
+    상관이 없는데도.
+    """
+
+    def _config(self):
+        return config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+
+    def test_daily_is_due_when_missing_and_not_after_creating(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config = self._config()
+            now = datetime(2026, 8, 19, 10, 0, tzinfo=timezone.utc)
+
+            self.assertIn(reports.DAILY, reports.due_kinds(data_dir, config, now))
+            reports.ensure_scheduled(data_dir, config, now)
+            self.assertNotIn(reports.DAILY, reports.due_kinds(data_dir, config, now))
+
+    def test_weekly_catches_up_when_the_day_was_missed(self):
+        """그날 장비가 꺼져 있었다고 그 주 보고서가 영영 사라지면 안 된다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config = self._config()
+            config.settings.weekly_report_weekday = 4  # 금요일
+
+            # 금요일을 건너뛰고 일요일에 처음 열었다
+            sunday = datetime(2026, 8, 23, 10, 0, tzinfo=timezone.utc)
+            self.assertEqual(sunday.weekday(), 6)
+            self.assertIn(reports.WEEKLY, reports.due_kinds(data_dir, config, sunday))
+
+            reports.ensure_scheduled(data_dir, config, sunday)
+            self.assertNotIn(reports.WEEKLY, reports.due_kinds(data_dir, config, sunday))
+
+    def test_weekly_becomes_due_again_next_week(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config = self._config()
+            config.settings.weekly_report_weekday = 4
+
+            friday = datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc)
+            reports.ensure_scheduled(data_dir, config, friday)
+            self.assertNotIn(reports.WEEKLY, reports.due_kinds(data_dir, config, friday))
+
+            next_friday = friday + timedelta(days=7)
+            self.assertIn(reports.WEEKLY, reports.due_kinds(data_dir, config, next_friday))
+
+    def test_last_weekly_due_date_is_the_most_recent_target_weekday(self):
+        config = self._config()
+        config.settings.weekly_report_weekday = 4  # 금
+        sunday = datetime(2026, 8, 23, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(reports.last_weekly_due_date(config, sunday).isoformat(), "2026-08-21")
+        friday = datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc)
+        self.assertEqual(reports.last_weekly_due_date(config, friday).isoformat(), "2026-08-21")

@@ -249,3 +249,80 @@ class DeliveryModeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImmediateNotifyTests(unittest.TestCase):
+    """임계 사용률을 넘으면 cooldown을 무시하고 매 수집마다 알린다.
+
+    15분 표본이 이미 99%를 넘었다면 "한 시간 뒤에 다시 알려 주기"는 늦다 -
+    그 한 시간 안에 꽉 차서 쓰기가 실패한다. 조용한 것이 더 위험한 구간이다.
+    """
+
+    def _sample(self, account_id, pct, now):
+        tier = tiers.classify(pct)
+        return SampleRecord(
+            account_id=account_id, collected_at=now.isoformat(), ok=True,
+            byte_pct=pct, byte_tier=tier, overall_tier=tier,
+            total_kb=1000, used_kb=int(10 * pct),
+        )
+
+    def test_below_threshold_is_still_suppressed_by_cooldown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            account = config_module.Account(name="a", path="/user/a")
+            now = datetime(2026, 8, 19, 0, 0, tzinfo=timezone.utc)
+            state = {}
+
+            first = notifications.maybe_notify(
+                data_dir, account, self._sample(account.account_id, 98.0, now), state,
+                cooldown_minutes=60, now=now, immediate_pct=99.0,
+            )
+            second = notifications.maybe_notify(
+                data_dir, account, self._sample(account.account_id, 98.0, now), state,
+                cooldown_minutes=60, now=now + timedelta(minutes=15), immediate_pct=99.0,
+            )
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+
+    def test_at_or_above_threshold_notifies_every_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            account = config_module.Account(name="a", path="/user/a")
+            now = datetime(2026, 8, 19, 0, 0, tzinfo=timezone.utc)
+            state = {}
+            results = [
+                notifications.maybe_notify(
+                    data_dir, account,
+                    self._sample(account.account_id, 99.5, now), state,
+                    cooldown_minutes=60, now=now + timedelta(minutes=15 * i),
+                    immediate_pct=99.0,
+                )
+                for i in range(3)
+            ]
+        self.assertTrue(all(r is not None for r in results))
+
+    def test_event_is_marked_urgent_for_the_tray(self):
+        account = config_module.Account(name="a", path="/user/a")
+        now = datetime(2026, 8, 19, 0, 0, tzinfo=timezone.utc)
+        event = notifications.build_event(
+            account, self._sample(account.account_id, 99.5, now), now, urgent=True
+        )
+        self.assertTrue(event.urgent)
+
+    def test_no_threshold_configured_keeps_old_behaviour(self):
+        """설정이 없으면(None) 예전처럼 cooldown이 그대로 걸려야 한다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            account = config_module.Account(name="a", path="/user/a")
+            now = datetime(2026, 8, 19, 0, 0, tzinfo=timezone.utc)
+            state = {}
+            notifications.maybe_notify(
+                data_dir, account, self._sample(account.account_id, 99.9, now), state,
+                cooldown_minutes=60, now=now, immediate_pct=None,
+            )
+            second = notifications.maybe_notify(
+                data_dir, account, self._sample(account.account_id, 99.9, now), state,
+                cooldown_minutes=60, now=now + timedelta(minutes=15), immediate_pct=None,
+            )
+        self.assertIsNone(second)

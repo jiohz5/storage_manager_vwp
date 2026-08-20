@@ -126,6 +126,9 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.not_running": "실행 중 아님",
         "scan.latest_run": "최근 실행: {status} ({started_at})",
         "scan.pending_tasks": "남은 디렉터리 작업 {count}개",
+        "scan.progress_counts": (
+            "디렉터리 {done:,}/{total:,} 완료 ({percent}%) · 분할되면 총계가 늘 수 있습니다"
+        ),
         "scan.status_error": "스캔 상태를 읽을 수 없습니다: {message}",
         "scan.account_label": "계정",
         "scan.col.path": "경로",
@@ -189,6 +192,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.status.split": "분할됨",
         "progress.status.error": "실패",
         "progress.changed": "변경 {count:,}개",
+        "notify.urgent_prefix": "즉시 확인",
         "scan.new_path": "신규 (이전 세대에 없음)",
         "scan.no_change": "변화 없음",
         "scan.confirm_title": "상세 스캔 실행",
@@ -452,6 +456,9 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.not_running": "Not running",
         "scan.latest_run": "Last run: {status} ({started_at})",
         "scan.pending_tasks": "{count} directory task(s) remaining",
+        "scan.progress_counts": (
+            "{done:,}/{total:,} directories done ({percent}%) - the total can grow when directories are split"
+        ),
         "scan.status_error": "Cannot read scan status: {message}",
         "scan.account_label": "Account",
         "scan.col.path": "Path",
@@ -515,6 +522,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.status.split": "Split",
         "progress.status.error": "Failed",
         "progress.changed": "{count:,} changed",
+        "notify.urgent_prefix": "Act now",
         "scan.new_path": "New (absent in previous generation)",
         "scan.no_change": "No change",
         "scan.confirm_title": "Run detail scan",

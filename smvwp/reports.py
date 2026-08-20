@@ -381,6 +381,73 @@ def generate(
     return result
 
 
+def last_weekly_due_date(config: config_module.AppConfig, now: datetime) -> date:
+    """오늘로부터 거슬러 올라가 가장 최근의 '주간 보고서 요일' 날짜."""
+
+    target = config.settings.weekly_report_weekday
+    day = now.date()
+    return day - timedelta(days=(day.weekday() - target) % 7)
+
+
+def _has_report_on_or_after(data_dir: Path, kind: str, since: date, language: str) -> bool:
+    directory = reports_dir(data_dir) / kind
+    if not directory.exists():
+        return False
+    for path in directory.glob(f"*_{language}.txt"):
+        try:
+            made = date.fromisoformat(path.stem.split("_")[0])
+        except ValueError:
+            continue
+        if made >= since:
+            return True
+    return False
+
+
+def due_kinds(
+    data_dir: Path, config: config_module.AppConfig, now: Optional[datetime] = None
+) -> List[str]:
+    """지금 만들어야 할 보고서 종류.
+
+    **이미 만든 것은 다시 만들지 않는다** - 15분마다 불려도 파일 존재 확인만
+    하고 끝난다.
+
+    주간은 "오늘이 그 요일인가"가 아니라 **"가장 최근 그 요일 이후로 만든 적이
+    있는가"**로 판단한다. 당일에만 만들면 그날 스캔이 못 돌거나 장비가 꺼져
+    있었을 때 그 주 보고서가 영영 생기지 않는다 - 밀렸으면 따라잡아야 한다.
+    """
+
+    now = now or datetime.now(timezone.utc)
+    language = i18n.get_language()
+    kinds: List[str] = []
+
+    if not report_path(data_dir, DAILY, now.date(), language).exists():
+        kinds.append(DAILY)
+        kinds.append(CLEANUP)
+
+    if not _has_report_on_or_after(
+        data_dir, WEEKLY, last_weekly_due_date(config, now), language
+    ):
+        kinds.append(WEEKLY)
+    return kinds
+
+
+def ensure_scheduled(
+    data_dir: Path, config: config_module.AppConfig, now: Optional[datetime] = None
+) -> Dict[str, Path]:
+    """밀린 보고서가 있으면 만든다. 없으면 아무 일도 하지 않는다.
+
+    **수집 경로(15분 주기)에서 부르는 것이 핵심이다.** 예전에는 야간 상세
+    스캔이 끝날 때만 만들었는데, 스캔은 시간창 밖이거나 잠금이 잡혀 있으면
+    아예 시작하지 않고 그대로 돌아간다. 그러면 일간 보고서까지 함께 사라졌다 -
+    정작 일간 보고서 내용은 df 표본 요약이라 스캔과 아무 상관이 없는데도.
+    """
+
+    kinds = due_kinds(data_dir, config, now)
+    if not kinds:
+        return {}
+    return generate(data_dir, config, kinds=kinds, now=now)
+
+
 def should_build_weekly(config: config_module.AppConfig, now: datetime) -> bool:
     return now.weekday() == config.settings.weekly_report_weekday
 

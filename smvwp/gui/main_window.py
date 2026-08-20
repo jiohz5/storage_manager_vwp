@@ -248,6 +248,11 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setShowGrid(False)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        # 계정 표는 **Qt 내장 정렬을 쓰지 않는다.** 사용률 막대와 등급 배지가
+        # 칸 위젯이라, Qt가 항목만 옮기고 위젯은 제자리에 두어 행과 위젯이
+        # 어긋난다. 대신 정렬 키만 기억해 두고 표를 다시 그린다.
+        self._sort_column = None
+        self._sort_desc = True
 
         # 홈 탭에서는 계정 표가 세로 공간을 전부 가져간다.
         self.table.setMinimumHeight(140)
@@ -265,6 +270,61 @@ class MainWindow(QMainWindow):
 
         self.status_bar_label = QLabel("")
         self.statusBar().addPermanentWidget(self.status_bar_label)
+
+    # 정렬 키를 만들 수 있는 열만 정렬을 허용한다. 막대·배지 열은 옆의 숫자
+    # 열(사용량, 사용률)로 정렬하면 되므로 굳이 열지 않는다.
+    SORTABLE_COLUMNS = (COL_NAME, COL_PATH, COL_SIZE, COL_BYTE, COL_INODE, COL_TIME)
+
+    def _on_header_clicked(self, column: int) -> None:
+        if column not in self.SORTABLE_COLUMNS:
+            return
+        if self._sort_column == column:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_column = column
+            # 숫자 열은 큰 것부터, 글자 열은 가나다순으로 시작하는 것이 자연스럽다.
+            self._sort_desc = column not in (COL_NAME, COL_PATH)
+        self.table.horizontalHeader().setSortIndicator(
+            column, Qt.DescendingOrder if self._sort_desc else Qt.AscendingOrder
+        )
+        self._refresh_table_from_store()
+
+    def _sorted_accounts(self, latest) -> list:
+        """정렬 기준에 맞춰 계정 순서를 정한다.
+
+        값이 없는 계정(아직 수집 전)은 항상 뒤로 보낸다 - 오름차순에서 빈 것이
+        맨 위를 차지하면 정작 보려던 것이 밀린다."""
+
+        accounts = list(self._config.accounts)
+        column = self._sort_column
+        if column is None:
+            return accounts
+
+        def key(account):
+            sample = latest.get(account.account_id)
+            if column == COL_NAME:
+                return (0, account.name.lower())
+            if column == COL_PATH:
+                return (0, account.path.lower())
+            if sample is None:
+                return (1, 0)
+            if column == COL_SIZE:
+                return (0, sample.used_kb or 0)
+            if column == COL_BYTE:
+                return (0, sample.byte_pct if sample.byte_pct is not None else -1)
+            if column == COL_INODE:
+                return (0, sample.inode_pct if sample.inode_pct is not None else -1)
+            if column == COL_TIME:
+                return (0, sample.collected_at or "")
+            return (0, 0)
+
+        ordered = sorted(accounts, key=key)
+        if self._sort_desc:
+            # 값 없음(1, ...)은 뒤에 그대로 두고 값 있는 것만 뒤집는다.
+            with_value = [a for a in ordered if key(a)[0] == 0]
+            without = [a for a in ordered if key(a)[0] == 1]
+            ordered = list(reversed(with_value)) + without
+        return ordered
 
     def _fit_path_column(self) -> None:
         """경로 열에 남는 폭을 몰아주되 최소 폭은 지킨다.
@@ -383,6 +443,10 @@ class MainWindow(QMainWindow):
         )
         header.setStretchLastSection(False)
         header.setHighlightSections(False)
+        # 헤더를 눌러 정렬한다. Qt 내장 정렬 대신 직접 하는 이유는 위 주석 참고.
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(self._on_header_clicked)
 
         # 행 배경(등급 색)은 델리게이트가 그린다. 자세한 이유는
         # widgets.TierRowDelegate 참고.
@@ -490,6 +554,17 @@ class MainWindow(QMainWindow):
         self.growth_table.verticalHeader().setVisible(False)
         self.growth_table.verticalHeader().setDefaultSectionSize(34)
         self.growth_table.setShowGrid(False)
+        # 이 표에는 칸 위젯이 없어 Qt 내장 정렬을 그대로 쓸 수 있다.
+        # (계정 표는 막대·배지가 칸 위젯이라 Qt 정렬을 켜면 위젯이 행을 따라
+        #  움직이지 않아 어긋난다 - 그쪽은 직접 정렬해 다시 그린다.)
+        self.growth_table.setSortingEnabled(True)
+        self.growth_table.horizontalHeader().setSortIndicatorShown(True)
+        # 사용자가 한 번이라도 헤더를 누르면 그 정렬을 존중한다 - 갱신할
+        # 때마다 기본값으로 되돌리면 정렬을 바꾼 의미가 없다.
+        self._growth_sort_touched = False
+        self.growth_table.horizontalHeader().sectionClicked.connect(
+            lambda _index: setattr(self, '_growth_sort_touched', True)
+        )
         # 이 표는 보조 정보다. 최소 높이를 낮게 잡아 두지 않으면 계정 표(이
         # 화면의 주인공)를 아래에서 밀어 올려 행이 잘린다.
         self.growth_table.setMinimumHeight(80)
@@ -614,7 +689,7 @@ class MainWindow(QMainWindow):
             self._forecasts = {}
 
     def _render_table(self, latest: Dict[str, store.SampleRecord]) -> None:
-        accounts = self._config.accounts
+        accounts = self._sorted_accounts(latest)
         self.table.setRowCount(len(accounts))
 
         worst_tier = tiers.NORMAL
@@ -630,6 +705,9 @@ class MainWindow(QMainWindow):
         for row, account in enumerate(accounts):
             sample = latest.get(account.account_id)
             name_item = QTableWidgetItem(account.name)
+            # 정렬을 켜면 행 번호가 설정 순서와 달라진다. 행에서 계정을 찾을 때는
+            # 반드시 이 id를 쓴다 (이름은 겹칠 수 있어 식별자가 못 된다).
+            name_item.setData(Qt.UserRole, account.account_id)
             self.table.setItem(row, COL_NAME, name_item)
             path_item = QTableWidgetItem(account.path)
             # 폭이 모자라 잘리더라도 전체 경로는 확인할 수 있어야 한다.
@@ -1021,12 +1099,19 @@ class MainWindow(QMainWindow):
         self.scan_account_combo.setCurrentIndex(index if index >= 0 else 0)
         self.scan_account_combo.blockSignals(False)
 
+    def _account_id_at_row(self, row: int):
+        """표의 행 번호로 계정 id를 찾는다 (정렬돼 있어도 안전)."""
+
+        if row < 0:
+            return None
+        item = self.table.item(row, COL_NAME)
+        return item.data(Qt.UserRole) if item is not None else None
+
     def _on_table_selection_changed(self) -> None:
         """홈 표에서 행을 고르면 상세 스캔 탭의 계정도 같이 맞춘다."""
 
-        row = self.table.currentRow()
-        if 0 <= row < len(self._config.accounts):
-            account_id = self._config.accounts[row].account_id
+        account_id = self._account_id_at_row(self.table.currentRow())
+        if account_id:
             index = self.scan_account_combo.findData(account_id)
             if index >= 0 and index != self.scan_account_combo.currentIndex():
                 self.scan_account_combo.setCurrentIndex(index)
@@ -1056,10 +1141,31 @@ class MainWindow(QMainWindow):
         pending_total = sum(
             item.pending_baseline_count + item.pending_activity_count for item in snapshot.accounts
         )
+        done_total = sum(item.baseline_done for item in snapshot.accounts)
+        total_total = sum(item.baseline_total for item in snapshot.accounts)
         if pending_total:
-            # 퍼센트로 부풀리지 않고 남은 작업 수 그대로 보여준다 - 전체 분모를
-            # 아직 모르기 때문 (DESIGN.md 1부 "과장하지 않는 UI").
             parts.append(i18n.t("scan.pending_tasks", count=pending_total))
+
+        # 진행률을 숫자와 막대로 함께 보여준다.
+        #
+        # 예전에는 남은 개수만 적고 막대는 불확정으로 뒀는데, 그러면 "얼마나
+        # 남았나"에 답이 안 된다. 분모(total)는 진행 중 늘어날 수 있지만
+        # (시간 초과로 디렉터리를 쪼개면 작업이 추가된다) 그 사실을 **문구에
+        # 적어 두면** 숫자를 지어내는 것이 아니다. 아무것도 안 보여 주는 것보다
+        # 낫다.
+        if total_total:
+            self.scan_progress.setRange(0, total_total)
+            self.scan_progress.setValue(done_total)
+            parts.append(
+                i18n.t(
+                    "scan.progress_counts",
+                    done=done_total,
+                    total=total_total,
+                    percent=int(done_total * 100 / total_total),
+                )
+            )
+        else:
+            self.scan_progress.setRange(0, 0)
         cpu_text = self._scan_cpu_text(latest)
         if cpu_text:
             parts.append(cpu_text)
@@ -1081,6 +1187,11 @@ class MainWindow(QMainWindow):
             self.home_scan_label.setText(
                 i18n.t("scan.scanning_now", path=path) if path else i18n.t("scan.started")
             )
+            if total_total:
+                self.home_scan_progress.setRange(0, total_total)
+                self.home_scan_progress.setValue(done_total)
+            else:
+                self.home_scan_progress.setRange(0, 0)
 
         # 막대는 도는 동안에만 보인다. 멈춰 있는데도 계속 떠 있으면 "뭔가
         # 돌고 있나?"라는 오해를 만든다.
@@ -1133,17 +1244,25 @@ class MainWindow(QMainWindow):
                     activity=activity_note,
                 )
             )
+            self.growth_table.setSortingEnabled(False)
             self.growth_table.setRowCount(len(entry.growth))
             for index, row in enumerate(entry.growth):
                 current_kb = row["current_kb"]
                 previous_kb = row["previous_kb"]
                 self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
-                self.growth_table.setItem(index, 1, QTableWidgetItem(widgets.format_kb(current_kb)))
+                self.growth_table.setItem(
+                    index, 1, widgets.NumericItem(widgets.format_kb(current_kb), current_kb)
+                )
                 if previous_kb is None:
                     delta_text = i18n.t("scan.new_path")
                 else:
                     delta_text = widgets.format_kb_delta(current_kb - previous_kb)
-                self.growth_table.setItem(index, 2, QTableWidgetItem(delta_text))
+                delta_value = (
+                    current_kb - previous_kb if previous_kb is not None else current_kb
+                )
+                self.growth_table.setItem(
+                    index, 2, widgets.NumericItem(delta_text, delta_value)
+                )
             return
 
         self.growth_caption.setText(
@@ -1154,12 +1273,22 @@ class MainWindow(QMainWindow):
                 activity=activity_note,
             )
         )
+        self.growth_table.setSortingEnabled(False)
         self.growth_table.setRowCount(len(entry.top_paths))
         dash = i18n.t("common.none")
         for index, row in enumerate(entry.top_paths):
             self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
-            self.growth_table.setItem(index, 1, QTableWidgetItem(widgets.format_kb(row["size_kb"])))
-            self.growth_table.setItem(index, 2, QTableWidgetItem(dash))
+            self.growth_table.setItem(
+                index, 1, widgets.NumericItem(widgets.format_kb(row["size_kb"]), row["size_kb"])
+            )
+            self.growth_table.setItem(index, 2, widgets.NumericItem(dash, None))
+
+        # 채우기가 끝난 뒤 정렬을 되살린다. 기본은 **크기 내림차순** -
+        # 상세 스캔을 보는 이유가 '무엇이 제일 큰가'이기 때문이다.
+        # 사용자가 헤더를 눌러 바꾼 정렬은 Qt가 유지해 준다.
+        if not self._growth_sort_touched:
+            self.growth_table.sortItems(1, Qt.DescendingOrder)
+        self.growth_table.setSortingEnabled(True)
 
     def _trigger_scan_now(self) -> None:
         if not self._config.accounts:

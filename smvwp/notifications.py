@@ -83,6 +83,9 @@ class NotificationEvent:
     # 위해서다.
     kind: str = KIND_CAPACITY
     details: dict = field(default_factory=dict)
+    # 즉시 알림 대상인가. 트레이는 이걸 보고 다른 알림과 묶지 않고 하나만
+    # 따로, 이전 팝업을 덮어쓰며 띄운다.
+    urgent: bool = False
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -244,7 +247,7 @@ def save_notify_state(data_dir: Path, state: Dict[str, dict]) -> None:
 
 
 def build_event(
-    account: Account, sample: SampleRecord, now: datetime
+    account: Account, sample: SampleRecord, now: datetime, urgent: bool = False
 ) -> NotificationEvent:
     tier = sample.overall_tier
 
@@ -272,6 +275,7 @@ def build_event(
         byte_pct=sample.byte_pct,
         inode_pct=sample.inode_pct,
         message=message,
+        urgent=urgent,
     )
 
 
@@ -287,6 +291,7 @@ def maybe_notify(
     command: Optional[Sequence[str]] = None,
     webhook_url: str = "",
     timeout_seconds: int = 10,
+    immediate_pct: Optional[float] = None,
 ) -> Optional[DeliveryResult]:
     """조건이 맞으면 알림을 전송하고 state를 갱신한다 (in-place).
 
@@ -305,7 +310,17 @@ def maybe_notify(
             del state[account.account_id]
         return None
 
-    if previous is not None:
+    # 임계 사용률을 넘으면 cooldown을 무시하고 매 수집마다 알린다.
+    #
+    # 15분 표본이 이미 이 수준이면 "한 시간 뒤에 다시 알려 주기"는 늦다 - 그
+    # 한 시간 안에 꽉 차서 쓰기가 실패한다. 조용한 것이 더 위험한 구간이다.
+    urgent = (
+        immediate_pct is not None
+        and sample.byte_pct is not None
+        and sample.byte_pct >= immediate_pct
+    )
+
+    if previous is not None and not urgent:
         previous_tier = previous.get("tier")
         last_notified_at = previous.get("last_notified_at")
         severity_increased = tiers.severity(tier) > tiers.severity(previous_tier)
@@ -319,7 +334,7 @@ def maybe_notify(
                 state[account.account_id] = {"tier": tier, "last_notified_at": last_notified_at}
                 return None
 
-    event = build_event(account, sample, now)
+    event = build_event(account, sample, now, urgent=urgent)
     result = deliver(
         data_dir,
         event,

@@ -38,6 +38,7 @@ class PendingPopup:
     tier: str
     tier_label: str
     message: str
+    urgent: bool = False
 
     @property
     def sort_key(self) -> str:
@@ -109,6 +110,7 @@ def list_pending(data_dir: Path, max_age_days: int = 7) -> List[PendingPopup]:
                 tier=raw.get("tier", "unknown"),
                 tier_label=raw.get("tier_label", ""),
                 message=raw.get("message", ""),
+                urgent=bool(raw.get("urgent", False)),
             )
         )
 
