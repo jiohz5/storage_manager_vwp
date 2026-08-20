@@ -164,6 +164,24 @@ def _append_failures(lines: List[str], failed: List[tuple], total: int) -> None:
         lines.append(f"      ... {total - len(failed)}")
 
 
+def _scan_label(completed_at, fallback_generation=None) -> str:
+    """보고서에서 스캔을 가리키는 이름 (날짜 우선).
+
+    GUI의 `widgets.scan_label`과 같은 규칙이지만, 보고서 생성은 Qt 없이
+    돌아야 하므로(cron 경로) 여기 따로 둔다."""
+
+    if completed_at:
+        text = str(completed_at)
+        year, month, day = text[:4], text[5:7], text[8:10]
+        if year and month and day:
+            if i18n.get_language() == i18n.KOREAN:
+                return f"{year[2:]}{month}{day}"
+            return f"{year}-{month}-{day}"
+    if fallback_generation is not None:
+        return i18n.t("scan.nth", n=fallback_generation)
+    return i18n.t("common.none")
+
+
 def _append_scan_section(lines: List[str], data_dir: Path, config: config_module.AppConfig) -> None:
     """계정별 `du` 진행 상황과 마지막으로 처리한 경로.
 
@@ -269,11 +287,21 @@ def build_weekly_report(
                     conn, account.account_id, current, config.settings.detail_scan_top_n
                 )
             )
-            lines.append(f"- {i18n.t('reports.scan_heading', account=account.name, run=current)}")
+            scan_at = scan_store.generation_completed_at(conn, account.account_id, current)
+            lines.append(
+                f"- {i18n.t('reports.scan_heading', account=account.name, run=_scan_label(scan_at, current))}"
+            )
             _append_failures(lines, failed, failed_total)
             if not rows:
                 lines.append("    -")
                 continue
+            if previous:
+                previous_at = scan_store.generation_completed_at(
+                    conn, account.account_id, previous
+                )
+                lines.append(
+                    f"    {i18n.t('reports.scan_compared_with', previous=_scan_label(previous_at, previous))}"
+                )
             for row in rows:
                 keys = row.keys()
                 if "current_kb" in keys:

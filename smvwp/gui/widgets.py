@@ -47,6 +47,30 @@ def format_kb(size_kb: Optional[int]) -> str:
 
 
 
+
+def scan_label(completed_at, fallback_generation=None) -> str:
+    """스캔을 가리키는 이름. 완료 시각이 있으면 **날짜**로, 없으면 회차 번호로.
+
+    "3번째 스캔"은 내부 번호라 사용자에게 기준점이 못 된다. "260819 스캔"은
+    그날 무슨 일이 있었는지와 바로 연결된다 - 사람이 실제로 기억하는 단위다.
+
+    한국어는 사내 관례대로 `YYMMDD`, 영어는 오해가 없도록 `YYYY-MM-DD`를 쓴다.
+    """
+
+    if completed_at:
+        text = str(completed_at)
+        try:
+            year, month, day = text[:4], text[5:7], text[8:10]
+            if i18n.get_language() == i18n.KOREAN:
+                return f"{year[2:]}{month}{day}"
+            return f"{year}-{month}-{day}"
+        except (IndexError, ValueError):  # pragma: no cover - 방어적 처리
+            pass
+    if fallback_generation is not None:
+        return i18n.t("scan.nth", n=fallback_generation)
+    return i18n.t("common.none")
+
+
 def format_size_pair(used_kb: Optional[int], total_kb: Optional[int]) -> str:
     """`17.2 / 40.0 TB` 처럼 사용량과 총 용량을 한 칸에 보여준다.
 

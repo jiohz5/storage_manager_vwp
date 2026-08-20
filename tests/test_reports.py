@@ -290,8 +290,11 @@ class ScanProgressInReportTests(unittest.TestCase):
 
         self.assertNotIn(i18n.t("reports.scan_progress_heading"), text)
 
-    def test_weekly_uses_scan_wording_not_generation(self):
-        """'세대'는 내부 개념이다 - 사용자는 '몇 번째 스캔'으로 읽는다."""
+    def test_weekly_labels_the_scan_by_date(self):
+        """'세대'도 '몇 번째'도 사용자에게 기준점이 못 된다.
+
+        `260819 스캔`처럼 날짜로 가리켜야 그날 무슨 일이 있었는지와 연결된다.
+        """
 
         with tempfile.TemporaryDirectory() as tmp:
             data_dir, config, account = self._setup(tmp)
@@ -315,5 +318,8 @@ class ScanProgressInReportTests(unittest.TestCase):
 
             text = reports.build_weekly_report(data_dir, config, datetime.now(timezone.utc))
 
-        self.assertIn("번째 스캔", text)
+        # 오늘 완료한 스캔이므로 오늘 날짜(YYMMDD)로 표기된다
+        today = datetime.now(timezone.utc).strftime("%y%m%d")
+        self.assertIn(f"({today} 스캔)", text)
         self.assertNotIn("generation ", text)
+        self.assertNotIn("번째 스캔", text)

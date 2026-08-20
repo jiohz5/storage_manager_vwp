@@ -307,3 +307,49 @@ class LastProcessedTests(ScanStoreTestCase):
         conn = self.conn
         scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
         self.assertIsNone(scan_store.last_processed(conn, "acct-1", scan_store.BASELINE, 1))
+
+
+class GenerationDateTests(ScanStoreTestCase):
+    """스캔을 날짜로 가리키려면 그 스캔이 언제 끝났는지가 필요하다.
+
+    `baseline_results.completed_at`에 이미 세대별로 들어 있어서 새 열 없이
+    꺼낼 수 있다.
+    """
+
+    def test_returns_completion_time_of_that_scan(self):
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
+        checkpoint = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_done(conn, checkpoint["id"], size_kb=100)
+        scan_store.save_baseline_results(
+            conn, "acct-1", 1, scan_store.leaf_results(conn, "acct-1", 1)
+        )
+
+        completed = scan_store.generation_completed_at(conn, "acct-1", 1)
+        self.assertIsNotNone(completed)
+        self.assertIn("T", completed)
+
+    def test_none_for_a_scan_still_in_progress(self):
+        """진행 중인 스캔은 날짜가 없다 - 화면은 회차 번호로 물러나야 한다."""
+
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
+        self.assertIsNone(scan_store.generation_completed_at(conn, "acct-1", 1))
+
+    def test_dates_map_covers_every_saved_scan(self):
+        conn = self.conn
+        for generation in (1, 2):
+            scan_store.seed_checkpoints(
+                conn, "acct-1", scan_store.BASELINE, generation, [f"/g{generation}"]
+            )
+            checkpoint = scan_store.next_pending(
+                conn, "acct-1", scan_store.BASELINE, generation
+            )
+            scan_store.mark_done(conn, checkpoint["id"], size_kb=10)
+            scan_store.save_baseline_results(
+                conn, "acct-1", generation,
+                scan_store.leaf_results(conn, "acct-1", generation),
+            )
+
+        dates = scan_store.generation_dates(conn, "acct-1")
+        self.assertEqual(set(dates), {1, 2})

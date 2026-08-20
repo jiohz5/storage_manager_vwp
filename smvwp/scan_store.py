@@ -530,6 +530,34 @@ def save_baseline_results(conn: sqlite3.Connection, account_id: str, generation:
     conn.commit()
 
 
+def generation_completed_at(
+    conn: sqlite3.Connection, account_id: str, generation: int
+) -> Optional[str]:
+    """그 스캔이 언제 끝났는지 (ISO 문자열). 결과가 없으면 None.
+
+    화면과 보고서는 스캔을 **날짜로** 가리킨다. "3번째 스캔"은 내부 번호라
+    사용자에게 아무 기준점이 못 되지만, "260819 스캔"은 그날 무슨 일이
+    있었는지와 바로 연결된다."""
+
+    row = conn.execute(
+        "SELECT MAX(completed_at) AS at FROM baseline_results "
+        "WHERE account_id = ? AND generation = ?",
+        (account_id, generation),
+    ).fetchone()
+    return row["at"] if row and row["at"] else None
+
+
+def generation_dates(conn: sqlite3.Connection, account_id: str) -> Dict[int, str]:
+    """이 계정이 가진 모든 스캔의 완료 시각 {세대: ISO}."""
+
+    rows = conn.execute(
+        "SELECT generation, MAX(completed_at) AS at FROM baseline_results "
+        "WHERE account_id = ? GROUP BY generation",
+        (account_id,),
+    ).fetchall()
+    return {row["generation"]: row["at"] for row in rows if row["at"]}
+
+
 def top_paths(conn: sqlite3.Connection, account_id: str, generation: int, limit: int = 15) -> List[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM baseline_results WHERE account_id = ? AND generation = ? ORDER BY size_kb DESC LIMIT ?",

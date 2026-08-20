@@ -126,13 +126,15 @@ class ScanProgressDialog(QDialog):
             )
             counts = scan_store.checkpoint_progress(conn, account_id, kind, generation)
             rows = scan_store.recent_checkpoints(conn, account_id, kind, generation)
+            # 진행 중인 스캔은 아직 완료 시각이 없다 - 그때는 회차 번호로 물러난다.
+            scan_at = scan_store.generation_completed_at(conn, account_id, generation)
         finally:
             conn.close()
 
         self.summary_label.setText(
             i18n.t(
                 "progress.summary",
-                generation=generation,
+                generation=widgets.scan_label(scan_at, generation),
                 done=counts["done"],
                 pending=counts["pending"],
                 split=counts["split"],

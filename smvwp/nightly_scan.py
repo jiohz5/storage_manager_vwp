@@ -469,6 +469,10 @@ class AccountScanSnapshot:
     # 그 사실을 함께 적는다 (숨기면 진행률이 뒤로 가는 것처럼 보인다).
     baseline_done: int = 0
     baseline_total: int = 0
+    # 화면과 보고서는 스캔을 **날짜로** 가리킨다 ("260819 스캔"). 회차
+    # 번호는 내부 값이라 사용자에게 기준점이 못 된다.
+    current_scan_at: Optional[str] = None
+    previous_scan_at: Optional[str] = None
     # 권한 등으로 일부만 읽어 실제보다 작게 측정된 경로들. 비어 있지 않으면
     # 화면에 알려야 한다 - 모르고 보면 증가량을 잘못 해석하게 된다.
     partial_paths: List[str] = field(default_factory=list)
@@ -533,6 +537,14 @@ def get_status_snapshot(
                     account_id=account.account_id,
                     account_name=account.name,
                     last_completed_generation=current_gen,
+                    current_scan_at=(
+                        scan_store.generation_completed_at(conn, account.account_id, current_gen)
+                        if current_gen else None
+                    ),
+                    previous_scan_at=(
+                        scan_store.generation_completed_at(conn, account.account_id, previous_gen)
+                        if previous_gen else None
+                    ),
                     top_paths=top,
                     growth=growth,
                     last_activity_total_changed=state.last_activity_total_changed,

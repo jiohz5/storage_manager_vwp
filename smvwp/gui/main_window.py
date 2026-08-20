@@ -1240,11 +1240,33 @@ class MainWindow(QMainWindow):
                 i18n.t(
                     "scan.growth_caption",
                     account=account.name,
-                    generation=entry.last_completed_generation,
+                    current=widgets.scan_label(
+                        entry.current_scan_at, entry.last_completed_generation
+                    ),
+                    previous=widgets.scan_label(
+                        entry.previous_scan_at,
+                        (entry.last_completed_generation or 1) - 1,
+                    ),
                     activity=activity_note,
                 )
             )
             self.growth_table.setSortingEnabled(False)
+            # 열 제목에 비교 대상 날짜를 박는다 - "이전 스캔 대비"보다
+            # "260819 대비"가 무엇과 비교한 값인지 스스로 설명한다.
+            self.growth_table.setHorizontalHeaderItem(
+                2,
+                QTableWidgetItem(
+                    i18n.t(
+                        "scan.col.delta_dated",
+                        previous=widgets.scan_label(
+                            entry.previous_scan_at,
+                            (entry.last_completed_generation or 1) - 1,
+                        ),
+                    )
+                    if entry.previous_scan_at
+                    else i18n.t("scan.col.delta")
+                ),
+            )
             self.growth_table.setRowCount(len(entry.growth))
             for index, row in enumerate(entry.growth):
                 current_kb = row["current_kb"]
@@ -1269,7 +1291,9 @@ class MainWindow(QMainWindow):
             i18n.t(
                 "scan.baseline_only_caption",
                 account=account.name,
-                generation=entry.last_completed_generation,
+                current=widgets.scan_label(
+                    entry.current_scan_at, entry.last_completed_generation
+                ),
                 activity=activity_note,
             )
         )

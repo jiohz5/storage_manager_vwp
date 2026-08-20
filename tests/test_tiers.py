@@ -1,6 +1,6 @@
 import unittest
 
-from smvwp import tiers
+from smvwp import i18n, tiers
 
 
 class TierClassifyTests(unittest.TestCase):
@@ -175,3 +175,39 @@ class FormatSizePairTests(unittest.TestCase):
         from smvwp.gui import widgets
 
         self.assertEqual(widgets.format_size_pair(None, None), "-")
+
+
+class ScanLabelTests(unittest.TestCase):
+    """스캔을 가리키는 이름은 회차 번호가 아니라 날짜다.
+
+    `3번째 스캔`은 사용자에게 아무 기준점이 못 되지만 `260819 스캔`은 그날
+    무슨 일이 있었는지와 바로 연결된다.
+    """
+
+    def test_korean_uses_yymmdd(self):
+        from smvwp.gui import widgets
+
+        i18n.set_language(i18n.KOREAN)
+        self.assertEqual(widgets.scan_label("2026-08-19T22:31:05+00:00"), "260819")
+
+    def test_english_uses_iso_date(self):
+        from smvwp.gui import widgets
+
+        i18n.set_language(i18n.ENGLISH)
+        try:
+            self.assertEqual(widgets.scan_label("2026-08-19T22:31:05+00:00"), "2026-08-19")
+        finally:
+            i18n.set_language(i18n.KOREAN)
+
+    def test_falls_back_to_ordinal_while_still_running(self):
+        """진행 중인 스캔은 완료 날짜가 없다 - 날짜를 지어내면 안 된다."""
+
+        from smvwp.gui import widgets
+
+        i18n.set_language(i18n.KOREAN)
+        self.assertEqual(widgets.scan_label(None, 3), "3번째 스캔")
+
+    def test_no_date_and_no_number_is_a_dash(self):
+        from smvwp.gui import widgets
+
+        self.assertEqual(widgets.scan_label(None, None), i18n.t("common.none"))
