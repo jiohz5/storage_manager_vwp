@@ -23,5 +23,6 @@
 # export-ignore를 반영하는지는 시점에 따라 달라진 전례가 있다.
 tests/ export-ignore
 DESIGN.md export-ignore
+NEXT.md export-ignore
 .gitattributes export-ignore
 .gitignore export-ignore
