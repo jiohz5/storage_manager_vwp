@@ -323,3 +323,105 @@ class SnapshotExclusionTests(unittest.TestCase):
             # 필요하면 끌 수 있어야 한다 (진단/복구 경로용)
             everything = detail_scan.list_immediate_subdirs(str(root), skip_snapshots=False)
             self.assertEqual(len(everything), 3)
+
+
+class DuTreeTests(unittest.TestCase):
+    """`du -k` 한 번으로 서브트리 전체를 받는다.
+
+    예전 `du -sk`는 숫자 하나만 줘서, 시간 초과가 나면 그때까지 쓴 시간이
+    통째로 버려지고 하위로 쪼개 **같은 파일을 처음부터 다시** 걸어야 했다.
+    """
+
+    def test_command_drops_s_and_limits_output_depth(self):
+        command = detail_scan.du_tree_command("/user/project_a", max_depth=3)
+        self.assertIn("-k", command)
+        self.assertNotIn("-sk", command)
+        self.assertIn("--max-depth=3", command)
+        self.assertIn("--exclude=.snapshot", command)
+        self.assertEqual(command[-2:], ["--", "/user/project_a"])
+
+    def test_parses_every_directory_line(self):
+        stdout = "100\t/a/x\n250\t/a/y\n400\t/a\n"
+        with patch("smvwp.detail_scan.subprocess.run",
+                   return_value=support.completed(["du"], stdout=stdout)):
+            outcome = detail_scan.run_du_tree("/a", 60)
+
+        self.assertEqual(len(outcome.entries), 3)
+        self.assertEqual(outcome.root_size_kb, 400)
+        self.assertTrue(outcome.completed)
+
+    def test_timeout_keeps_what_was_already_printed(self):
+        """`du`는 디렉터리를 다 센 뒤에 찍는다 - 찍힌 것은 완료된 값이다."""
+
+        partial = b"100\t/a/x\n250\t/a/y\n"
+        timeout = subprocess.TimeoutExpired(cmd="du", timeout=1)
+        timeout.stdout = partial
+        timeout.stderr = b""
+
+        with patch("smvwp.detail_scan.subprocess.run", side_effect=timeout):
+            outcome = detail_scan.run_du_tree("/a", 1)
+
+        self.assertTrue(outcome.timed_out)
+        self.assertFalse(outcome.completed)      # 루트 줄이 안 나왔다
+        self.assertEqual([p for p, _ in outcome.entries], ["/a/x", "/a/y"])
+
+    def test_timeout_with_nothing_printed_is_an_error(self):
+        timeout = subprocess.TimeoutExpired(cmd="du", timeout=1)
+        timeout.stdout = b""
+        timeout.stderr = b""
+        with patch("smvwp.detail_scan.subprocess.run", side_effect=timeout):
+            outcome = detail_scan.run_du_tree("/a", 1)
+
+        self.assertTrue(outcome.timed_out)
+        self.assertFalse(outcome.entries)
+        self.assertIn("첫 결과", outcome.error_message)
+
+
+class CheckpointTreeTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.conn = scan_store.connect(Path(self._tmp.name))
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmp.cleanup()
+
+    def _checkpoint(self, path="/a"):
+        scan_store.seed_checkpoints(self.conn, "acct-1", scan_store.BASELINE, 1, [path])
+        return scan_store.next_pending(self.conn, "acct-1", scan_store.BASELINE, 1)
+
+    def test_whole_subtree_is_saved_not_just_the_root(self):
+        stdout = "100\t/a/x\n250\t/a/y\n400\t/a\n"
+        checkpoint = self._checkpoint()
+        with patch("smvwp.detail_scan.subprocess.run",
+                   return_value=support.completed(["du"], stdout=stdout)):
+            status = detail_scan.process_one_checkpoint(self.conn, checkpoint, 60)
+
+        self.assertEqual(status, scan_store.STATUS_DONE)
+        rows = scan_store.tree_entries(self.conn, "acct-1", 1)
+        self.assertEqual({r["path"] for r in rows}, {"/a", "/a/x", "/a/y"})
+        by_path = {r["path"]: r["depth"] for r in rows}
+        self.assertEqual(by_path["/a"], 0)
+        self.assertEqual(by_path["/a/x"], 1)
+
+    def test_timeout_requeues_only_the_unmeasured_children(self):
+        """이미 잰 자식을 다시 큐에 넣으면 그 작업을 두 번 하게 된다."""
+
+        timeout = subprocess.TimeoutExpired(cmd="du", timeout=1)
+        timeout.stdout = b"100\t/a/x\n"     # x만 끝났다
+        timeout.stderr = b""
+        checkpoint = self._checkpoint()
+
+        with patch("smvwp.detail_scan.subprocess.run", side_effect=timeout):
+            with patch("smvwp.detail_scan.list_immediate_subdirs",
+                       return_value=["/a/x", "/a/y", "/a/z"]):
+                status = detail_scan.process_one_checkpoint(self.conn, checkpoint, 1)
+
+        self.assertEqual(status, scan_store.STATUS_SPLIT)
+        pending = self.conn.execute(
+            "SELECT path FROM scan_checkpoints WHERE status = 'pending' ORDER BY id"
+        ).fetchall()
+        # 이미 잰 /a/x는 빠지고 나머지만 다시 큐에 들어간다
+        self.assertEqual([r["path"] for r in pending], ["/a/y", "/a/z"])
+        # 그리고 /a/x 결과는 살아 있다
+        self.assertIn("/a/x", {r["path"] for r in scan_store.tree_entries(self.conn, "acct-1", 1)})

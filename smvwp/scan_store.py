@@ -125,6 +125,12 @@ _COLUMNS_ADDED = {
         "current_account_id": "TEXT",
         "current_started_at": "TEXT",
     },
+    "baseline_results": {
+        # `du -k` 한 번이 서브트리 전체를 주므로 부모와 자식이 함께 들어온다.
+        # 평평한 목록(증가 경로)은 얕은 것만 보여야 읽히고, 트리 화면은 전부
+        # 필요하다 - 깊이를 저장해 두 용도를 한 표로 감당한다.
+        "depth": "INTEGER",
+    },
     "account_scan_state": {
         # 계정 목록에 "최근 스캔일"을 보여주려면 기준선을 언제 완주했는지가
         # 필요하다. 기존에는 세대 번호만 남기고 시각은 안 남겼다.
@@ -558,14 +564,80 @@ def generation_dates(conn: sqlite3.Connection, account_id: str) -> Dict[int, str
     return {row["generation"]: row["at"] for row in rows if row["at"]}
 
 
-def top_paths(conn: sqlite3.Connection, account_id: str, generation: int, limit: int = 15) -> List[sqlite3.Row]:
+def save_tree_entries(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    entries: List["tuple"],
+    root_path: str,
+) -> int:
+    """`du -k`가 준 (경로, KB) 목록을 기준선 결과로 저장한다.
+
+    깊이는 **계정 루트가 아니라 이 체크포인트 루트 기준**이다. 시간 초과로
+    쪼개진 서브트리는 자기 루트에서 다시 0부터 세는데, 그래야 "얕은 것만
+    보여 달라"는 요구가 어느 서브트리에서든 같은 의미가 된다.
+
+    같은 경로가 다시 들어오면 덮어쓴다 (`INSERT OR REPLACE`) - 쪼개기 뒤
+    재측정이 겹칠 수 있고, 나중 값이 항상 더 정확하다."""
+
+    if not entries:
+        return 0
+
+    now = utc_now_iso()
+    root = root_path.rstrip("/")
+    rows = []
+    for path, size_kb in entries:
+        normalized = path.rstrip("/")
+        if normalized == root:
+            depth = 0
+        else:
+            relative = normalized[len(root):].lstrip("/")
+            depth = relative.count("/") + 1 if relative else 0
+        rows.append((account_id, generation, normalized, size_kb, now, depth))
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO baseline_results "
+        "(account_id, generation, path, size_kb, completed_at, depth) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def tree_entries(
+    conn: sqlite3.Connection, account_id: str, generation: int
+) -> List[sqlite3.Row]:
+    """트리 화면용 - 이 스캔이 남긴 모든 디렉터리 (경로순)."""
+
     return conn.execute(
-        "SELECT * FROM baseline_results WHERE account_id = ? AND generation = ? ORDER BY size_kb DESC LIMIT ?",
-        (account_id, generation, limit),
+        "SELECT path, size_kb, depth FROM baseline_results "
+        "WHERE account_id = ? AND generation = ? ORDER BY path",
+        (account_id, generation),
     ).fetchall()
 
 
-def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: int, previous_generation: int, limit: int = 15):
+def top_paths(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    limit: int = 15,
+    max_depth: int = 1,
+) -> List[sqlite3.Row]:
+    """큰 경로 목록.
+
+    깊이를 제한하는 이유: `du -k`는 부모와 자식을 함께 주므로, 거르지 않으면
+    300GB짜리 부모와 그 안의 280GB짜리 자식이 나란히 나온다. 합계가 중복이라
+    "무엇이 큰가"를 읽기 어렵다. 전체 트리는 트리 화면에서 본다."""
+
+    return conn.execute(
+        "SELECT * FROM baseline_results WHERE account_id = ? AND generation = ? "
+        "AND COALESCE(depth, 1) <= ? ORDER BY size_kb DESC LIMIT ?",
+        (account_id, generation, max_depth, limit),
+    ).fetchall()
+
+
+def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: int, previous_generation: int, limit: int = 15, max_depth: int = 1):
     """같은 경로(path) 기준으로 현재/이전 세대를 대조한다 (top N 목록 자체를
     비교하지 않음 - "어제 top N vs 오늘 top N"은 순위가 바뀌면 다른 항목처럼
     보이는 문제가 있었다). 증가량 기준 내림차순으로 최대 limit개 반환."""
@@ -576,11 +648,11 @@ def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: 
         FROM baseline_results cur
         LEFT JOIN baseline_results prev
             ON prev.account_id = cur.account_id AND prev.generation = ? AND prev.path = cur.path
-        WHERE cur.account_id = ? AND cur.generation = ?
+        WHERE cur.account_id = ? AND cur.generation = ? AND COALESCE(cur.depth, 1) <= ?
         ORDER BY (cur.size_kb - COALESCE(prev.size_kb, 0)) DESC
         LIMIT ?
         """,
-        (previous_generation, account_id, current_generation, limit),
+        (previous_generation, account_id, current_generation, max_depth, limit),
     ).fetchall()
     return rows
 

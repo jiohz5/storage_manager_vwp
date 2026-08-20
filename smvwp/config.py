@@ -39,6 +39,7 @@ DEFAULT_DETAIL_SCAN_WINDOW_END_HOUR = 6
 DEFAULT_DETAIL_TASK_TIMEOUT_SECONDS = 15 * 60  # 디렉터리 하나당 du/find 예산
 DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS = 2
 DEFAULT_DETAIL_SCAN_TOP_N = 15
+DEFAULT_DETAIL_SCAN_MAX_DEPTH = 3
 DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS = 2
 
 # 표시 언어 (i18n). 저장은 언어 코드로만 하고 라벨은 그때그때 만든다.
@@ -70,6 +71,16 @@ class Settings:
     detail_task_timeout_seconds: int = DEFAULT_DETAIL_TASK_TIMEOUT_SECONDS
     detail_scan_keep_generations: int = DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS
     detail_scan_top_n: int = DEFAULT_DETAIL_SCAN_TOP_N
+    # `du -k --max-depth=N`. 출력(=DB 행)만 제한하고 크기 계산은 전체를
+    # 돈다. 깊게 잡을수록 트리 화면이 자세해지지만 행이 기하급수로 는다.
+    detail_scan_max_depth: int = DEFAULT_DETAIL_SCAN_MAX_DEPTH
+    # 평평한 목록(증가 경로)에 보여줄 최대 깊이.
+    #
+    # 0 = 측정 단위(계정 바로 아래 디렉터리)만. 1 이상으로 올리면 부모와 자식이
+    # 나란히 나와 **합계가 중복**된다 - 300GB짜리 부모와 그 안의 280GB짜리
+    # 자식이 같은 목록에 뜨면 "무엇이 큰가"를 읽을 수 없다. 파고드는 것은
+    # 평평한 목록이 아니라 트리 화면이 할 일이다.
+    growth_list_max_depth: int = 0
     activity_initial_lookback_days: int = DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS
     language: str = DEFAULT_LANGUAGE
     # 알림 채널. command/webhook은 사내 endpoint가 있을 때만 쓰고, 설정하지
@@ -188,6 +199,8 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("detail_scan_keep_generations는 1 이상이어야 합니다")
     if not 1 <= settings.detail_scan_top_n <= 200:
         raise ConfigError("detail_scan_top_n은 1~200이어야 합니다")
+    if not 1 <= settings.detail_scan_max_depth <= 12:
+        raise ConfigError("detail_scan_max_depth는 1~12여야 합니다")
     if settings.activity_initial_lookback_days < 1:
         raise ConfigError("activity_initial_lookback_days는 1 이상이어야 합니다")
     if not i18n.is_supported(settings.language):

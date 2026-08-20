@@ -187,8 +187,22 @@ class AdminAuthTests(unittest.TestCase):
         self.assertNotEqual(admin_auth.hash_pin("1111"), admin_auth.hash_pin("1111"))
 
     def test_pin_is_not_stored_in_plaintext(self):
-        stored = admin_auth.hash_pin("4321")
-        self.assertNotIn("4321", stored)
+        """저장값은 hex(salt$digest)뿐이어서 PIN 문자가 남을 수 없다.
+
+        예전에는 숫자 PIN("4321")이 저장값에 없는지를 봤는데, 저장값이 97자
+        hex라 그 네 글자가 **우연히** 들어갈 확률이 약 0.14%였다. 구현이
+        멀쩡해도 가끔 실패하는 테스트여서, hex에 나올 수 없는 문자를 쓰는
+        방식으로 바꿨다 - 이제 통과/실패가 구현만으로 결정된다.
+        """
+
+        stored = admin_auth.hash_pin("pin-zzzz")
+        self.assertNotIn("pin-zzzz", stored)
+        self.assertNotIn("zzzz", stored)
+
+        salt_hex, _, digest_hex = stored.partition("$")
+        self.assertTrue(salt_hex and digest_hex)
+        for part in (salt_hex, digest_hex):
+            self.assertRegex(part, r"^[0-9a-f]+$")
 
     def test_malformed_stored_hash_is_rejected(self):
         self.assertFalse(admin_auth.verify_pin("4321", "garbage-without-separator"))

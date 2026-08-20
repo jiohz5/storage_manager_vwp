@@ -216,6 +216,158 @@ def is_snapshot_dir(name: str) -> bool:
     return name in SNAPSHOT_DIR_NAMES
 
 
+@dataclass
+class DuTreeOutcome:
+    """`du -k` 한 번의 결과.
+
+    `entries`는 `(경로, KB)` 목록이고 **출력된 것은 모두 완료된 값**이다.
+    `du`는 깊이 우선으로 돌면서 디렉터리를 다 센 뒤에 그 줄을 찍기 때문에,
+    중간에 죽어도 이미 나온 줄은 신뢰할 수 있다. 이 성질 덕분에 시간 초과가
+    나도 그때까지의 작업을 버리지 않는다.
+    """
+
+    entries: List["tuple"] = None
+    root_size_kb: Optional[int] = None
+    completed: bool = False      # 루트까지 찍혔는가 (=서브트리 전체 완료)
+    timed_out: bool = False
+    partial: bool = False        # 권한 등으로 일부를 못 읽었는가
+    error_message: Optional[str] = None
+
+    def __post_init__(self):
+        if self.entries is None:
+            self.entries = []
+
+
+def du_tree_command(path: str, max_depth: int) -> List[str]:
+    """`du -k --max-depth=N` argv.
+
+    **`-s`를 쓰지 않는 것이 이 설계의 핵심이다.** `du -sk`는 숫자 하나만
+    돌려주므로, 시간이 오래 걸려 중간에 끊기면 얻는 것이 전혀 없고 하위로
+    쪼개서 **같은 파일을 처음부터 다시** 걸어야 했다. 한 단계 쪼갤 때마다 그
+    서브트리를 한 번 더 걷는 셈이었다.
+
+    `-s`를 빼면 한 번 걷는 동안 **모든 하위 디렉터리 크기가 함께** 나온다.
+    실측(같은 트리, warm cache): 개별 `du -sk` 6회가 131ms에 최상위 6개
+    합계를 주는 동안, `du -k` 1회는 191ms에 283개 디렉터리를 준다.
+
+    `--max-depth`로 **출력만** 제한한다. 크기 계산은 그대로 전체를 돌기 때문에
+    루트 값은 정확하고, DB에 쌓이는 행 수만 통제된다 (DESIGN 1부 2-5
+    "자체 비대화 방지").
+    """
+
+    command = ["du", "-k", f"--max-depth={max_depth}"]
+    for name in sorted(SNAPSHOT_DIR_NAMES):
+        command.append(f"--exclude={name}")
+    command += ["--", path]
+    return command
+
+
+def _parse_du_tree(stdout: str) -> List["tuple"]:
+    """`du -k` 출력을 `(경로, KB)` 목록으로. 깨진 줄은 조용히 건너뛴다."""
+
+    entries = []
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("	", 1)
+        if len(parts) != 2:
+            parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            size_kb = int(parts[0])
+        except ValueError:
+            continue
+        entries.append((parts[1].strip(), size_kb))
+    return entries
+
+
+def run_du_tree(path: str, timeout_seconds: int, max_depth: int = 3) -> DuTreeOutcome:
+    """서브트리 하나를 한 번의 `du -k`로 잰다.
+
+    시간 초과여도 그때까지 출력된 디렉터리는 **완료된 값**이므로 살려서
+    돌려준다 (`DuTreeOutcome.entries`). 예전에는 이 경우 15분이 통째로
+    버려졌다."""
+
+    prefix = build_priority_prefix()
+    command = du_tree_command(path, max_depth)
+    timed_out = False
+    try:
+        proc = procio.run_utf8(prefix + command, timeout=timeout_seconds)
+        stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
+    except subprocess.TimeoutExpired as exc:
+        # 죽이기 전까지 찍힌 줄은 그대로 쓸 수 있다 (위 docstring 참고).
+        timed_out = True
+        stdout = _decode_stream(exc.stdout)
+        stderr = _decode_stream(exc.stderr)
+        returncode = None
+    except FileNotFoundError:
+        return DuTreeOutcome(error_message="du 명령을 찾을 수 없습니다")
+
+    entries = _parse_du_tree(stdout)
+
+    # 접두사(nice/ionice)가 못 도는 장비에서는 du가 실행조차 안 된다.
+    # 결과가 하나도 없고 시간 초과도 아니면 접두사 없이 한 번 더 해 본다.
+    if not entries and not timed_out and prefix and returncode not in (0, None):
+        try:
+            bare = procio.run_utf8(command, timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            bare = None
+            stdout = _decode_stream(exc.stdout)
+            entries = _parse_du_tree(stdout)
+        except FileNotFoundError:
+            return DuTreeOutcome(error_message="du 명령을 찾을 수 없습니다")
+        if bare is not None:
+            entries = _parse_du_tree(bare.stdout)
+            stderr, returncode = bare.stderr, bare.returncode
+            if entries:
+                global _priority_prefix_cache
+                _priority_prefix_cache = []
+
+    if not entries:
+        message = (stderr or "").strip()
+        if timed_out:
+            return DuTreeOutcome(
+                timed_out=True,
+                error_message=f"{timeout_seconds}초 안에 첫 결과도 나오지 않았습니다",
+            )
+        if _is_permission_error(message):
+            return DuTreeOutcome(
+                error_message=f"읽기 권한이 없어 크기를 잴 수 없습니다: {message}"
+            )
+        return DuTreeOutcome(error_message=message or f"du exit={returncode}")
+
+    # 루트 줄은 서브트리를 다 센 뒤에야 찍힌다 - 그게 있으면 완주한 것이다.
+    root = _find_root_entry(entries, path)
+    return DuTreeOutcome(
+        entries=entries,
+        root_size_kb=root,
+        completed=root is not None and not timed_out,
+        timed_out=timed_out,
+        partial=bool(returncode) and _is_permission_error(stderr or ""),
+        error_message=(stderr or "").strip() or None,
+    )
+
+
+def _decode_stream(raw) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return str(raw)
+
+
+def _find_root_entry(entries: List["tuple"], path: str) -> Optional[int]:
+    """루트 경로의 크기. `du`가 인자를 그대로 되돌려주므로 문자열로 맞춘다."""
+
+    normalized = path.rstrip("/")
+    for entry_path, size_kb in reversed(entries):
+        if entry_path.rstrip("/") == normalized:
+            return size_kb
+    return None
+
+
 def list_immediate_subdirs(path: str, skip_snapshots: bool = True) -> List[str]:
     """분할 시 다음 큐에 넣을 바로 아래 자식 디렉터리 목록. 권한 오류 등은
     조용히 빈 리스트로 처리한다 (그 지점에서는 더 쪼갤 수 없다는 뜻).
@@ -234,30 +386,57 @@ def list_immediate_subdirs(path: str, skip_snapshots: bool = True) -> List[str]:
         return []
 
 
-def process_one_checkpoint(conn, checkpoint, timeout_seconds: int) -> str:
-    """체크포인트 하나(디렉터리 하나)를 처리하고 결과 상태 문자열을 반환한다
-    ('done' | 'split' | 'error') - 호출자(오케스트레이터)의 로깅/판단용."""
+def process_one_checkpoint(
+    conn, checkpoint, timeout_seconds: int, max_depth: int = 3, generation: int = None
+) -> str:
+    """체크포인트 하나(서브트리 하나)를 처리하고 상태 문자열을 반환한다.
 
-    outcome = run_du(checkpoint["path"], timeout_seconds)
-    if outcome.ok:
-        # 부분 측정이면 크기는 살리되 사유를 함께 남긴다 - 값이 실제보다 작다는
-        # 사실을 사용자가 알아야 증가량 해석을 그르치지 않는다.
+    예전에는 `du -sk`로 **숫자 하나**만 받았다. 그래서 시간 초과가 나면 그때까지
+    쓴 시간이 통째로 버려지고, 하위로 쪼개서 같은 파일을 처음부터 다시 걸어야
+    했다 - 한 단계 쪼갤 때마다 그 서브트리를 한 번 더 걷는 셈이었다.
+
+    이제 `du -k` 한 번으로 서브트리 전체를 받는다. 시간 초과가 나도 **이미
+    출력된 디렉터리는 완료된 값**이므로 저장하고, 아직 안 나온 자식만 다시
+    큐에 넣는다. 버려지는 작업이 없다.
+    """
+
+    generation = generation if generation is not None else checkpoint["generation"]
+    account_id = checkpoint["account_id"]
+    path = checkpoint["path"]
+
+    outcome = run_du_tree(path, timeout_seconds, max_depth=max_depth)
+
+    if outcome.entries:
+        scan_store.save_tree_entries(conn, account_id, generation, outcome.entries, path)
+
+    if outcome.completed:
         scan_store.mark_done(
             conn,
             checkpoint["id"],
-            size_kb=outcome.size_kb,
+            size_kb=outcome.root_size_kb,
             error_message=outcome.error_message if outcome.partial else None,
         )
         return scan_store.STATUS_DONE
 
     if outcome.timed_out:
-        children = list_immediate_subdirs(checkpoint["path"])
-        if children:
+        # 아직 안 끝난 자식만 다시 큐에 넣는다. 이미 나온 것은 저장됐으므로
+        # 다시 걷지 않는다 - 예전 방식과 갈리는 지점이다.
+        measured = {entry_path.rstrip("/") for entry_path, _ in outcome.entries}
+        remaining = [
+            child for child in list_immediate_subdirs(path)
+            if child.rstrip("/") not in measured
+        ]
+        if remaining:
             scan_store.mark_split(conn, checkpoint["id"])
-            scan_store.insert_children(conn, checkpoint, children)
+            scan_store.insert_children(conn, checkpoint, remaining)
             return scan_store.STATUS_SPLIT
+        # 자식은 다 쟀는데 루트 줄이 안 나온 경우 - 합계는 자식들로 낼 수 있다.
+        if outcome.entries:
+            scan_store.mark_done(conn, checkpoint["id"], size_kb=outcome.root_size_kb)
+            return scan_store.STATUS_DONE
         scan_store.mark_error(
-            conn, checkpoint["id"], f"{timeout_seconds}초 내에 끝나지 않았고 하위 디렉터리도 없습니다"
+            conn, checkpoint["id"],
+            f"{timeout_seconds}초 내에 끝나지 않았고 하위 디렉터리도 없습니다",
         )
         return scan_store.STATUS_ERROR
 

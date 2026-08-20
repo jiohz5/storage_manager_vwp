@@ -90,7 +90,11 @@ class ProbeTests(unittest.TestCase):
             (many / f"d{index}").mkdir()
 
         with self._deny(*(f"d{i}" for i in range(20))):
-            result = readability.probe(self.root)
+            # 예산을 넉넉히 준다. 기본값(3초)에 맡기면 전체 스위트가 돌 때처럼
+            # 장비가 바쁠 때 20개를 다 훑기 전에 시간이 끊겨 `truncated`가 되고,
+            # 구현이 멀쩡한데도 테스트가 실패한다 - 이 테스트가 보려는 것은
+            # 표본 개수 상한이지 순회 속도가 아니다.
+            result = readability.probe(self.root, max_seconds=60.0)
 
         self.assertLessEqual(len(result.unreadable_samples), readability.SAMPLE_LIMIT)
         self.assertGreater(result.unreadable, len(result.unreadable_samples))

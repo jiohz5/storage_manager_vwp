@@ -114,13 +114,20 @@ def _process_baseline(
             scan_store.set_current_target(
                 conn, run_id, account.account_id, scan_store.BASELINE, checkpoint["path"]
             )
-        detail_scan.process_one_checkpoint(conn, checkpoint, settings.detail_task_timeout_seconds)
+        detail_scan.process_one_checkpoint(
+            conn,
+            checkpoint,
+            settings.detail_task_timeout_seconds,
+            max_depth=settings.detail_scan_max_depth,
+            generation=generation,
+        )
         if load is not None:
             load.sample()
 
-    rows = scan_store.leaf_results(conn, account.account_id, generation)
-    if rows:
-        scan_store.save_baseline_results(conn, account.account_id, generation, rows)
+    # 결과는 체크포인트를 처리하면서 이미 baseline_results에 들어갔다
+    # (`du -k` 한 번이 서브트리 전체를 주므로). 예전처럼 끝에서 체크포인트를
+    # 훑어 만들 필요가 없다 - 그렇게 하면 쪼개진 서브트리의 내부가 통째로
+    # 빠진다.
     scan_store.mark_generation_completed(conn, account.account_id, generation)
     # 기준선을 정리하기 **전에** 증감 숫자를 이력으로 남긴다 - 정리하고 나면
     # 비교 대상이 사라져 이력을 만들 수 없다.
@@ -513,7 +520,13 @@ def get_status_snapshot(
             state = scan_store.get_account_state(conn, account.account_id)
             current_gen = state.last_completed_generation
             previous_gen = current_gen - 1 if current_gen else None
-            top = scan_store.top_paths(conn, account.account_id, current_gen, top_n) if current_gen else []
+            top = (
+                scan_store.top_paths(
+                    conn, account.account_id, current_gen, top_n,
+                    max_depth=config.settings.growth_list_max_depth,
+                )
+                if current_gen else []
+            )
             growth = (
                 scan_store.growth_delta(conn, account.account_id, current_gen, previous_gen, top_n)
                 if current_gen and previous_gen

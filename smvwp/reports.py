@@ -280,11 +280,14 @@ def build_weekly_report(
             previous = current - 1 if current > 1 else None
             rows = (
                 scan_store.growth_delta(
-                    conn, account.account_id, current, previous, config.settings.detail_scan_top_n
+                    conn, account.account_id, current, previous,
+                    config.settings.detail_scan_top_n,
+                    max_depth=config.settings.growth_list_max_depth,
                 )
                 if previous
                 else scan_store.top_paths(
-                    conn, account.account_id, current, config.settings.detail_scan_top_n
+                    conn, account.account_id, current, config.settings.detail_scan_top_n,
+                    max_depth=config.settings.growth_list_max_depth,
                 )
             )
             scan_at = scan_store.generation_completed_at(conn, account.account_id, current)
