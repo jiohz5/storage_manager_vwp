@@ -288,3 +288,22 @@ class CheckpointProgressTests(ScanStoreTestCase):
         rows = scan_store.recent_checkpoints(conn, "acct-1", scan_store.BASELINE, 1)
         self.assertEqual(rows[0]["path"], "/a")
         self.assertEqual([r["status"] for r in rows[1:]], ["pending", "pending"])
+
+
+class LastProcessedTests(ScanStoreTestCase):
+    def test_returns_most_recent_processed_checkpoint(self):
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a", "/b", "/c"])
+        first = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_done(conn, first["id"], size_kb=100)
+        second = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
+        scan_store.mark_error(conn, second["id"], "권한 없음")
+
+        last = scan_store.last_processed(conn, "acct-1", scan_store.BASELINE, 1)
+        self.assertEqual(last["path"], "/b")
+        self.assertEqual(last["status"], "error")
+
+    def test_none_when_nothing_processed_yet(self):
+        conn = self.conn
+        scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
+        self.assertIsNone(scan_store.last_processed(conn, "acct-1", scan_store.BASELINE, 1))

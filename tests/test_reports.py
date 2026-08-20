@@ -244,3 +244,76 @@ class ScheduledReportTests(unittest.TestCase):
         self.assertEqual(reports.last_weekly_due_date(config, sunday).isoformat(), "2026-08-21")
         friday = datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc)
         self.assertEqual(reports.last_weekly_due_date(config, friday).isoformat(), "2026-08-21")
+
+
+class ScanProgressInReportTests(unittest.TestCase):
+    """보고서에 `du` 진행 개수와 **마지막으로 처리한 경로**를 적는다.
+
+    개수만 적으면 얼마나 남았는지는 알아도 어느 대목에서 멈췄는지는 모른다.
+    밤새 돌다 끊긴 스캔을 아침에 볼 때 필요한 것은 후자다.
+    """
+
+    def _setup(self, tmp):
+        data_dir = Path(tmp)
+        config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+        watched = data_dir / "watched"
+        watched.mkdir(parents=True)
+        config_module.add_account(config, "project_a", str(watched))
+        account = config.accounts[0]
+
+        conn = scan_store.connect(data_dir)
+        try:
+            generation = scan_store.get_account_state(conn, account.account_id).working_generation
+            paths = [f"/user/project_a/dir{i}" for i in range(4)]
+            scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, generation, paths)
+            first = scan_store.next_pending(conn, account.account_id, scan_store.BASELINE, generation)
+            scan_store.mark_done(conn, first["id"], size_kb=1024)
+        finally:
+            conn.close()
+        return data_dir, config, account
+
+    def test_daily_report_includes_progress_and_last_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir, config, _ = self._setup(tmp)
+            text = reports.build_daily_report(data_dir, config, datetime.now(timezone.utc))
+
+        self.assertIn("1/4", text)          # 완료 1 / 전체 4
+        self.assertIn("/user/project_a/dir0", text)
+
+    def test_no_scan_yet_adds_no_section(self):
+        """스캔을 한 번도 안 돌린 상태에서 빈 절이 붙으면 지저분하다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config = config_module.AppConfig(settings=config_module.Settings(), accounts=[])
+            text = reports.build_daily_report(data_dir, config, datetime.now(timezone.utc))
+
+        self.assertNotIn(i18n.t("reports.scan_progress_heading"), text)
+
+    def test_weekly_uses_scan_wording_not_generation(self):
+        """'세대'는 내부 개념이다 - 사용자는 '몇 번째 스캔'으로 읽는다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir, config, account = self._setup(tmp)
+            conn = scan_store.connect(data_dir)
+            try:
+                generation = scan_store.get_account_state(conn, account.account_id).working_generation
+                while True:
+                    checkpoint = scan_store.next_pending(
+                        conn, account.account_id, scan_store.BASELINE, generation
+                    )
+                    if checkpoint is None:
+                        break
+                    scan_store.mark_done(conn, checkpoint["id"], size_kb=2048)
+                scan_store.save_baseline_results(
+                    conn, account.account_id, generation,
+                    scan_store.leaf_results(conn, account.account_id, generation),
+                )
+                scan_store.mark_generation_completed(conn, account.account_id, generation)
+            finally:
+                conn.close()
+
+            text = reports.build_weekly_report(data_dir, config, datetime.now(timezone.utc))
+
+        self.assertIn("번째 스캔", text)
+        self.assertNotIn("generation ", text)

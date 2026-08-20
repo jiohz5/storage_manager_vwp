@@ -133,13 +133,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.account_label": "계정",
         "scan.col.path": "경로",
         "scan.col.current_size": "현재 크기",
-        "scan.col.delta": "이전 세대 대비",
+        "scan.col.delta": "이전 스캔 대비",
         "scan.select_account": "계정을 선택하면 증가 경로가 표시됩니다.",
         "scan.no_baseline": "{account}: 아직 완료된 기준선이 없습니다 (상세 스캔이 한 바퀴 끝나야 표시됩니다).",
-        "scan.growth_caption": "{account}: 세대 {generation} 기준, 직전 세대와 같은 경로끼리 비교{activity}",
+        "scan.growth_caption": "{account}: {generation}번째 스캔 기준, 직전 스캔과 같은 경로끼리 비교{activity}",
         "scan.baseline_only_caption": (
-            "{account}: 세대 {generation} 기준선만 있습니다 "
-            "(비교할 이전 세대가 없어 증감은 다음 스캔부터 표시됩니다){activity}"
+            "{account}: {generation}번째 스캔 결과만 있습니다 "
+            "(비교할 이전 스캔이 없어 증감은 다음 스캔부터 표시됩니다){activity}"
         ),
         "scan.activity_note": " · 최근 변경 파일 {count:,}개",
         "scan.partial_warning": (
@@ -160,6 +160,12 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(권한 부족이면 관리자에게 읽기 권한을 요청하거나 대상에서 제외하면 됩니다)."
         ),
         "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
+        "reports.scan_progress_heading": "[상세 스캔 진행 상황]",
+        "reports.scan_heading": "{account} ({run}번째 스캔)",
+        "reports.scan_progress": (
+            "진행: 디렉터리 {done:,}/{total:,} 완료 ({percent}%) · 대기 {pending:,}"
+        ),
+        "reports.scan_last_path": "마지막 처리: {when} · {size}",
         "reports.scan_failed_header": "[!] 크기를 재지 못한 경로 {count}곳:",
         "scan.close_while_running_title": "상세 스캔 실행 중",
         "scan.close_while_running_body": (
@@ -180,7 +186,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.kind.activity": "변경 파일(find)",
         "progress.btn.refresh": "새로고침",
         "progress.summary": (
-            "세대 {generation} · 완료 {done} / 대기 {pending} / 분할 {split} / "
+            "{generation}번째 스캔 · 완료 {done} / 대기 {pending} / 분할 {split} / "
             "실패 {error} (전체 {total})"
         ),
         "progress.col.path": "경로",
@@ -193,7 +199,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.status.error": "실패",
         "progress.changed": "변경 {count:,}개",
         "notify.urgent_prefix": "즉시 확인",
-        "scan.new_path": "신규 (이전 세대에 없음)",
+        "scan.new_path": "신규 (이전 스캔에 없음)",
         "scan.no_change": "변화 없음",
         "scan.confirm_title": "상세 스캔 실행",
         "scan.confirm_body": (
@@ -463,13 +469,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.account_label": "Account",
         "scan.col.path": "Path",
         "scan.col.current_size": "Current size",
-        "scan.col.delta": "vs previous generation",
+        "scan.col.delta": "vs previous scan",
         "scan.select_account": "Select an account to see its growth paths.",
         "scan.no_baseline": "{account}: no completed baseline yet (one full detail scan is required).",
-        "scan.growth_caption": "{account}: generation {generation}, compared path-by-path with the previous generation{activity}",
+        "scan.growth_caption": "{account}: scan #{generation}, compared path-by-path with the previous scan{activity}",
         "scan.baseline_only_caption": (
-            "{account}: only generation {generation} baseline exists "
-            "(no previous generation to compare, deltas appear after the next scan){activity}"
+            "{account}: only scan #{generation} exists so far "
+            "(no previous scan to compare, deltas appear after the next scan){activity}"
         ),
         "scan.activity_note": " - {count:,} changed file(s) recently",
         "scan.partial_warning": (
@@ -490,6 +496,12 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(if it is a permission problem, request read access or drop the path)."
         ),
         "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
+        "reports.scan_progress_heading": "[Detail scan progress]",
+        "reports.scan_heading": "{account} (scan #{run})",
+        "reports.scan_progress": (
+            "Progress: {done:,}/{total:,} directories done ({percent}%) - {pending:,} pending"
+        ),
+        "reports.scan_last_path": "Last processed: {when} - {size}",
         "reports.scan_failed_header": "[!] {count} path(s) could not be measured:",
         "scan.close_while_running_title": "Detail scan running",
         "scan.close_while_running_body": (
@@ -510,7 +522,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.kind.activity": "Changed files (find)",
         "progress.btn.refresh": "Refresh",
         "progress.summary": (
-            "Generation {generation} - done {done} / pending {pending} / split {split} / "
+            "Scan #{generation} - done {done} / pending {pending} / split {split} / "
             "failed {error} (total {total})"
         ),
         "progress.col.path": "Path",
@@ -523,7 +535,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.status.error": "Failed",
         "progress.changed": "{count:,} changed",
         "notify.urgent_prefix": "Act now",
-        "scan.new_path": "New (absent in previous generation)",
+        "scan.new_path": "New (absent in previous scan)",
         "scan.no_change": "No change",
         "scan.confirm_title": "Run detail scan",
         "scan.confirm_body": (

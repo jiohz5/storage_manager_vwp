@@ -432,6 +432,23 @@ def partial_paths(conn: sqlite3.Connection, account_id: str, generation: int) ->
     return [row["path"] for row in rows]
 
 
+def last_processed(
+    conn: sqlite3.Connection, account_id: str, kind: str, generation: int
+):
+    """가장 최근에 처리한 체크포인트 한 건 (없으면 None).
+
+    보고서에 "어디까지 갔나"를 적으려면 진행 개수만으로는 부족하다 - 숫자는
+    얼마나 남았는지만 말하고, 경로는 **어느 대목에서 멈췄는지**를 말한다.
+    밤새 돌다 끊긴 스캔을 다음 날 아침에 볼 때 필요한 것은 후자다."""
+
+    return conn.execute(
+        "SELECT path, status, size_kb, scanned_at FROM scan_checkpoints "
+        "WHERE account_id = ? AND kind = ? AND generation = ? AND scanned_at IS NOT NULL "
+        "ORDER BY scanned_at DESC, id DESC LIMIT 1",
+        (account_id, kind, generation),
+    ).fetchone()
+
+
 def failed_paths(
     conn: sqlite3.Connection, account_id: str, generation: int, limit: int = 20
 ) -> List[tuple]:

@@ -131,6 +131,14 @@ def build_daily_report(
         lines.append(i18n.t("dashboard.warn_summary", count=warn_or_worse, worst=""))
     else:
         lines.append(i18n.t("dashboard.all_normal", count=len(config.accounts)))
+
+    # 상세 스캔이 밤새 어디까지 갔는지를 여기에 붙인다.
+    #
+    # 주간이 아니라 **일간**에 넣는 이유: 아침에 보고서를 여는 목적이 대개
+    # "밤새 얼마나 갔나"인데, 주간에만 있으면 그걸 주 1회만 볼 수 있다.
+    # 주간 보고서는 일간을 통째로 포함하므로 여기 한 번만 넣으면 양쪽에서
+    # 다 보인다.
+    _append_scan_section(lines, data_dir, config)
     return "\n".join(lines) + "\n"
 
 
@@ -154,6 +162,70 @@ def _append_failures(lines: List[str], failed: List[tuple], total: int) -> None:
         lines.append(f"        {first_line}")
     if total > len(failed):
         lines.append(f"      ... {total - len(failed)}")
+
+
+def _append_scan_section(lines: List[str], data_dir: Path, config: config_module.AppConfig) -> None:
+    """계정별 `du` 진행 상황과 마지막으로 처리한 경로.
+
+    개수만 적으면 얼마나 남았는지는 알아도 **어느 대목에서 멈췄는지**는 모른다.
+    밤새 돌다 끊긴 스캔을 아침에 볼 때 필요한 것은 후자다 - 경로를 보면 다음
+    밤에 어디부터 이어질지 짐작할 수 있다.
+    """
+
+    if not config.accounts:
+        return
+
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover - 스캔 DB가 없어도 일간 보고서는 나와야 한다
+        return
+
+    try:
+        body: List[str] = []
+        for account in config.accounts:
+            state = scan_store.get_account_state(conn, account.account_id)
+            entry: List[str] = []
+            _append_progress(entry, conn, account.account_id, state.working_generation)
+            if not entry:
+                continue
+            body.append(f"- {account.name}")
+            body.extend(entry)
+
+        if body:
+            lines.append("")
+            lines.append(i18n.t("reports.scan_progress_heading"))
+            lines.append("-" * 72)
+            lines.extend(body)
+    finally:
+        conn.close()
+
+
+def _append_progress(lines: List[str], conn, account_id: str, generation: int) -> None:
+    """`du` 진행 개수와 마지막으로 처리한 경로를 적는다.
+
+    보고서를 아침에 여는 이유는 대개 "밤새 얼마나 갔나"이다. 개수만 적으면
+    얼마나 남았는지는 알아도 **어느 대목에서 멈췄는지**는 모른다. 경로를 같이
+    적어야 다음 밤에 어디부터 이어질지 짐작할 수 있다.
+    """
+
+    counts = scan_store.checkpoint_progress(conn, account_id, scan_store.BASELINE, generation)
+    if not counts["total"]:
+        return
+
+    done = counts["done"] + counts["error"]
+    percent = int(done * 100 / counts["total"]) if counts["total"] else 0
+    lines.append(
+        f"    {i18n.t('reports.scan_progress', done=done, total=counts['total'], percent=percent, pending=counts['pending'])}"
+    )
+
+    last = scan_store.last_processed(conn, account_id, scan_store.BASELINE, generation)
+    if last is not None:
+        when = str(last["scanned_at"])[:19].replace("T", " ")
+        size = _fmt_kb(last["size_kb"]) if last["size_kb"] is not None else "-"
+        lines.append(
+            f"    {i18n.t('reports.scan_last_path', when=when, size=size)}"
+        )
+        lines.append(f"      {last['path']}")
 
 
 def build_weekly_report(
@@ -197,7 +269,7 @@ def build_weekly_report(
                     conn, account.account_id, current, config.settings.detail_scan_top_n
                 )
             )
-            lines.append(f"- {account.name} (generation {current})")
+            lines.append(f"- {i18n.t('reports.scan_heading', account=account.name, run=current)}")
             _append_failures(lines, failed, failed_total)
             if not rows:
                 lines.append("    -")
