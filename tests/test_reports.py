@@ -182,6 +182,40 @@ class CleanupCandidateTests(unittest.TestCase):
         self.assertIn("정리 후보가 없습니다", text)
 
 
+class DisplayWidthTests(unittest.TestCase):
+    """보고서 표는 `cat`으로 읽는 것이 전제라 열이 맞아야 한다.
+
+    한글은 고정폭 터미널에서 두 칸을 차지하는데 파이썬 패딩은 글자 수로 센다.
+    이 차이를 놓치면 헤더와 값이 어긋나 사람이 열을 눈으로 따라가야 한다."""
+
+    def test_korean_counts_as_two_columns(self):
+        self.assertEqual(reports.display_width("계정"), 4)
+        self.assertEqual(reports.display_width("abc"), 3)
+        self.assertEqual(reports.display_width("load(1분)"), 9)
+
+    def test_pad_aligns_by_display_width(self):
+        self.assertEqual(reports.display_width(reports.pad("계정", 18)), 18)
+        self.assertEqual(reports.display_width(reports.pad("layout_proj", 18)), 18)
+
+    def test_pad_right_aligns(self):
+        self.assertTrue(reports.pad("92.4%", 8, ">").startswith(" "))
+        self.assertEqual(reports.pad("92.4%", 8, ">"), "   92.4%")
+
+    def test_overlong_text_is_not_truncated(self):
+        """이름이 잘려 보이면 표 자체가 쓸모없어진다 - 그 줄만 밀리는 편이 낫다."""
+
+        long_name = "a" * 30
+        self.assertEqual(reports.pad(long_name, 18), long_name)
+
+    def test_daily_report_columns_line_up(self):
+        self.assertEqual(
+            reports.display_width(reports.pad("계정", 18) + " " + reports.pad("등급", 10)),
+            reports.display_width(
+                reports.pad("layout_proj", 18) + " " + reports.pad("경고", 10)
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 

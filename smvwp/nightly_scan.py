@@ -1,4 +1,4 @@
-"""야간 상세 스캔 오케스트레이터 - 계정을 돌아가며(공정성) 직렬로 처리하고,
+"""야간 상세 스캔 오케스트레이터 - 계정을 돌아가며(공정성) 처리하고,
 시간창/안전 중지/잠금을 모두 여기서 조율한다.
 
 DESIGN.md 1부 7절이 요구하는 안전장치들을 한 곳에 모았다:
@@ -6,17 +6,36 @@ DESIGN.md 1부 7절이 요구하는 안전장치들을 한 곳에 모았다:
   써도(=deadline 도달) 그 계정 체크포인트에 정확히 표시해 두고 조용히
   멈춘다. 예외를 밖으로 던지지 않는다.
 - "여러 계정의 상세 작업은 동시에 두 개 이상 돌리지 않고 직렬 처리" ->
-  `scan_lock`으로 전체 실행 자체를 하나만 허용하고, 계정도 한 번에 하나씩만
-  처리한다 (병렬 처리 없음).
+  `scan_lock`으로 전체 실행 자체를 하나만 허용하고, **기본값에서는** 계정도
+  한 번에 하나씩만 처리한다.
 - "완료 순서를 날짜별로 순환시켜 특정 계정이 계속 뒤로 밀리지 않게 공정성
   확보" -> `_rotate_accounts`가 오늘 날짜를 시드로 시작 위치를 돌린다.
 - 06:00에는 "완료된 체크포인트를 남기고 paused로 종료" -> `status`가
   completed/paused/stopped/error로 구분되어 강제 종료와 다르다는 게 남는다.
+
+## 계정 병렬 실행 - 평일 밤과 주말 밤이 다르다
+
+위의 "직렬 처리" 원칙은 **평일 밤 기준**이다. 주말 아침에 출근하는 인원은
+평일의 10~20% 수준이라 같은 부하가 훨씬 적은 사람에게만 닿으므로, 주말 밤에는
+계정을 동시에 여러 개 돈다 (`weekend_parallel_accounts`, 기본 3).
+
+여기서 "주말 밤"은 날짜가 아니라 **끝나는 아침**으로 정한다 - 금요일 밤은
+주말이고 일요일 밤은 평일이다. 이유는 `scan_window.ends_on_weekend` 참고.
+
+평일 밤은 기존과 같은 직렬(`nightly_parallel_accounts`, 기본 1)이고,
+`--parallel N`은 둘 다 무시하고 그 값을 쓴다 (실측용).
+
+병렬이 이 장비에서 실제로 이득인지는 미리 알 수 없다. 그래서 어느 경로로
+돌았든 같은 실행에서 리소스 시계열(`scan_load_samples`)과 그때의 동시 계정
+수를 함께 기록해, 다음 판단의 근거가 남게 한다. 자세한 득실은
+`_run_accounts_parallel` 참고.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -64,10 +83,46 @@ class RunSummary:
     run_id: Optional[str] = None
     reason: Optional[str] = None
     accounts: List[AccountOutcome] = field(default_factory=list)
+    # 이 실행이 계정을 몇 개씩 동시에 돌렸는가 (1 = 직렬). 부하 실측 결과를
+    # 읽을 때 가장 먼저 필요한 조건이라 요약에도 싣는다.
+    parallel_accounts: int = 1
+    # 그 값이 주말 밤이라서 정해졌는가. 숫자만 보면 "왜 오늘은 3이지"를 알 수
+    # 없어 설정이 잘못된 줄 안다.
+    weekend_night: bool = False
+
+
+# 스캔 시작 전 기준값을 잡을 때 두 번 재는 사이의 간격. CPU 사용률은 두 시점의
+# 차이로만 구할 수 있어 최소한의 대기가 필요하다. 테스트는 이 값을 0으로 낮춰
+# 부른다 (모듈 상수로 둔 것은 그래서다).
+BASELINE_WARMUP_SECONDS = 1.0
 
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
+
+
+class _ActiveCounter:
+    """지금 몇 개 계정이 동시에 돌고 있는지 세는 카운터.
+
+    리소스 표본에 이 값을 같이 남겨야 나중에 시계열을 읽을 수 있다 - 부하가
+    튄 구간이 계정 하나 때문인지 여섯 개가 겹친 탓인지는 이 숫자 없이는
+    구분되지 않는다."""
+
+    def __init__(self):
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def __call__(self) -> int:
+        with self._lock:
+            return self._count
+
+    def enter(self) -> None:
+        with self._lock:
+            self._count += 1
+
+    def leave(self) -> None:
+        with self._lock:
+            self._count = max(0, self._count - 1)
 
 
 def _rotate_accounts(accounts, today: datetime):
@@ -265,6 +320,174 @@ def _process_search_index(
             conn.close()
 
 
+def resolve_parallel_accounts(
+    local_now: datetime, settings: config_module.Settings
+) -> "tuple[int, bool]":
+    """이 밤에 쓸 동시 실행 계정 수와, 그것이 주말 값인지를 돌려준다.
+
+    주말 밤에는 아침에 출근하는 인원이 평일의 10~20% 수준이라 더 세게 돌 수
+    있다. "주말 밤"의 정의는 `scan_window.ends_on_weekend`에 있다 - 금요일
+    밤은 주말이고 일요일 밤은 평일이다.
+
+    **시간창 밖(=낮)에서 도는 실행에는 주말 규칙을 적용하지 않는다.** 낮에
+    손으로 돌리는 것은 진단/복구 경로인데(DESIGN.md 1부 3절), 토요일 오후라도
+    그때 자리에 있는 사람은 지금 일하고 있는 사람이다. 세게 돌려야 할 이유가
+    있으면 `--parallel`로 의도를 밝히면 된다.
+    """
+
+    within_window = scan_window.is_within_window(
+        local_now,
+        settings.detail_scan_window_start_hour,
+        settings.detail_scan_window_end_hour,
+    )
+    if within_window and scan_window.ends_on_weekend(
+        local_now, settings.detail_scan_window_end_hour
+    ):
+        return settings.weekend_parallel_accounts, True
+    return settings.nightly_parallel_accounts, False
+
+
+def _outcome_interrupted(outcome: AccountOutcome) -> bool:
+    return outcome.baseline_status == "interrupted" or outcome.activity_status == "interrupted"
+
+
+def _run_accounts_serial(
+    conn,
+    data_dir: Path,
+    accounts: List[config_module.Account],
+    settings: config_module.Settings,
+    clock,
+    should_stop,
+    deadline_reached,
+    top_level_lister,
+    load,
+    run_id: str,
+    outcomes: List[AccountOutcome],
+    active: _ActiveCounter,
+) -> str:
+    """지금까지의 동작 그대로 - 계정을 하나씩 순서대로."""
+
+    for account in accounts:
+        if should_stop():
+            return STATUS_STOPPED
+        if deadline_reached():
+            return STATUS_PAUSED
+        active.enter()
+        try:
+            outcome = _process_account(
+                conn,
+                data_dir,
+                account,
+                settings,
+                clock,
+                should_stop,
+                deadline_reached,
+                top_level_lister,
+                load,
+                run_id,
+            )
+        finally:
+            active.leave()
+        outcomes.append(outcome)
+        if _outcome_interrupted(outcome):
+            return STATUS_STOPPED if should_stop() else STATUS_PAUSED
+    return STATUS_COMPLETED
+
+
+def _run_accounts_parallel(
+    data_dir: Path,
+    accounts: List[config_module.Account],
+    settings: config_module.Settings,
+    clock,
+    should_stop,
+    deadline_reached,
+    top_level_lister,
+    load,
+    run_id: str,
+    outcomes: List[AccountOutcome],
+    active: _ActiveCounter,
+    workers: int,
+) -> str:
+    """계정 여러 개를 동시에 돈다. **부하 실측용 경로다** (기본은 직렬).
+
+    ## 왜 연결을 스레드마다 새로 여는가
+
+    `sqlite3` 연결은 만든 스레드에서만 쓰는 것이 기본값이다
+    (`check_same_thread`). 하나를 공유하려면 그 검사를 끄고 모든 호출을 직접
+    직렬화해야 하는데, 그러면 병렬로 만든 의미가 절반 사라지고 잠금 버그의
+    여지만 생긴다. WAL에서는 연결이 여러 개여도 읽기는 서로 막지 않고 쓰기만
+    순서를 기다린다 (`connect`가 이미 `timeout=10`을 준다).
+
+    ## 얻는 것과 잃는 것 (쓰기 전에 알아야 할 것)
+
+    - 얻는 것: 계정들이 **서로 다른 볼륨**에 있으면 벽시계 시간이 준다.
+    - 잃는 것: `nice`/`ionice`로 한 번에 하나만 얌전히 돌던 전제가 깨진다.
+      같은 볼륨에 몰려 있으면 seek 경합으로 **오히려 느려질 수 있다.**
+
+    어느 쪽인지는 장비마다 다르고 미리 알 수 없다 - 그래서 이 경로는 기본이
+    아니라 `--parallel`로 의도를 밝혔을 때만 열리고, 같은 실행에서 리소스
+    시계열을 남겨 다음 판단의 근거가 되게 한다.
+
+    ## 진행 표시에 대한 주의
+
+    `set_current_target`은 "지금 이 경로"를 실행 행 하나에 적는다. 병렬에서는
+    마지막에 쓴 스레드의 경로만 남으므로, 진행 화면에 보이는 경로는 **여럿 중
+    하나**다. 표시용 정보라 틀려도 데이터에는 영향이 없지만, 그 화면을 보고
+    "하나씩 돌고 있구나"라고 오해하지 않도록 표본의 `active_accounts`를 함께
+    남긴다.
+    """
+
+    interrupted_status: List[Optional[str]] = [None]
+
+    def work(account: config_module.Account) -> Optional[AccountOutcome]:
+        # 큐에 미리 다 넣어 두므로, 순서를 기다리는 동안 시간창이 끝났을 수
+        # 있다. 시작 직전에 다시 확인한다.
+        if should_stop() or deadline_reached():
+            return None
+        worker_conn = scan_store.connect(data_dir)
+        active.enter()
+        try:
+            return _process_account(
+                worker_conn,
+                data_dir,
+                account,
+                settings,
+                clock,
+                should_stop,
+                deadline_reached,
+                top_level_lister,
+                load,
+                run_id,
+            )
+        finally:
+            active.leave()
+            worker_conn.close()
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="smvwp-scan"
+    ) as pool:
+        futures = {pool.submit(work, account): account for account in accounts}
+        for future in concurrent.futures.as_completed(futures):
+            account = futures[future]
+            try:
+                outcome = future.result()
+            except Exception:  # pragma: no cover - 계정 하나의 실패가 전체를 죽이지 않는다
+                logger.exception("계정 스캔 실패: %s", account.name)
+                continue
+            if outcome is None:  # 시간창/중지로 시작조차 못 함
+                continue
+            outcomes.append(outcome)
+            if _outcome_interrupted(outcome):
+                interrupted_status[0] = STATUS_STOPPED if should_stop() else STATUS_PAUSED
+
+    if interrupted_status[0]:
+        return interrupted_status[0]
+    if len(outcomes) < len(accounts):
+        # 시작도 못 한 계정이 남았다면 완주가 아니다. 다음 실행이 이어받는다.
+        return STATUS_STOPPED if should_stop() else STATUS_PAUSED
+    return STATUS_COMPLETED
+
+
 def run_nightly_scan(
     data_dir: Path,
     config: config_module.AppConfig,
@@ -272,6 +495,8 @@ def run_nightly_scan(
     bypass_window: bool = False,
     clock: Optional[Callable[[], datetime]] = None,
     top_level_lister: Optional[Callable[[str], List[str]]] = None,
+    parallel_accounts: Optional[int] = None,
+    baseline_warmup_seconds: float = BASELINE_WARMUP_SECONDS,
 ) -> RunSummary:
     """야간 상세 스캔 한 번(하룻밤 분량)을 실행한다.
 
@@ -294,6 +519,17 @@ def run_nightly_scan(
     ):
         return RunSummary(started=False, status=STATUS_NOT_STARTED, reason="야간 시간창이 아닙니다")
 
+    # `--parallel`이 설정값을 이긴다. 설정은 "평소 이렇게 돈다"이고 명령줄
+    # 인자는 "이번엔 이렇게 돌려 보겠다"라, 실측을 하려면 후자가 이겨야 한다.
+    # 값을 안 주면 이 밤이 주말 밤인지에 따라 평일값/주말값이 갈린다.
+    # 판정은 `--parallel` 여부와 무관하게 항상 한다. `weekend_night`은 "몇 개로
+    # 돌았나"가 아니라 "어떤 밤이었나"를 기록하는 값이라, 사람이 값을 지정한
+    # 실행에서도 사실대로 남아야 나중에 비교가 된다.
+    resolved, weekend_night = resolve_parallel_accounts(local_now, settings)
+    if parallel_accounts is None:
+        parallel_accounts = resolved
+    parallel_accounts = max(1, min(16, int(parallel_accounts)))
+
     try:
         run_id = scan_lock.acquire_lock(data_dir, triggered_by)
     except scan_lock.LockBusyError as exc:
@@ -306,8 +542,22 @@ def run_nightly_scan(
     # 체크포인트 하나가 끝날 때마다 CPU 점유를 표본으로 모은다 (작은 파일
     # 두 개를 읽는 것이 전부라 재는 행위가 부하가 되지는 않는다).
     load = loadstat.Accumulator()
+    active = _ActiveCounter()
+    # 체크포인트 주기와 별개로 **일정 시간마다** 시스템 전체 리소스를 찍는다.
+    # 체크포인트 하나가 15분까지 갈 수 있어, 그 안에서 부하가 어떻게 움직였는지는
+    # 주기 표본이 아니면 볼 수 없다.
+    recorder = loadstat.Recorder(
+        interval_seconds=settings.load_sample_interval_seconds,
+        accumulator=load,
+        active_accounts=active,
+    )
     try:
         scan_store.start_run(conn, run_id, triggered_by)
+        scan_store.record_parallelism(conn, run_id, parallel_accounts)
+        # 기준값은 반드시 **스캔을 시작하기 전에** 잡는다. 이 표본이 없으면
+        # 나중에 "스캔 때문에 튄 것"과 "원래 그랬던 것"을 구분할 수 없다.
+        recorder.baseline(warmup_seconds=baseline_warmup_seconds)
+        recorder.start()
 
         if bypass_window:
             deadline_reached = lambda: False
@@ -318,17 +568,10 @@ def run_nightly_scan(
         should_stop = lambda: scan_lock.is_stop_requested(data_dir, run_id)
 
         accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
-        for account in accounts:
-            if should_stop():
-                status = STATUS_STOPPED
-                break
-            if deadline_reached():
-                status = STATUS_PAUSED
-                break
-            outcome = _process_account(
-                conn,
+        if parallel_accounts > 1 and len(accounts) > 1:
+            status = _run_accounts_parallel(
                 data_dir,
-                account,
+                accounts,
                 settings,
                 clock,
                 should_stop,
@@ -336,17 +579,39 @@ def run_nightly_scan(
                 top_level_lister,
                 load,
                 run_id,
+                outcomes,
+                active,
+                workers=min(parallel_accounts, len(accounts)),
             )
-            outcomes.append(outcome)
-            if outcome.baseline_status == "interrupted" or outcome.activity_status == "interrupted":
-                status = STATUS_STOPPED if should_stop() else STATUS_PAUSED
-                break
+        else:
+            status = _run_accounts_serial(
+                conn,
+                data_dir,
+                accounts,
+                settings,
+                clock,
+                should_stop,
+                deadline_reached,
+                top_level_lister,
+                load,
+                run_id,
+                outcomes,
+                active,
+            )
     except Exception:  # pragma: no cover - 방어적 처리, 다음 실행에서 체크포인트로 재개
         logger.exception("야간 상세 스캔 중 예외 발생")
         status = STATUS_ERROR
     finally:
+        # 기록기를 먼저 세운다. 스캔이 끝난 뒤의 표본은 "스캔 중"이 아니므로
+        # 시계열에 섞이면 평균과 최고치를 함께 흐린다.
+        recorder.stop()
         scan_store.set_current_target(conn, run_id, None, None, None)
         scan_store.finish_run(conn, run_id, status, load=load.summary())
+        try:
+            scan_store.save_load_samples(conn, run_id, recorder.samples())
+            scan_store.prune_load_samples(conn, settings.load_sample_retention_days)
+        except Exception:  # pragma: no cover - 측정 기록 실패가 스캔을 실패로 만들지 않는다
+            logger.exception("리소스 표본 저장 실패")
         conn.close()
         scan_lock.release_lock(data_dir, run_id)
 
@@ -355,7 +620,14 @@ def run_nightly_scan(
     _notify_growth(data_dir, config, outcomes, local_now)
     _prune_orphan_search_indexes(data_dir, config)
     _generate_reports(data_dir, config, local_now)
-    return RunSummary(started=True, status=status, run_id=run_id, accounts=outcomes)
+    return RunSummary(
+        started=True,
+        status=status,
+        run_id=run_id,
+        accounts=outcomes,
+        parallel_accounts=parallel_accounts,
+        weekend_night=weekend_night,
+    )
 
 
 def _notify_growth(

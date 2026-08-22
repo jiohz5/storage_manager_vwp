@@ -21,13 +21,14 @@ DESIGN.md 1부 2-1의 가장 중요한 원칙: **자동 삭제 없음**. 이 모
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import config as config_module
-from . import i18n, scan_store, store, tiers
+from . import i18n, loadstat, scan_store, store, tiers, workflow
 
 DAILY = "daily"
 WEEKLY = "weekly"
@@ -69,6 +70,34 @@ def _fmt_pct(pct: Optional[float]) -> str:
     return f"{pct:.1f}%" if pct is not None else i18n.t("common.unknown_value")
 
 
+def display_width(text: str) -> int:
+    """터미널에서 이 문자열이 차지하는 칸 수.
+
+    한글·한자·일본어 글자는 고정폭 터미널에서 **두 칸**을 차지한다. 파이썬의
+    `str` 패딩(`f"{x:<18}"`)은 글자 수로 세므로, 한글이 섞인 표는 헤더와 값이
+    어긋난다. 이 보고서는 폐쇄망에서 `cat`으로 읽는 것이 전제라(모듈 docstring
+    참고) 표가 어긋나면 읽는 사람이 열을 눈으로 따라가야 한다.
+
+    `east_asian_width`가 'W'(Wide)나 'F'(Fullwidth)면 두 칸으로 센다. 결합
+    문자(한글 자모 조합 등)는 폭이 0이지만, 사내 경로·계정명에 나올 일이 없어
+    단순함을 택했다."""
+
+    width = 0
+    for char in text:
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def pad(text: str, width: int, align: str = "<") -> str:
+    """표시 폭 기준으로 채운다 (`<` 왼쪽 정렬, `>` 오른쪽 정렬).
+
+    폭을 이미 넘긴 문자열은 자르지 않는다 - 계정 이름이 잘려 보이는 것보다
+    그 줄만 조금 밀리는 편이 낫다 (이름을 못 읽으면 표 자체가 쓸모없다)."""
+
+    padding = " " * max(0, width - display_width(text))
+    return (text + padding) if align == "<" else (padding + text)
+
+
 # -- 일간 / 주간 -----------------------------------------------------------
 
 def build_daily_report(
@@ -98,10 +127,13 @@ def build_daily_report(
         sample = latest.get(account.account_id)
         return -tiers.severity(sample.overall_tier) if sample else 1
 
+    if i18n.get_language() == i18n.KOREAN:
+        titles = ("계정", "등급", "용량", "inode", "quota", "파일시스템")
+    else:
+        titles = ("Account", "Tier", "Cap.", "inode", "quota", "Filesystem")
     header = (
-        f"{'계정':<18} {'등급':<10} {'용량':>8} {'inode':>8} {'quota':>8}  파일시스템"
-        if i18n.get_language() == i18n.KOREAN
-        else f"{'Account':<18} {'Tier':<10} {'Cap.':>8} {'inode':>8} {'quota':>8}  Filesystem"
+        f"{pad(titles[0], 18)} {pad(titles[1], 10)} {pad(titles[2], 8, '>')} "
+        f"{pad(titles[3], 8, '>')} {pad(titles[4], 8, '>')}  {titles[5]}"
     )
     lines.append(header)
     lines.append("-" * 72)
@@ -110,19 +142,21 @@ def build_daily_report(
     for account in sorted(config.accounts, key=sort_key):
         sample = latest.get(account.account_id)
         if sample is None:
-            lines.append(f"{account.name:<18} {i18n.t('dashboard.not_collected')}")
+            lines.append(f"{pad(account.name, 18)} {i18n.t('dashboard.not_collected')}")
             continue
         if not sample.ok:
             lines.append(
-                f"{account.name:<18} {i18n.t('dashboard.collect_failed', message=sample.error_message)}"
+                f"{pad(account.name, 18)} "
+                f"{i18n.t('dashboard.collect_failed', message=sample.error_message)}"
             )
             continue
         if tiers.is_at_least(sample.overall_tier, tiers.WARN):
             warn_or_worse += 1
         quota_text = _fmt_pct(sample.quota_pct) if sample.quota_pct is not None else "-"
         lines.append(
-            f"{account.name:<18} {tiers.label(sample.overall_tier):<10} "
-            f"{_fmt_pct(sample.byte_pct):>8} {_fmt_pct(sample.inode_pct):>8} {quota_text:>8}  "
+            f"{pad(account.name, 18)} {pad(tiers.label(sample.overall_tier), 10)} "
+            f"{pad(_fmt_pct(sample.byte_pct), 8, '>')} "
+            f"{pad(_fmt_pct(sample.inode_pct), 8, '>')} {pad(quota_text, 8, '>')}  "
             f"{sample.filesystem or '-'}"
         )
 
@@ -139,6 +173,11 @@ def build_daily_report(
     # 주간 보고서는 일간을 통째로 포함하므로 여기 한 번만 넣으면 양쪽에서
     # 다 보인다.
     _append_scan_section(lines, data_dir, config)
+    # 과제 생성과 리소스 변화도 "밤새 무슨 일이 있었나"에 답하는 항목이라
+    # 스캔 진행 상황 바로 뒤에 둔다. 둘 다 스캔이 남긴 것을 읽기만 하므로
+    # 여기서 실패해도 위쪽 내용은 이미 만들어져 있다.
+    _append_new_tasks_section(lines, data_dir, config)
+    _append_resource_section(lines, data_dir)
     return "\n".join(lines) + "\n"
 
 
@@ -580,3 +619,261 @@ def prune_old_reports(
                 path.unlink()
                 removed += 1
     return removed
+
+
+# -- 과제 생성 -------------------------------------------------------------
+#
+# 의뢰서 하나가 곧 job 하나이고, 디스크에서는 `*_run_*` 디렉터리가 새로 생기는
+# 것으로 나타난다 (`workflow` 참고). 이것을 보고서에 싣는 이유는 용량 숫자만
+# 봐서는 "왜 늘었는지"를 알 수 없기 때문이다 - 어젯밤 300GB가 늘었다는 사실과
+# 어제 과제 두 개가 시작됐다는 사실이 나란히 있어야 판단이 된다.
+
+# 보고서 한 섹션에 실을 최대 과제 수. 하루에 이보다 많이 생기는 것은 이례적
+# 이므로, 그 경우 개수는 정확히 적고 목록만 자른다 (실패 경로와 같은 규칙).
+NEW_TASKS_IN_REPORT = 30
+
+# `_run_`을 찾는 LIKE 패턴. `_`는 LIKE에서 한 글자 와일드카드라 이스케이프가
+# 필수다 - 안 하면 "아무 글자 + run + 아무 글자"가 되어 `arunb` 같은 것도 걸린다.
+_RUN_LIKE_PATTERN = "%\\_run\\_%"
+
+
+def _new_run_dirs_for(conn, account: config_module.Account) -> List["tuple"]:
+    """이 계정에서 직전 세대 이후 새로 생긴 과제 실행 디렉터리.
+
+    `(표시이름, 경로, 크기KB, 단계디렉터리목록)` 목록을 준다. 비교 대상 세대가
+    없으면(첫 스캔) 빈 목록 - `scan_store.new_paths`가 그렇게 판정한다.
+    """
+
+    state = scan_store.get_account_state(conn, account.account_id)
+    generation = state.last_completed_generation
+    if generation is None:
+        return []
+
+    rows = scan_store.new_paths(
+        conn,
+        account.account_id,
+        generation,
+        generation - 1,
+        like_pattern=_RUN_LIKE_PATTERN,
+    )
+    if not rows:
+        return []
+
+    # LIKE는 경로 어디에든 `_run_`이 있으면 걸리므로, 실제로 **디렉터리 이름**이
+    # run 디렉터리인 것만 남긴다. 상위에 run 디렉터리가 있으면 그 아래 전부가
+    # 걸리는데, 그것은 과제 생성이 아니라 과제 안의 작업이다.
+    run_rows = [row for row in rows if workflow.is_run_path(row["path"])]
+    if not run_rows:
+        return []
+
+    all_paths = scan_store.generation_paths(conn, account.account_id, generation)
+    result = []
+    for row in run_rows:
+        path = row["path"]
+        result.append(
+            (
+                workflow.display_label(path, account.path),
+                path,
+                row["size_kb"],
+                workflow.stage_dirs_in(all_paths, path),
+            )
+        )
+    return result
+
+
+def _append_new_tasks_section(
+    lines: List[str], data_dir: Path, config: config_module.AppConfig
+) -> None:
+    """"과제 생성" 섹션. 프로젝트 계정에서만 본다.
+
+    백업 계정에는 프로젝트 계정의 사본이 들어오므로 같은 run 디렉터리가 한 번
+    더 잡힌다. 그것까지 "과제 생성"이라고 부르면 하나 생긴 과제가 두 줄로
+    보고되어 개수를 믿을 수 없게 된다.
+    """
+
+    projects = config_module.project_accounts(config)
+    if not projects:
+        # 성격을 아직 아무 계정에도 지정하지 않은 상태와, 지정했는데 과제가
+        # 없는 상태는 다르다. 섹션을 통째로 빼면 사용자는 기능이 고장 난 줄
+        # 안다 - 무엇을 해야 보이는지 한 줄로 알려 준다.
+        lines.append("")
+        lines.append(i18n.t("reports.new_tasks_heading"))
+        lines.append("-" * 72)
+        lines.append(i18n.t("reports.new_tasks_no_project_accounts"))
+        return
+
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover - 스캔 DB가 없어도 일간 보고서는 나와야 한다
+        return
+
+    try:
+        body: List[str] = []
+        total = 0
+        for account in projects:
+            found = _new_run_dirs_for(conn, account)
+            if not found:
+                continue
+            total += len(found)
+            body.append(f"- {account.name}")
+            for label, path, size_kb, stages in found[:NEW_TASKS_IN_REPORT]:
+                body.append(f"    {label}  ({_fmt_kb(size_kb)})")
+                if stages:
+                    body.append(f"      {i18n.t('reports.new_task_stages', stages=', '.join(stages))}")
+                body.append(f"      {path}")
+    finally:
+        conn.close()
+
+    lines.append("")
+    lines.append(i18n.t("reports.new_tasks_heading"))
+    lines.append("-" * 72)
+    if not body:
+        lines.append(i18n.t("reports.new_tasks_none"))
+        return
+    lines.append(i18n.t("reports.new_tasks_count", count=total))
+    lines.extend(body)
+    if total > NEW_TASKS_IN_REPORT:
+        lines.append(i18n.t("reports.new_tasks_truncated", shown=NEW_TASKS_IN_REPORT))
+
+
+# -- 스캔 중 리소스 변화 ----------------------------------------------------
+#
+# 이 섹션이 답하는 질문은 하나다: **야간 스캔이 이 서버를 얼마나 흔들었나.**
+#
+# 사람이 없는 심야에 몰아서 스캔하는 것이 이 프로그램의 전제인데, 그 전제가
+# 맞는지는 실제로 재 보기 전에는 모른다. 특히 `du`/`find`는 CPU를 거의 안 쓰고
+# I/O 대기를 만들기 때문에, CPU 사용률만 보면 "부하 없음"이라는 잘못된 결론에
+# 이른다. 그래서 load average와 iowait을 CPU보다 **위에** 놓는다.
+
+# 시계열을 몇 줄로 요약해 보여줄지. 표본은 수백 개라 그대로 적으면 보고서가
+# 시계열로 뒤덮인다. 균등 간격으로 골라 흐름만 보여주고, 정확한 숫자가 필요하면
+# DB(scan_load_samples)를 보면 된다.
+LOAD_TIMELINE_ROWS = 8
+
+
+def _fmt_metric(value: Optional[float], metric: str) -> str:
+    if value is None:
+        return "-"
+    if metric == "load_avg":
+        return f"{value:.2f}"
+    return f"{value:.1f}%"
+
+
+def _pick_evenly(rows: List, count: int) -> List:
+    """목록에서 균등 간격으로 `count`개를 고른다 (처음과 끝은 항상 포함)."""
+
+    if len(rows) <= count:
+        return list(rows)
+    step = (len(rows) - 1) / (count - 1)
+    picked = [rows[int(round(index * step))] for index in range(count)]
+    # 반올림이 겹칠 수 있으므로 중복은 제거하되 순서는 유지한다.
+    seen = set()
+    result = []
+    for row in picked:
+        key = id(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def _append_resource_section(lines: List[str], data_dir: Path) -> None:
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover
+        return
+
+    try:
+        run = scan_store.latest_run(conn)
+        if run is None:
+            return
+        rows = scan_store.load_samples(conn, run["run_id"])
+    finally:
+        conn.close()
+
+    if not rows:
+        return
+
+    samples = [
+        loadstat.Snapshot(
+            sampled_at=row["sampled_at"],
+            elapsed_seconds=row["elapsed_seconds"] or 0.0,
+            phase=row["phase"],
+            cpu_busy_percent=row["cpu_busy_percent"],
+            cpu_iowait_percent=row["cpu_iowait_percent"],
+            cpu_scan_top_percent=row["cpu_scan_top_percent"],
+            load_avg_1m=row["load_avg_1m"],
+            memory_total_kb=row["memory_total_kb"],
+            memory_available_kb=row["memory_available_kb"],
+            memory_used_percent=row["memory_used_percent"],
+            active_accounts=row["active_accounts"] or 0,
+        )
+        for row in rows
+    ]
+    changes = loadstat.changes(samples)
+    if not changes:
+        return
+
+    lines.append("")
+    lines.append(i18n.t("reports.resource_heading"))
+    lines.append("-" * 72)
+
+    parallel = run["parallel_accounts"] if "parallel_accounts" in run.keys() else None
+    lines.append(
+        i18n.t(
+            "reports.resource_context",
+            samples=len(samples),
+            parallel=parallel or 1,
+        )
+    )
+    lines.append("")
+
+    header = (
+        pad(i18n.t("reports.resource_col.metric"), 16)
+        + pad(i18n.t("reports.resource_col.before"), 12, ">")
+        + pad(i18n.t("reports.resource_col.average"), 14, ">")
+        + pad(i18n.t("reports.resource_col.peak"), 12, ">")
+        + pad(i18n.t("reports.resource_col.delta"), 12, ">")
+    )
+    lines.append(header)
+    for change in changes:
+        label = i18n.t(f"reports.resource_metric.{change.metric}")
+        delta = change.delta
+        delta_text = "-"
+        if delta is not None:
+            sign = "+" if delta >= 0 else ""
+            delta_text = sign + _fmt_metric(delta, change.metric).lstrip("+")
+        lines.append(
+            pad(label, 16)
+            + pad(_fmt_metric(change.before, change.metric), 12, ">")
+            + pad(_fmt_metric(change.average, change.metric), 14, ">")
+            + pad(_fmt_metric(change.peak, change.metric), 12, ">")
+            + pad(delta_text, 12, ">")
+        )
+
+    lines.append("")
+    lines.append(i18n.t("reports.resource_caveat"))
+
+    during = [sample for sample in samples if sample.phase == loadstat.PHASE_DURING]
+    if len(during) < 2:
+        return
+    lines.append("")
+    lines.append(i18n.t("reports.resource_timeline_heading"))
+    timeline_header = (
+        pad(i18n.t("reports.resource_col.elapsed"), 9, ">")
+        + pad(i18n.t("reports.resource_metric.load_avg"), 12, ">")
+        + pad(i18n.t("reports.resource_metric.cpu_iowait"), 10, ">")
+        + pad(i18n.t("reports.resource_metric.cpu_busy"), 10, ">")
+        + pad(i18n.t("reports.resource_col.accounts"), 10, ">")
+    )
+    lines.append(timeline_header)
+    for sample in _pick_evenly(during, LOAD_TIMELINE_ROWS):
+        elapsed = f"{int(sample.elapsed_seconds // 60)}m"
+        lines.append(
+            pad(elapsed, 9, ">")
+            + pad(_fmt_metric(sample.load_avg_1m, "load_avg"), 12, ">")
+            + pad(_fmt_metric(sample.cpu_iowait_percent, "pct"), 10, ">")
+            + pad(_fmt_metric(sample.cpu_busy_percent, "pct"), 10, ">")
+            + pad(str(sample.active_accounts), 10, ">")
+        )

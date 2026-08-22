@@ -63,6 +63,10 @@ from .search_dialog import SearchDialog
 
 COLUMN_KEYS = [
     "dashboard.col.name",
+    # 성격(프로젝트/백업)을 이름 바로 옆에 둔다. 이 열이 없으면 백업 계정이
+    # 계속 느는 것을 보고 매번 놀라게 된다 - 백업은 단조 증가가 정상이고
+    # 프로젝트는 과제가 끝나면 줄어야 정상이라, 같은 숫자를 다르게 읽어야 한다.
+    "dashboard.col.kind",
     "dashboard.col.path",
     "dashboard.col.size",
     "dashboard.col.byte_pct",
@@ -75,6 +79,7 @@ COLUMN_KEYS = [
 ]
 (
     COL_NAME,
+    COL_KIND,
     COL_PATH,
     COL_SIZE,
     COL_BYTE,
@@ -84,7 +89,7 @@ COLUMN_KEYS = [
     COL_FORECAST,
     COL_TIME,
     COL_STATUS,
-) = range(10)
+) = range(11)
 
 # `파일시스템` 열은 뺐다. 값이 거의 항상 같아서(계정 대부분이 같은 파일시스템에
 # 있다) 열 하나를 통째로 쓰면서 정보는 거의 주지 않았다. 대신 경로 툴팁에
@@ -273,7 +278,7 @@ class MainWindow(QMainWindow):
 
     # 정렬 키를 만들 수 있는 열만 정렬을 허용한다. 막대·배지 열은 옆의 숫자
     # 열(사용량, 사용률)로 정렬하면 되므로 굳이 열지 않는다.
-    SORTABLE_COLUMNS = (COL_NAME, COL_PATH, COL_SIZE, COL_BYTE, COL_INODE, COL_TIME)
+    SORTABLE_COLUMNS = (COL_NAME, COL_KIND, COL_PATH, COL_SIZE, COL_BYTE, COL_INODE, COL_TIME)
 
     def _on_header_clicked(self, column: int) -> None:
         if column not in self.SORTABLE_COLUMNS:
@@ -283,7 +288,7 @@ class MainWindow(QMainWindow):
         else:
             self._sort_column = column
             # 숫자 열은 큰 것부터, 글자 열은 가나다순으로 시작하는 것이 자연스럽다.
-            self._sort_desc = column not in (COL_NAME, COL_PATH)
+            self._sort_desc = column not in (COL_NAME, COL_KIND, COL_PATH)
         self.table.horizontalHeader().setSortIndicator(
             column, Qt.DescendingOrder if self._sort_desc else Qt.AscendingOrder
         )
@@ -302,6 +307,12 @@ class MainWindow(QMainWindow):
 
         def key(account):
             sample = latest.get(account.account_id)
+            if column == COL_KIND:
+                # 성격은 표시 라벨이 아니라 코드로 정렬한다. 언어를 바꾸면
+                # 정렬 순서가 따라 바뀌는 것은 사용자가 기대하지 않는 동작이다.
+                # 다른 갈래와 같은 (그룹, 값) 모양을 유지한다 - 비교 대상이
+                # 섞이면 파이썬이 타입 오류를 낸다.
+                return (0, account.kind)
             if column == COL_NAME:
                 return (0, account.name.lower())
             if column == COL_PATH:
@@ -714,6 +725,10 @@ class MainWindow(QMainWindow):
             # 파일시스템/마운트 지점도 여기 붙인다 (열을 없앤 대신).
             path_item.setToolTip(self._path_tooltip(account, sample))
             self.table.setItem(row, COL_PATH, path_item)
+            # 성격은 수집 결과와 무관하므로 표본이 없어도 항상 채운다.
+            kind_item = QTableWidgetItem(i18n.t(f"account.kind.{account.kind}"))
+            kind_item.setToolTip(i18n.t("accounts.kind_hint"))
+            self.table.setItem(row, COL_KIND, kind_item)
 
             if sample is None:
                 for column in (COL_SIZE, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -86,6 +86,33 @@ CREATE TABLE IF NOT EXISTS growth_history (
 CREATE INDEX IF NOT EXISTS idx_growth_history_path
     ON growth_history(account_id, path, generation);
 
+-- 스캔이 도는 동안 일정 주기로 찍은 리소스 표본.
+--
+-- scan_runs에도 CPU 요약이 있지만 그것은 실행 하나당 한 줄이라 "밤새 평균
+-- 이랬다"까지만 말한다. 정작 알고 싶은 것은 **언제 얼마나 튀었나**이고,
+-- 그것은 시계열이 아니면 답할 수 없다. 행 하나가 작아(수십 바이트) 30초
+-- 주기로 하룻밤을 채워도 1,000행 남짓이다.
+--
+-- phase가 'before'인 행은 스캔을 시작하기 전 기준값이다. 이 행이 있어야
+-- "스캔 때문에" 튄 것인지 원래 그랬던 것인지 구분할 수 있다.
+CREATE TABLE IF NOT EXISTS scan_load_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    sampled_at TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    elapsed_seconds REAL,
+    cpu_busy_percent REAL,
+    cpu_iowait_percent REAL,
+    cpu_scan_top_percent REAL,
+    load_avg_1m REAL,
+    memory_total_kb INTEGER,
+    memory_available_kb INTEGER,
+    memory_used_percent REAL,
+    active_accounts INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_load_samples_run
+    ON scan_load_samples(run_id, sampled_at);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
@@ -124,6 +151,10 @@ _COLUMNS_ADDED = {
         "current_kind": "TEXT",
         "current_account_id": "TEXT",
         "current_started_at": "TEXT",
+        # 이 실행이 계정을 몇 개씩 동시에 돌렸는가. 리소스 시계열을 나중에
+        # 비교할 때 **가장 먼저 알아야 하는 조건**이라 실행 행에 박아 둔다
+        # (설정값은 그 사이 바뀔 수 있어 나중에 config를 봐도 소용없다).
+        "parallel_accounts": "INTEGER",
     },
     "baseline_results": {
         # `du -k` 한 번이 서브트리 전체를 주므로 부모와 자식이 함께 들어온다.
@@ -790,3 +821,142 @@ def prune_completed_activity_checkpoints(conn: sqlite3.Connection, account_id: s
     )
     conn.commit()
     return cursor.rowcount
+
+
+# -- 리소스 시계열 ---------------------------------------------------------
+
+def record_parallelism(conn: sqlite3.Connection, run_id: str, parallel_accounts: int) -> None:
+    """이 실행의 병렬도를 남긴다. 시계열을 나중에 해석하려면 반드시 필요하다."""
+
+    conn.execute(
+        "UPDATE scan_runs SET parallel_accounts = ? WHERE run_id = ?",
+        (int(parallel_accounts), run_id),
+    )
+    conn.commit()
+
+
+def save_load_samples(conn: sqlite3.Connection, run_id: str, samples) -> int:
+    """`loadstat.Recorder`가 모은 표본을 한 번에 저장한다.
+
+    한 건씩 commit하지 않고 모아서 넣는 이유: 표본 저장은 스캔의 부산물이라
+    실패해도 스캔 결과를 뒤집으면 안 되고, 쓰기 횟수도 최소여야 한다
+    (계정 병렬 실행 중이면 같은 DB에 쓰기 잠금을 다투게 된다)."""
+
+    rows = []
+    for sample in samples:
+        # 워밍업 표본은 델타 기준점을 잡으려고 버리는 것이라 저장하지 않는다.
+        if getattr(sample, "phase", "") == "warmup":
+            continue
+        rows.append(
+            (
+                run_id,
+                sample.sampled_at,
+                sample.phase,
+                sample.elapsed_seconds,
+                sample.cpu_busy_percent,
+                sample.cpu_iowait_percent,
+                sample.cpu_scan_top_percent,
+                sample.load_avg_1m,
+                sample.memory_total_kb,
+                sample.memory_available_kb,
+                sample.memory_used_percent,
+                sample.active_accounts,
+            )
+        )
+    if not rows:
+        return 0
+    conn.executemany(
+        "INSERT INTO scan_load_samples ("
+        "run_id, sampled_at, phase, elapsed_seconds, cpu_busy_percent, "
+        "cpu_iowait_percent, cpu_scan_top_percent, load_avg_1m, "
+        "memory_total_kb, memory_available_kb, memory_used_percent, active_accounts"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def load_samples(conn: sqlite3.Connection, run_id: str) -> List[sqlite3.Row]:
+    """한 실행의 리소스 표본 (시간순)."""
+
+    return conn.execute(
+        "SELECT * FROM scan_load_samples WHERE run_id = ? ORDER BY sampled_at",
+        (run_id,),
+    ).fetchall()
+
+
+def prune_load_samples(conn: sqlite3.Connection, retention_days: int) -> int:
+    """보존 기간이 지난 리소스 표본을 지운다 (자체 비대화 방지)."""
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    cursor = conn.execute("DELETE FROM scan_load_samples WHERE sampled_at < ?", (cutoff,))
+    conn.commit()
+    return cursor.rowcount
+
+
+# -- 과제(run) 디렉터리 감지 ------------------------------------------------
+
+def new_paths(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    previous_generation: int,
+    like_pattern: Optional[str] = None,
+) -> List[sqlite3.Row]:
+    """직전 세대에는 없고 이번 세대에만 있는 경로들.
+
+    **비교 대상 세대가 비어 있으면 빈 목록을 준다.** 첫 스캔이면 모든 경로가
+    "새로 생긴 것"이 되는데, 그것을 그대로 보고하면 첫 보고서가 수천 줄로
+    뒤덮이고 진짜 신규와 구분이 안 된다. 모를 때는 말하지 않는 쪽이 맞다.
+
+    `like_pattern`을 주면 SQL 단계에서 먼저 거른다. `_`는 LIKE에서 한 글자
+    와일드카드라 반드시 ESCAPE와 함께 써야 한다 - 안 그러면 `_run_`이
+    "아무 글자 + run + 아무 글자"가 되어 엉뚱한 디렉터리까지 걸린다.
+    """
+
+    if previous_generation < 0:
+        return []
+    previous_count = conn.execute(
+        "SELECT COUNT(*) FROM baseline_results WHERE account_id = ? AND generation = ?",
+        (account_id, previous_generation),
+    ).fetchone()[0]
+    if not previous_count:
+        return []
+
+    sql = (
+        "SELECT path, size_kb, depth FROM baseline_results "
+        "WHERE account_id = ? AND generation = ? "
+    )
+    params: List = [account_id, generation]
+    if like_pattern:
+        sql += "AND path LIKE ? ESCAPE '\\' "
+        params.append(like_pattern)
+    sql += (
+        "AND path NOT IN ("
+        "SELECT path FROM baseline_results WHERE account_id = ? AND generation = ?"
+        ") ORDER BY path"
+    )
+    params += [account_id, previous_generation]
+    return conn.execute(sql, params).fetchall()
+
+
+def generation_paths(
+    conn: sqlite3.Connection, account_id: str, generation: int, under: Optional[str] = None
+) -> List[str]:
+    """이 세대가 남긴 경로 목록. `under`를 주면 그 아래만."""
+
+    if under:
+        prefix = under.rstrip("/") + "/"
+        rows = conn.execute(
+            "SELECT path FROM baseline_results "
+            "WHERE account_id = ? AND generation = ? AND path LIKE ? ORDER BY path",
+            (account_id, generation, prefix.replace("%", "") + "%"),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT path FROM baseline_results "
+            "WHERE account_id = ? AND generation = ? ORDER BY path",
+            (account_id, generation),
+        ).fetchall()
+    return [row["path"] for row in rows]

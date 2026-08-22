@@ -6,6 +6,7 @@
     ./smvwp_cli.py scan                    # 야간 상세 스캔 (cron, 22:00~06:00)
     ./smvwp_cli.py scan --now              # 시간창 무시하고 지금 실행
     ./smvwp_cli.py scan --stop             # 실행 중인 스캔에 안전 중지 요청
+    ./smvwp_cli.py scan --now --parallel 4 # 계정 4개 동시 - 부하 실측용
     ./smvwp_cli.py notify                  # 트레이 알림기 실행
     ./smvwp_cli.py notify --install-autostart
 
@@ -217,13 +218,20 @@ def command_scan(args) -> int:
         config,
         triggered_by="terminal" if args.now else "cron",
         bypass_window=args.now,
+        parallel_accounts=args.parallel,
     )
 
     if not summary.started:
         print(f"실행하지 않음: {summary.reason}")
         return 0
 
-    print(f"야간 상세 스캔 종료 (run_id={summary.run_id}, 상태={summary.status})")
+    # 동시 계정 수가 왜 그 값인지를 같이 적는다 - 숫자만 보면 주말이라 3인
+    # 것인지 설정이 잘못된 것인지 구분이 안 된다.
+    night = "주말 밤" if summary.weekend_night else "평일 밤"
+    print(
+        f"야간 상세 스캔 종료 (run_id={summary.run_id}, 상태={summary.status}, "
+        f"{night} · 동시 계정={summary.parallel_accounts})"
+    )
     for outcome in summary.accounts:
         print(
             f"  - {outcome.account_name}: 기준선 세대 {outcome.baseline_generation} "
@@ -272,6 +280,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="시간창(22:00~06:00)을 무시하고 지금 실행 - 터미널 직접 실행용 진단/복구 경로",
     )
     scan.add_argument("--stop", action="store_true", help="실행 중인 스캔에 안전 중지 요청")
+    scan.add_argument(
+        "--parallel",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "계정 N개를 동시에 스캔한다 (기본: 설정값, 보통 1=직렬). "
+            "부하 실측용이다 - 같은 볼륨에 몰려 있으면 오히려 느려질 수 있다. "
+            "결과는 보고서의 '스캔 중 리소스 변화'에서 확인한다."
+        ),
+    )
     scan.set_defaults(func=command_scan)
 
     notify = sub.add_parser("notify", help="트레이 알림기")

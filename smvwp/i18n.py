@@ -65,6 +65,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.col.tier": "종합 등급",
         "dashboard.col.collected_at": "최근 수집",
         "dashboard.col.status": "상태",
+        "dashboard.col.kind": "성격",
         "dashboard.waiting": "수집 대기 중...",
         "dashboard.btn.collect_now": "새로고침",
         "dashboard.btn.collect_now_tooltip": (
@@ -163,6 +164,39 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
         "reports.scan_progress_heading": "[상세 스캔 진행 상황]",
+        # -- 과제 생성 (의뢰서 기반 워크플로) ----------------------
+        "reports.new_tasks_heading": "[과제 생성]",
+        "reports.new_tasks_none": "직전 스캔 이후 새로 생긴 과제가 없습니다.",
+        "reports.new_tasks_no_project_accounts": (
+            "성격이 '프로젝트'인 계정이 없어 과제 생성을 보지 않았습니다 "
+            "(계정 관리 화면에서 성격을 지정하면 다음 보고서부터 나옵니다)."
+        ),
+        "reports.new_tasks_count": "새로 생긴 과제 {count}건",
+        "reports.new_task_stages": "단계: {stages}",
+        "reports.new_tasks_truncated": "  … 계정당 {shown}건까지만 표시했습니다",
+        # -- 스캔 중 리소스 변화 ------------------------------------
+        "reports.resource_heading": "[스캔 중 리소스 변화]",
+        "reports.resource_context": (
+            "표본 {samples}개 · 동시 실행 계정 {parallel}개 기준"
+        ),
+        "reports.resource_caveat": (
+            "여기 숫자는 이 서버에서 본 것뿐입니다. du/find의 실제 부담은 대개 "
+            "파일서버 쪽 I/O인데 그것은 이 프로세스에서 관측할 수 없습니다. "
+            "CPU가 낮아도 iowait과 load가 올랐다면 부하가 없었던 것이 아닙니다."
+        ),
+        "reports.resource_timeline_heading": "시간 흐름 (스캔 시작 이후 경과)",
+        "reports.resource_col.metric": "지표",
+        "reports.resource_col.before": "스캔 전",
+        "reports.resource_col.average": "스캔 중 평균",
+        "reports.resource_col.peak": "최고",
+        "reports.resource_col.delta": "증가폭",
+        "reports.resource_col.elapsed": "경과",
+        "reports.resource_col.accounts": "동시계정",
+        "reports.resource_metric.load_avg": "load(1분)",
+        "reports.resource_metric.cpu_iowait": "I/O대기",
+        "reports.resource_metric.cpu_busy": "CPU",
+        "reports.resource_metric.memory_used": "메모리",
+        "reports.resource_metric.scan_share": "스캔몫",
         "reports.scan_compared_with": "기준: {previous} 스캔 데이터 대비",
         "reports.scan_heading": "{account} ({run} 스캔)",
         "reports.scan_progress": (
@@ -227,6 +261,31 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.col.owner": "추가한 사람",
         "accounts.col.added": "추가일",
         "accounts.col.scanned": "최근 스캔일",
+        "accounts.col.kind": "성격",
+        "accounts.parallel_weekday": "야간 동시 스캔 (평일)",
+        "accounts.parallel_weekend": "야간 동시 스캔 (주말)",
+        "accounts.parallel_hint": (
+            "계정을 한 번에 몇 개까지 동시에 스캔할지. 1이면 지금까지처럼 "
+            "하나씩 돕니다. 주말 밤은 '끝나는 아침이 토/일인 밤'입니다 - "
+            "금요일 밤은 주말, 일요일 밤은 평일입니다 (월요일 아침에 전원이 "
+            "출근하므로). 계정들이 같은 파일시스템에 몰려 있으면 병렬이 오히려 "
+            "느려질 수 있으니, 올리기 전에 보고서의 '스캔 중 리소스 변화'로 "
+            "확인하세요."
+        ),
+        "accounts.suffix.accounts": "개",
+        "accounts.col.backup_link": "연결 백업 계정",
+        "accounts.kind": "계정 성격",
+        "accounts.kind_hint": (
+            "프로젝트 계정에서만 과제 생성(*_run_*)을 봅니다. "
+            "백업 계정은 단조 증가가 정상이라 같은 눈으로 보면 안 됩니다."
+        ),
+        "accounts.backup_link_none": "(연결 없음)",
+        "accounts.backup_link_needs_backup_account": (
+            "연결할 백업 계정이 없습니다. 먼저 성격이 '백업'인 계정을 등록하세요."
+        ),
+        "account.kind.unset": "미지정",
+        "account.kind.project": "프로젝트",
+        "account.kind.backup": "데이터 백업",
         "accounts.advanced_settings": "상세 설정",
         "accounts.name_placeholder": "계정 이름 (예: project_a)",
         "accounts.path_placeholder": "모니터링 대상 경로 (예: /user/project_a)",
@@ -403,6 +462,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.col.tier": "Overall tier",
         "dashboard.col.collected_at": "Last collected",
         "dashboard.col.status": "Status",
+        "dashboard.col.kind": "Kind",
         "dashboard.waiting": "Waiting for first collection...",
         "dashboard.btn.collect_now": "Refresh",
         "dashboard.btn.collect_now_tooltip": (
@@ -502,6 +562,40 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
         "reports.scan_progress_heading": "[Detail scan progress]",
+        # -- New tasks (request-driven workflow) --------------------
+        "reports.new_tasks_heading": "[New tasks]",
+        "reports.new_tasks_none": "No new tasks since the previous scan.",
+        "reports.new_tasks_no_project_accounts": (
+            "No account is marked as a project account, so new tasks were not "
+            "checked (set the account kind in Account management and it will "
+            "appear from the next report)."
+        ),
+        "reports.new_tasks_count": "{count} new task(s)",
+        "reports.new_task_stages": "Stages: {stages}",
+        "reports.new_tasks_truncated": "  ... showing at most {shown} per account",
+        # -- Resource change during the scan ------------------------
+        "reports.resource_heading": "[Resource change during scan]",
+        "reports.resource_context": (
+            "{samples} samples - {parallel} account(s) scanned concurrently"
+        ),
+        "reports.resource_caveat": (
+            "These numbers are what this server saw. The real cost of du/find is "
+            "usually I/O on the file server, which this process cannot observe. "
+            "Low CPU with raised iowait and load does not mean there was no load."
+        ),
+        "reports.resource_timeline_heading": "Timeline (elapsed since scan start)",
+        "reports.resource_col.metric": "Metric",
+        "reports.resource_col.before": "Before",
+        "reports.resource_col.average": "Avg during",
+        "reports.resource_col.peak": "Peak",
+        "reports.resource_col.delta": "Delta",
+        "reports.resource_col.elapsed": "Elapsed",
+        "reports.resource_col.accounts": "Accounts",
+        "reports.resource_metric.load_avg": "load(1m)",
+        "reports.resource_metric.cpu_iowait": "iowait",
+        "reports.resource_metric.cpu_busy": "CPU",
+        "reports.resource_metric.memory_used": "Memory",
+        "reports.resource_metric.scan_share": "Scan share",
         "reports.scan_compared_with": "Baseline: compared with the {previous} scan",
         "reports.scan_heading": "{account} ({run} scan)",
         "reports.scan_progress": (
@@ -566,6 +660,34 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.col.owner": "Added by",
         "accounts.col.added": "Added",
         "accounts.col.scanned": "Last scan",
+        "accounts.col.kind": "Kind",
+        "accounts.parallel_weekday": "Concurrent scans (weekday)",
+        "accounts.parallel_weekend": "Concurrent scans (weekend)",
+        "accounts.parallel_hint": (
+            "How many accounts to scan at the same time. 1 keeps the current "
+            "one-at-a-time behaviour. A weekend night is one that ENDS on a "
+            "Saturday or Sunday morning - Friday night counts as weekend, "
+            "Sunday night does not (everyone is back on Monday morning). If "
+            "the accounts share one filesystem, running in parallel can be "
+            "slower, so check 'Resource change during scan' in the report "
+            "before raising it."
+        ),
+        "accounts.suffix.accounts": "",
+        "accounts.col.backup_link": "Backup account",
+        "accounts.kind": "Account kind",
+        "accounts.kind_hint": (
+            "New tasks (*_run_*) are only detected on project accounts. "
+            "Backup accounts grow monotonically by design and must not be read "
+            "with the same eye."
+        ),
+        "accounts.backup_link_none": "(not linked)",
+        "accounts.backup_link_needs_backup_account": (
+            "No backup account available. Register an account whose kind is "
+            "'backup' first."
+        ),
+        "account.kind.unset": "Unset",
+        "account.kind.project": "Project",
+        "account.kind.backup": "Data backup",
         "accounts.advanced_settings": "Advanced settings",
         "accounts.name_placeholder": "Account name (e.g. project_a)",
         "accounts.path_placeholder": "Monitored path (e.g. /user/project_a)",

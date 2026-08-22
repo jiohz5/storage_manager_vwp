@@ -58,6 +58,51 @@ NOTIFICATION_MODES = (
 )
 DEFAULT_NOTIFICATION_MODE = NOTIFY_MODE_OUTBOX
 
+# -- 계정 성격 -------------------------------------------------------------
+#
+# 프로젝트 계정과 백업 계정은 **무엇이 정상인가가 반대다.** 프로젝트 계정은
+# 과제가 생겼다 끝나면서 오르내리는 것이 정상이고, 백업 계정은 단조 증가가
+# 정상이다. 같은 눈으로 보면 둘 중 하나는 반드시 오독된다 - 백업 계정이 계속
+# 는다고 놀라거나, 프로젝트 계정이 안 준다고 방치하거나.
+#
+# 지금 이 값이 실제로 갈라 놓는 것은 두 가지다:
+#   1. 과제 생성(`*_run_*`) 감지 - 프로젝트 계정에서만 본다
+#   2. (예정) 프로젝트 계정의 BACKUP 하위가 연결된 백업 계정에 잘 들어갔는지
+#
+# 기존 설정에는 이 값이 없으므로 기본은 `unset`이다. 여기서 임의로 'project'를
+# 기본값으로 두지 않는 이유는 `created_by`와 같다 - **모르는 값을 지어내면
+# 사용자는 그것이 확인된 값인 줄 안다.**
+ACCOUNT_KIND_UNSET = "unset"
+ACCOUNT_KIND_PROJECT = "project"
+ACCOUNT_KIND_BACKUP = "backup"
+ACCOUNT_KINDS = (ACCOUNT_KIND_UNSET, ACCOUNT_KIND_PROJECT, ACCOUNT_KIND_BACKUP)
+
+# 야간 스캔을 계정 몇 개까지 동시에 돌릴지. 기본 1 = 지금까지와 똑같은 직렬.
+#
+# 1보다 크게 두는 것은 **상시 운용이 아니라 부하 실측을 위한 실험 장치**다.
+# 계정 대부분이 같은 파일시스템에 있으면 병렬은 seek 경합만 늘려 오히려
+# 느려질 수 있고, nice/ionice로 얌전히 도는 기존 전제도 깨진다. 그래서 값을
+# 올리는 것은 `--parallel`로 의도를 밝힌 실행에서만 하도록 기본을 1로 둔다.
+DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS = 1
+
+# 주말 밤에는 계정을 몇 개까지 동시에 돌릴지.
+#
+# 주말 아침에 출근하는 인원이 평일의 10~20% 수준이라, 평일 밤보다 세게 돌아도
+# 영향을 받는 사람이 그만큼 적다. 여기서 "주말 밤"은 **끝나는 아침이 주말인
+# 밤**이다 - 금요일 밤은 주말이고 일요일 밤은 평일이다
+# (`scan_window.ends_on_weekend` 참고).
+#
+# 3으로 둔 것은 측정 전의 보수적 출발점이지 최적값이 아니다. 계정 대부분이
+# 같은 파일시스템에 있으면 병렬은 seek 경합만 늘려 오히려 느려질 수 있으므로,
+# 실기에서 리소스 보고서를 보고 올리거나 내리는 것을 전제로 한다. 주말에도
+# 사람이 아예 없는 것은 아니라는 점(10~20%)이 상한을 정하는 근거다.
+DEFAULT_WEEKEND_PARALLEL_ACCOUNTS = 3
+
+# 스캔 중 리소스를 몇 초마다 찍을지. 체크포인트 하나가 15분까지 갈 수 있어
+# "체크포인트가 끝날 때마다"로는 그 15분 안에서 무슨 일이 있었는지 못 본다.
+DEFAULT_LOAD_SAMPLE_INTERVAL_SECONDS = 30
+DEFAULT_LOAD_SAMPLE_RETENTION_DAYS = 30
+
 
 @dataclass
 class Settings:
@@ -81,6 +126,14 @@ class Settings:
     # 자식이 같은 목록에 뜨면 "무엇이 큰가"를 읽을 수 없다. 파고드는 것은
     # 평평한 목록이 아니라 트리 화면이 할 일이다.
     growth_list_max_depth: int = 0
+    # 야간 스캔 동시 실행 계정 수 (1 = 직렬). 위 상수의 주석 참고 - 부하
+    # 실측용이지 상시 운용값이 아니다.
+    nightly_parallel_accounts: int = DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS
+    # 주말 밤(=끝나는 아침이 토/일인 밤)에 쓸 동시 실행 계정 수. 위 상수 참고.
+    weekend_parallel_accounts: int = DEFAULT_WEEKEND_PARALLEL_ACCOUNTS
+    # 스캔 중 리소스 표본 주기와 보관 기간.
+    load_sample_interval_seconds: int = DEFAULT_LOAD_SAMPLE_INTERVAL_SECONDS
+    load_sample_retention_days: int = DEFAULT_LOAD_SAMPLE_RETENTION_DAYS
     activity_initial_lookback_days: int = DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS
     language: str = DEFAULT_LANGUAGE
     # 알림 채널. command/webhook은 사내 endpoint가 있을 때만 쓰고, 설정하지
@@ -163,6 +216,21 @@ class Account:
     # 검색 인덱싱은 계정별 opt-in (기본 꺼짐) - 이름 인덱스는 별도 DB를 꽤
     # 차지할 수 있으므로 필요한 계정만 켠다.
     search_indexing: bool = False
+    # 이 계정이 프로젝트 계정인지 백업 계정인지 (ACCOUNT_KINDS 참고).
+    kind: str = ACCOUNT_KIND_UNSET
+    # 프로젝트 계정일 때, 이 계정의 백업이 들어가는 백업 계정의 account_id.
+    # 백업 계정 쪽에는 채우지 않는다 (방향이 있는 관계다). 지금은 화면과
+    # 보고서에 표시만 하고, 나중에 "BACKUP 하위가 저기에 정말 들어갔는가"를
+    # 대조하는 데 쓴다.
+    backup_account_id: str = ""
+
+    @property
+    def kind_is_project(self) -> bool:
+        return self.kind == ACCOUNT_KIND_PROJECT
+
+    @property
+    def kind_is_backup(self) -> bool:
+        return self.kind == ACCOUNT_KIND_BACKUP
 
 
 @dataclass
@@ -203,6 +271,17 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("detail_scan_max_depth는 1~12여야 합니다")
     if settings.activity_initial_lookback_days < 1:
         raise ConfigError("activity_initial_lookback_days는 1 이상이어야 합니다")
+    # 상한을 16으로 둔 것은 임의값이 아니다 - 계정 수만큼 du를 동시에 띄우면
+    # 파일서버가 감당하는 범위를 넘어설 수 있고, 이 프로그램이 장애의 원인이
+    # 되는 것이 가장 나쁜 실패다. 실측용으로 충분히 넓으면서 사고는 막는 선.
+    if not 1 <= settings.nightly_parallel_accounts <= 16:
+        raise ConfigError("nightly_parallel_accounts는 1~16이어야 합니다")
+    if not 1 <= settings.weekend_parallel_accounts <= 16:
+        raise ConfigError("weekend_parallel_accounts는 1~16이어야 합니다")
+    if settings.load_sample_interval_seconds < 5:
+        raise ConfigError("load_sample_interval_seconds는 5 이상이어야 합니다")
+    if settings.load_sample_retention_days < 1:
+        raise ConfigError("load_sample_retention_days는 1 이상이어야 합니다")
     if not i18n.is_supported(settings.language):
         # 언어는 잘못돼도 앱을 막지 않고 기본값으로 되돌린다 - 표시 문제일 뿐
         # 데이터 무결성 문제가 아니기 때문.
@@ -300,8 +379,21 @@ def load_config(data_dir: Path) -> AppConfig:
         if not account.account_id or account.account_id in seen_ids:
             account.account_id = uuid.uuid4().hex
             changed = True
+        if account.kind not in ACCOUNT_KINDS:
+            # 성격 값이 깨졌다고 앱을 못 열게 하지는 않는다 (language와 같은
+            # 톤). 표시와 분류의 문제일 뿐 데이터 무결성 문제가 아니다.
+            account.kind = ACCOUNT_KIND_UNSET
+            changed = True
         seen_ids.add(account.account_id)
         accounts.append(account)
+
+    # 연결된 백업 계정이 그 사이 삭제됐을 수 있다. 없는 id를 들고 있으면
+    # 화면에는 빈칸으로 보이는데 파일에는 남아 있어 나중에 "왜 연결이 안
+    # 보이지"로 헷갈린다. 읽는 김에 정리한다.
+    for account in accounts:
+        if account.backup_account_id and account.backup_account_id not in seen_ids:
+            account.backup_account_id = ""
+            changed = True
 
     config = AppConfig(settings=settings, accounts=accounts)
     _guard_read_only_invariant(data_dir, config)
@@ -356,6 +448,7 @@ def add_account(
     path: str,
     require_exists: bool = True,
     data_dir: Optional[Path] = None,
+    kind: str = ACCOUNT_KIND_UNSET,
 ) -> Account:
     """계정을 추가한다. `data_dir`을 넘기면 그 자리에서 바로 읽기 전용
     불변식(데이터 디렉터리와 겹치지 않음)을 확인해, 저장 후 다음 실행에서야
@@ -364,6 +457,8 @@ def add_account(
     name = name.strip()
     if not name:
         raise ConfigError("계정 이름을 입력하세요")
+    if kind not in ACCOUNT_KINDS:
+        raise ConfigError(f"알 수 없는 계정 성격입니다: {kind}")
 
     resolved = Path(path).expanduser()
     if require_exists:
@@ -384,7 +479,7 @@ def add_account(
     if any(existing.path == str(resolved) for existing in config.accounts):
         raise ConfigError(f"이미 등록된 경로입니다: {resolved}")
 
-    account = Account(name=name, path=str(resolved))
+    account = Account(name=name, path=str(resolved), kind=kind)
     config.accounts.append(account)
     return account
 
@@ -401,3 +496,53 @@ def find_account(config: AppConfig, account_id: str) -> Optional[Account]:
 
 def enabled_accounts(config: AppConfig) -> List[Account]:
     return [a for a in config.accounts if a.enabled]
+
+
+def accounts_of_kind(config: AppConfig, kind: str, enabled_only: bool = True) -> List[Account]:
+    source = enabled_accounts(config) if enabled_only else config.accounts
+    return [a for a in source if a.kind == kind]
+
+
+def project_accounts(config: AppConfig, enabled_only: bool = True) -> List[Account]:
+    return accounts_of_kind(config, ACCOUNT_KIND_PROJECT, enabled_only)
+
+
+def backup_accounts(config: AppConfig, enabled_only: bool = True) -> List[Account]:
+    return accounts_of_kind(config, ACCOUNT_KIND_BACKUP, enabled_only)
+
+
+def set_account_kind(config: AppConfig, account_id: str, kind: str) -> bool:
+    """계정 성격을 바꾼다. 바뀌었으면 True.
+
+    백업 계정으로 바꾸면 연결된 백업 계정 정보는 지운다 - "백업 계정의 백업
+    계정"은 이 모델에 없는 개념이라, 남겨 두면 화면에 뜻 없는 값이 보인다."""
+
+    if kind not in ACCOUNT_KINDS:
+        raise ConfigError(f"알 수 없는 계정 성격입니다: {kind}")
+    account = find_account(config, account_id)
+    if account is None or account.kind == kind:
+        return False
+    account.kind = kind
+    if kind != ACCOUNT_KIND_PROJECT:
+        account.backup_account_id = ""
+    return True
+
+
+def set_backup_link(config: AppConfig, account_id: str, backup_account_id: str) -> bool:
+    """프로젝트 계정에 연결 백업 계정을 지정한다. 바뀌었으면 True."""
+
+    account = find_account(config, account_id)
+    if account is None:
+        return False
+    if backup_account_id:
+        target = find_account(config, backup_account_id)
+        if target is None:
+            raise ConfigError("연결할 백업 계정을 찾을 수 없습니다")
+        if target.account_id == account_id:
+            raise ConfigError("자기 자신을 백업 계정으로 연결할 수 없습니다")
+        if target.kind != ACCOUNT_KIND_BACKUP:
+            raise ConfigError("연결 대상은 성격이 '백업'인 계정이어야 합니다")
+    if account.backup_account_id == backup_account_id:
+        return False
+    account.backup_account_id = backup_account_id
+    return True

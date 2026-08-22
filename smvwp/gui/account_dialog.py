@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import List
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -48,6 +48,8 @@ ACCOUNT_PATH_PREFIX = "/user/"
 # 이름/경로만 있던 목록을 표로 바꿨다.
 ACCOUNT_COLUMN_KEYS = [
     "accounts.col.name",
+    "accounts.col.kind",
+    "accounts.col.backup_link",
     "accounts.col.path",
     "accounts.col.owner",
     "accounts.col.added",
@@ -55,11 +57,29 @@ ACCOUNT_COLUMN_KEYS = [
 ]
 (
     ACCOUNT_COL_NAME,
+    ACCOUNT_COL_KIND,
+    ACCOUNT_COL_BACKUP,
     ACCOUNT_COL_PATH,
     ACCOUNT_COL_OWNER,
     ACCOUNT_COL_ADDED,
     ACCOUNT_COL_SCANNED,
-) = range(5)
+) = range(7)
+
+# 성격/연결은 표 안에서 바로 고칠 수 있게 콤보 위젯을 칸에 넣는다. 별도
+# 편집 다이얼로그를 하나 더 만드는 것보다, 여러 계정의 성격을 한 화면에서
+# 훑으며 고치는 쪽이 실제 사용 흐름(등록해 놓고 나중에 분류)에 맞다.
+#
+# Qt 내장 정렬(`setSortingEnabled`)과는 절대 함께 쓰지 않는다 - 항목만 옮기고
+# 칸 위젯은 제자리에 남아 행과 어긋난다. 이 표는 정렬을 켜지 않는다.
+ACCOUNT_KIND_ORDER = (
+    config_module.ACCOUNT_KIND_UNSET,
+    config_module.ACCOUNT_KIND_PROJECT,
+    config_module.ACCOUNT_KIND_BACKUP,
+)
+
+
+def kind_label(kind: str) -> str:
+    return i18n.t(f"account.kind.{kind}")
 
 # 행에 account_id를 숨겨 두는 Qt 데이터 롤. 이름은 겹칠 수 있어 식별자가 될 수
 # 없으므로 표시값이 아니라 id로 계정을 찾는다.
@@ -85,9 +105,12 @@ class AccountDialog(QDialog):
         self._data_dir = data_dir
         self._config = config
         self.setWindowTitle(i18n.t("accounts.title"))
-        # 계정 표가 5열(이름/경로/추가한 사람/추가일/최근 스캔일)이라 예전
-        # 폭(620)으로는 경로가 'C:...'로 뭉개진다.
-        self.resize(880, 620)
+        # 계정 표가 7열(이름/성격/연결 백업/경로/추가한 사람/추가일/최근
+        # 스캔일)이라 예전 폭으로는 경로가 'C:...'로 뭉개진다.
+        self.resize(1040, 620)
+        # 콤보를 코드로 채우는 동안에는 변경 신호를 무시한다. 안 그러면
+        # 목록을 다시 그리는 것만으로 설정이 바뀐 것처럼 처리된다.
+        self._loading = False
         self._build_ui()
         self._reload_list()
 
@@ -137,12 +160,20 @@ class AccountDialog(QDialog):
         self.path_edit.textEdited.connect(self._on_path_edited)
         browse_btn = QPushButton(i18n.t("accounts.btn.browse"))
         browse_btn.clicked.connect(self._browse_path)
+        # 성격을 등록 시점에 고르게 한다. 나중에 표에서도 고칠 수 있지만,
+        # 등록할 때가 그 계정이 무엇인지 가장 확실히 아는 순간이다.
+        self.kind_combo = QComboBox()
+        for kind in ACCOUNT_KIND_ORDER:
+            self.kind_combo.addItem(kind_label(kind), kind)
+        self.kind_combo.setToolTip(i18n.t("accounts.kind_hint"))
         add_btn = QPushButton(i18n.t("accounts.btn.add"))
         add_btn.setObjectName("primary")
         add_btn.clicked.connect(self._add_account)
         add_row.addWidget(self.name_edit)
         add_row.addWidget(self.path_edit)
         add_row.addWidget(browse_btn)
+        add_row.addWidget(QLabel(i18n.t("accounts.kind")))
+        add_row.addWidget(self.kind_combo)
         add_row.addWidget(add_btn)
         root.addLayout(add_row)
 
@@ -201,6 +232,22 @@ class AccountDialog(QDialog):
         self.retention_spin.setValue(settings.sample_retention_days)
         form.addRow(i18n.t("accounts.retention"), self.retention_spin)
 
+        # 평일/주말을 나란히 둔다. 두 값의 관계(주말이 더 크다)가 한눈에
+        # 보여야 "주말에는 세게 돈다"는 규칙이 설명 없이 읽힌다.
+        self.parallel_weekday_spin = QSpinBox()
+        self.parallel_weekday_spin.setRange(1, 16)
+        self.parallel_weekday_spin.setSuffix(i18n.t("accounts.suffix.accounts"))
+        self.parallel_weekday_spin.setValue(settings.nightly_parallel_accounts)
+        self.parallel_weekday_spin.setToolTip(i18n.t("accounts.parallel_hint"))
+        form.addRow(i18n.t("accounts.parallel_weekday"), self.parallel_weekday_spin)
+
+        self.parallel_weekend_spin = QSpinBox()
+        self.parallel_weekend_spin.setRange(1, 16)
+        self.parallel_weekend_spin.setSuffix(i18n.t("accounts.suffix.accounts"))
+        self.parallel_weekend_spin.setValue(settings.weekend_parallel_accounts)
+        self.parallel_weekend_spin.setToolTip(i18n.t("accounts.parallel_hint"))
+        form.addRow(i18n.t("accounts.parallel_weekend"), self.parallel_weekend_spin)
+
         self.mode_combo = QComboBox()
         for mode, key in (
             (config_module.NOTIFY_MODE_OUTBOX, "notify.mode.outbox"),
@@ -243,23 +290,104 @@ class AccountDialog(QDialog):
     def _reload_list(self) -> None:
         last_scans = self._last_scan_times()
         dash = i18n.t("common.none")
-        self.account_table.setRowCount(len(self._config.accounts))
-        for row, account in enumerate(self._config.accounts):
-            path_item = QTableWidgetItem(account.path)
-            path_item.setToolTip(account.path)
-            cells = {
-                ACCOUNT_COL_NAME: QTableWidgetItem(account.name),
-                ACCOUNT_COL_PATH: path_item,
-                ACCOUNT_COL_OWNER: QTableWidgetItem(account.created_by or dash),
-                ACCOUNT_COL_ADDED: QTableWidgetItem(_short_date(account.created_at) or dash),
-                ACCOUNT_COL_SCANNED: QTableWidgetItem(
-                    _short_date(last_scans.get(account.account_id)) or dash
-                ),
-            }
-            # 계정 식별자는 이름이 아니라 account_id다 (이름은 겹칠 수 있다).
-            cells[ACCOUNT_COL_NAME].setData(ACCOUNT_ID_ROLE, account.account_id)
-            for column, item in cells.items():
-                self.account_table.setItem(row, column, item)
+        backups = config_module.backup_accounts(self._config, enabled_only=False)
+        # 행 수를 0으로 줄였다 늘려 칸 위젯을 확실히 정리한다.
+        # `clearContents()`는 항목만 지우고 칸 위젯은 남겨 두어, 다시 그릴 때
+        # 이전 계정의 콤보가 살아 있는 상태가 된다.
+        self._loading = True
+        try:
+            self.account_table.setRowCount(0)
+            self.account_table.setRowCount(len(self._config.accounts))
+            for row, account in enumerate(self._config.accounts):
+                path_item = QTableWidgetItem(account.path)
+                path_item.setToolTip(account.path)
+                cells = {
+                    ACCOUNT_COL_NAME: QTableWidgetItem(account.name),
+                    ACCOUNT_COL_PATH: path_item,
+                    ACCOUNT_COL_OWNER: QTableWidgetItem(account.created_by or dash),
+                    ACCOUNT_COL_ADDED: QTableWidgetItem(_short_date(account.created_at) or dash),
+                    ACCOUNT_COL_SCANNED: QTableWidgetItem(
+                        _short_date(last_scans.get(account.account_id)) or dash
+                    ),
+                }
+                # 계정 식별자는 이름이 아니라 account_id다 (이름은 겹칠 수 있다).
+                cells[ACCOUNT_COL_NAME].setData(ACCOUNT_ID_ROLE, account.account_id)
+                for column, item in cells.items():
+                    self.account_table.setItem(row, column, item)
+                self.account_table.setCellWidget(
+                    row, ACCOUNT_COL_KIND, self._make_kind_combo(account)
+                )
+                self.account_table.setCellWidget(
+                    row, ACCOUNT_COL_BACKUP, self._make_backup_combo(account, backups)
+                )
+        finally:
+            self._loading = False
+
+    def _make_kind_combo(self, account: config_module.Account) -> QComboBox:
+        combo = QComboBox()
+        for kind in ACCOUNT_KIND_ORDER:
+            combo.addItem(kind_label(kind), kind)
+        combo.setCurrentIndex(max(0, combo.findData(account.kind)))
+        combo.setToolTip(i18n.t("accounts.kind_hint"))
+        account_id = account.account_id
+        combo.currentIndexChanged.connect(
+            lambda _index, combo=combo, account_id=account_id: self._on_kind_changed(
+                account_id, combo.currentData()
+            )
+        )
+        return combo
+
+    def _make_backup_combo(
+        self, account: config_module.Account, backups: List[config_module.Account]
+    ) -> QComboBox:
+        """프로젝트 계정에만 의미가 있는 연결이라, 그 외에는 꺼 둔다.
+
+        칸을 비워 두지 않고 비활성 콤보를 두는 이유: 빈 칸은 "연결 안 됨"으로
+        읽히지만 실제로는 "이 성격에는 해당 없음"이다. 둘은 다른 상태다."""
+
+        combo = QComboBox()
+        combo.addItem(i18n.t("accounts.backup_link_none"), "")
+        for backup in backups:
+            combo.addItem(backup.name, backup.account_id)
+        combo.setCurrentIndex(max(0, combo.findData(account.backup_account_id or "")))
+        if not account.kind_is_project:
+            combo.setEnabled(False)
+            return combo
+        if not backups:
+            combo.setEnabled(False)
+            combo.setToolTip(i18n.t("accounts.backup_link_needs_backup_account"))
+            return combo
+        account_id = account.account_id
+        combo.currentIndexChanged.connect(
+            lambda _index, combo=combo, account_id=account_id: self._on_backup_changed(
+                account_id, combo.currentData()
+            )
+        )
+        return combo
+
+    def _on_kind_changed(self, account_id: str, kind: str) -> None:
+        if self._loading:
+            return
+        try:
+            changed = config_module.set_account_kind(self._config, account_id, kind)
+        except config_module.ConfigError as exc:  # pragma: no cover - 방어적 처리
+            QMessageBox.critical(self, i18n.t("accounts.save_failed"), str(exc))
+            return
+        if not changed:
+            return
+        # 성격이 바뀌면 다른 행의 '연결 백업 계정' 선택지도 달라진다. 다만
+        # **신호 처리 중에 그 신호를 낸 위젯을 지우면 안 되므로**(Qt에서 흔한
+        # 크래시 원인) 이벤트 루프로 한 번 넘겨 다시 그린다.
+        QTimer.singleShot(0, self._reload_list)
+
+    def _on_backup_changed(self, account_id: str, backup_account_id: str) -> None:
+        if self._loading:
+            return
+        try:
+            config_module.set_backup_link(self._config, account_id, backup_account_id or "")
+        except config_module.ConfigError as exc:
+            QMessageBox.critical(self, i18n.t("accounts.save_failed"), str(exc))
+            QTimer.singleShot(0, self._reload_list)
 
     def _last_scan_times(self) -> dict:
         """계정별 마지막 기준선 완주 시각. 스캔 DB가 없으면 빈 dict.
@@ -328,7 +456,13 @@ class AccountDialog(QDialog):
             return
 
         try:
-            config_module.add_account(self._config, name, path, data_dir=self._data_dir)
+            config_module.add_account(
+                self._config,
+                name,
+                path,
+                data_dir=self._data_dir,
+                kind=self.kind_combo.currentData(),
+            )
         except config_module.ConfigError as exc:
             QMessageBox.critical(self, i18n.t("accounts.add_failed"), str(exc))
             return
@@ -430,6 +564,8 @@ class AccountDialog(QDialog):
         settings.collector_interval_seconds = self.interval_spin.value() * 60
         settings.notification_cooldown_minutes = self.cooldown_spin.value()
         settings.sample_retention_days = self.retention_spin.value()
+        settings.nightly_parallel_accounts = self.parallel_weekday_spin.value()
+        settings.weekend_parallel_accounts = self.parallel_weekend_spin.value()
         settings.notification_mode = mode
         settings.notification_command = notification_command
         settings.notification_webhook_url = webhook_url

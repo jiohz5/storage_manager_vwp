@@ -46,6 +46,36 @@ def next_window_end(now: datetime, end_hour: int = DEFAULT_END_HOUR) -> datetime
     return end_today + timedelta(days=1)
 
 
+# 토(5), 일(6). `datetime.weekday()` 기준.
+WEEKEND_WEEKDAYS = (5, 6)
+
+
+def ends_on_weekend(now: datetime, end_hour: int = DEFAULT_END_HOUR) -> bool:
+    """이 스캔이 **끝나는 아침**이 주말 아침인가.
+
+    ## 왜 "지금 무슨 요일인가"를 묻지 않는가
+
+    야간 스캔은 자정을 넘어간다. 그래서 "오늘이 주말인가"는 틀린 질문이고,
+    맞는 질문은 **"내일 아침에 누가 출근하는가"**다. 스캔이 만든 부하는 밤새
+    쌓였다가 그 아침에 자리에 앉는 사람에게 청구되기 때문이다.
+
+    두 밤이 정반대가 된다:
+
+    - **금요일 22:00** 시작 -> 토요일 06:00 종료. 토요일 아침은 한산하다.
+      **주말 밤이다.**
+    - **일요일 22:00** 시작 -> 월요일 06:00 종료. 월요일 아침에 전원이
+      출근한다. **평일 밤이다.**
+
+    "오늘이 주말인가"로 판정하면 이 둘이 정확히 뒤집힌다 - 가장 한산한 금요일
+    밤을 얌전히 돌고, 가장 붐비는 월요일 아침 직전에 세게 돌게 된다.
+
+    `next_window_end`를 그대로 재사용하므로, 판정 기준이 **스캔이 실제로 멈추는
+    시각**과 언제나 일치한다 (두 곳에 같은 계산을 따로 두면 어긋난다).
+    """
+
+    return next_window_end(now, end_hour).weekday() in WEEKEND_WEEKDAYS
+
+
 def seconds_remaining(now: datetime, end_hour: int = DEFAULT_END_HOUR) -> float:
     """시간창이 끝날 때까지 남은 초. 이미 지났으면 0."""
 
