@@ -213,6 +213,9 @@ def command_scan(args) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
+    if args.status:
+        return _print_scan_status(data_dir, config)
+
     summary = nightly_scan.run_nightly_scan(
         data_dir,
         config,
@@ -239,6 +242,88 @@ def command_scan(args) -> int:
             f"({outcome.activity_status})"
         )
     return 0 if summary.status in (nightly_scan.STATUS_COMPLETED, nightly_scan.STATUS_PAUSED) else 1
+
+
+def _fmt_seconds(value) -> str:
+    if value is None:
+        return "-"
+    if value < 60:
+        return f"{value:.0f}초"
+    if value < 3600:
+        return f"{value / 60:.1f}분"
+    return f"{value / 3600:.1f}시간"
+
+
+def _print_scan_status(data_dir, config) -> int:
+    """스캔을 돌리지 않고 "지금 어디까지 갔고 왜 더딘지"를 출력한다.
+
+    화면과 보고서는 "얼마나 갔나"만 보여 준다. 밤새 돌았는데 한 계정만 갔을 때
+    필요한 것은 **왜 안 갔나**이고, 그 답은 대개 두 숫자에 있다 - 분할로 생긴
+    작업 비율과 체크포인트 하나에 걸린 시간.
+    """
+
+    from smvwp import scan_store
+
+    conn = scan_store.connect(data_dir)
+    try:
+        run = scan_store.latest_run(conn)
+        if run is None:
+            print("아직 실행된 스캔이 없습니다.")
+            return 0
+
+        keys = run.keys()
+        parallel = run["parallel_accounts"] if "parallel_accounts" in keys else None
+        weekend = run["weekend_night"] if "weekend_night" in keys else None
+        night = "-"
+        if weekend is not None:
+            night = "주말 밤" if weekend else "평일 밤"
+        print(f"최근 실행  {run['run_id']}  상태={run['status']}")
+        print(f"  시작 {str(run['started_at'])[:19]}  종료 {str(run['ended_at'] or '-')[:19]}")
+        print(f"  {night} · 동시 계정 {parallel or 1}개")
+        print()
+
+        header = (
+            f"{'계정':<20}{'완료':>7}{'대기':>7}{'분할':>7}{'실패':>7}"
+            f"{'분할로생긴작업':>16}{'중앙시간':>11}{'최장':>11}"
+        )
+        print(header)
+        print("-" * 92)
+
+        for account in config.accounts:
+            state = scan_store.get_account_state(conn, account.account_id)
+            diag = scan_store.diagnose_account(
+                conn, account.account_id, state.working_generation
+            )
+            if not diag.total:
+                print(f"{account.name:<20}{'아직 시작 안 함':>7}")
+                continue
+            print(
+                f"{account.name:<20}{diag.done:>7,}{diag.pending:>7,}"
+                f"{diag.split:>7,}{diag.error:>7,}"
+                f"{diag.from_split:>10,} ({diag.split_ratio * 100:>3.0f}%)"
+                f"{_fmt_seconds(diag.median_seconds):>11}"
+                f"{_fmt_seconds(diag.slowest_seconds):>11}"
+            )
+            if diag.last_path:
+                print(f"{'':<20}마지막: {diag.last_path}")
+
+        print()
+        budget = config.settings.detail_task_timeout_seconds
+        print(f"디렉터리 하나당 시간 예산: {_fmt_seconds(budget)}")
+        print()
+        print("읽는 법")
+        print("  · '분할로 생긴 작업' 비율이 높다 = 시간 초과가 반복됐다는 뜻입니다.")
+        print("    분할하면 그 서브트리를 **처음부터 다시** 걷습니다 - 여기가 높으면")
+        print("    같은 파일을 여러 번 세고 있는 것이라, 시간 예산을 늘리는 편이")
+        print("    오히려 빠릅니다 (du -k는 시간 초과가 나도 그때까지 출력한 것을")
+        print("    저장하므로, 예산을 늘려도 잃는 것이 없습니다).")
+        print("  · '중앙 시간'이 시간 예산에 가깝다 = 대부분이 예산을 다 쓰고 잘렸다는")
+        print("    뜻입니다. 같은 결론입니다.")
+        print("  · 평일 밤은 동시 계정이 1개입니다 - 한 계정이 밤을 다 쓰면 나머지는")
+        print("    그날 스캔되지 않습니다 (다음 밤에 순서가 돌아갑니다).")
+    finally:
+        conn.close()
+    return 0
 
 
 # -- notify ----------------------------------------------------------------
@@ -280,6 +365,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="시간창(22:00~06:00)을 무시하고 지금 실행 - 터미널 직접 실행용 진단/복구 경로",
     )
     scan.add_argument("--stop", action="store_true", help="실행 중인 스캔에 안전 중지 요청")
+    scan.add_argument(
+        "--status",
+        action="store_true",
+        help="스캔을 돌리지 않고 진행 상황만 진단해서 출력 (왜 더딘지 포함)",
+    )
     scan.add_argument(
         "--parallel",
         type=int,

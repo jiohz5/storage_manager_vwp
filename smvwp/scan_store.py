@@ -1102,3 +1102,93 @@ def estimate_remaining_seconds(
     if len(intervals) < ETA_MIN_INTERVALS:
         return None
     return _median(intervals) * pending
+
+
+# -- 스캔이 왜 더딘지 진단 --------------------------------------------------
+#
+# "밤새 돌았는데 한 계정만 갔고 뭐가 됐는지 모르겠다"에 답하기 위한 집계다.
+# 화면과 보고서는 "얼마나 갔나"를 보여 주지만, **왜 안 갔나**는 안 보여 준다.
+# 그 답은 대부분 두 숫자에 있다 - 분할 횟수와 체크포인트 하나에 걸린 시간.
+
+@dataclass
+class AccountDiagnosis:
+    """계정 하나의 스캔 진행 해부."""
+
+    account_id: str
+    generation: int
+    total: int = 0
+    done: int = 0
+    split: int = 0
+    error: int = 0
+    pending: int = 0
+    max_depth_seen: int = 0
+    # 분할로 생겨난 체크포인트 수 (parent_id가 있는 것). 이 값이 크면 시간 초과가
+    # 반복됐다는 뜻이고, 그때마다 그 서브트리를 **처음부터 다시 걸었다**.
+    from_split: int = 0
+    slowest_seconds: Optional[float] = None
+    median_seconds: Optional[float] = None
+    last_path: Optional[str] = None
+    last_scanned_at: Optional[str] = None
+
+    @property
+    def split_ratio(self) -> float:
+        return (self.from_split / self.total) if self.total else 0.0
+
+
+def diagnose_account(
+    conn: sqlite3.Connection, account_id: str, generation: int
+) -> AccountDiagnosis:
+    """진행 중인 세대의 체크포인트를 해부한다 (읽기 전용)."""
+
+    result = AccountDiagnosis(account_id=account_id, generation=generation)
+
+    rows = conn.execute(
+        "SELECT status, depth, parent_id, path, scanned_at FROM scan_checkpoints "
+        "WHERE account_id = ? AND kind = ? AND generation = ?",
+        (account_id, BASELINE, generation),
+    ).fetchall()
+    if not rows:
+        return result
+
+    stamps = []
+    for row in rows:
+        result.total += 1
+        status = row["status"]
+        if status == STATUS_DONE:
+            result.done += 1
+        elif status == STATUS_SPLIT:
+            result.split += 1
+        elif status == STATUS_ERROR:
+            result.error += 1
+        elif status == STATUS_PENDING:
+            result.pending += 1
+        if row["parent_id"] is not None:
+            result.from_split += 1
+        depth = row["depth"] or 0
+        result.max_depth_seen = max(result.max_depth_seen, depth)
+        if row["scanned_at"]:
+            try:
+                stamps.append((datetime.fromisoformat(str(row["scanned_at"])), row["path"]))
+            except (TypeError, ValueError):  # pragma: no cover
+                pass
+
+    if len(stamps) >= 2:
+        stamps.sort()
+        gaps = [
+            (later[0] - earlier[0]).total_seconds()
+            for earlier, later in zip(stamps, stamps[1:])
+            if (later[0] - earlier[0]).total_seconds() > 0
+        ]
+        if gaps:
+            ordered = sorted(gaps)
+            middle = len(ordered) // 2
+            result.median_seconds = (
+                ordered[middle]
+                if len(ordered) % 2
+                else (ordered[middle - 1] + ordered[middle]) / 2
+            )
+            result.slowest_seconds = ordered[-1]
+    if stamps:
+        result.last_scanned_at = stamps[-1][0].isoformat()
+        result.last_path = stamps[-1][1]
+    return result
