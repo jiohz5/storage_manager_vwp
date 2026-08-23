@@ -292,6 +292,11 @@ def build_weekly_report(
 
     now = now or datetime.now(timezone.utc)
     lines = [build_daily_report(data_dir, config, now).rstrip("\n"), "", "=" * 72, ""]
+    # 밤 성격별 부하 비교를 증가 경로보다 **먼저** 둔다. 주간 보고서를 여는
+    # 이유가 "이번 주에 스캔이 서버를 얼마나 흔들었나"인 경우가 많고, 경로
+    # 목록은 계정 수만큼 길어져 뒤에 붙이면 아무도 스크롤해서 안 본다.
+    _append_night_comparison(lines, data_dir)
+    lines.append("")
     lines.append(f"[{i18n.t('reports.weekly')}] {i18n.t('scan.section_title')}")
     lines.append("")
 
@@ -877,3 +882,213 @@ def _append_resource_section(lines: List[str], data_dir: Path) -> None:
             + pad(_fmt_metric(sample.cpu_busy_percent, "pct"), 10, ">")
             + pad(str(sample.active_accounts), 10, ">")
         )
+
+
+# -- 밤 성격별 부하 비교 ----------------------------------------------------
+#
+# 이 섹션이 답하는 질문: **평일 밤과 주말 밤의 부하가 실제로 얼마나 다른가.**
+#
+# 일간 보고서의 `[스캔 중 리소스 변화]`는 그날 밤 하나만 보여 준다. 그것만으로
+# "주말에 동시 3개로 돌려도 되겠나"를 판단하려면 사람이 여러 날 보고서를 열어
+# 눈으로 대조해야 하는데, 그렇게 하면 대부분 안 한다. 판단에 필요한 비교를
+# 보고서가 직접 해 준다.
+#
+# ## 왜 '증가폭'으로 비교하는가
+#
+# 절대값(load 4.2)은 그날의 평소 부하에 좌우된다. 금요일 밤에 다른 배치가
+# 돌고 있었다면 스캔과 무관하게 높다. **스캔 직전 대비 증가폭**은 그 차이를
+# 상쇄하므로 밤끼리 비교할 수 있다.
+#
+# ## 왜 평균이 아니라 중앙값인가
+#
+# 밤 하나가 유난히 무거울 수 있다(큰 계정이 그날 몰렸거나, 다른 작업과 겹쳤거나).
+# 표본이 한 주에 몇 개뿐이라 평균은 그 하나에 끌려간다.
+
+# 비교에 쓸 기간. 리소스 표본 보존 기간(`load_sample_retention_days`, 기본 30일)을
+# 넘겨 봐야 숫자가 없는 실행만 늘어난다.
+NIGHT_COMPARE_DAYS = 30
+# 밤별 상세에 적을 최대 줄 수. 한 달치를 다 적으면 요약이 묻힌다.
+NIGHT_DETAIL_ROWS = 14
+
+
+@dataclass
+class NightLoad:
+    """밤 하나의 부하 요약."""
+
+    started_at: str
+    status: str
+    weekend_night: bool
+    parallel_accounts: int
+    duration_hours: Optional[float] = None
+    load_delta: Optional[float] = None
+    iowait_delta: Optional[float] = None
+    load_peak: Optional[float] = None
+    iowait_peak: Optional[float] = None
+
+    @property
+    def has_numbers(self) -> bool:
+        return self.load_delta is not None or self.iowait_delta is not None
+
+
+def _duration_hours(row) -> Optional[float]:
+    try:
+        started = datetime.fromisoformat(str(row["started_at"]))
+        ended = datetime.fromisoformat(str(row["ended_at"]))
+    except (TypeError, ValueError):
+        return None
+    seconds = (ended - started).total_seconds()
+    return seconds / 3600 if seconds > 0 else None
+
+
+def _snapshots_for(conn, run_id: str) -> List["loadstat.Snapshot"]:
+    return [
+        loadstat.Snapshot(
+            sampled_at=row["sampled_at"],
+            elapsed_seconds=row["elapsed_seconds"] or 0.0,
+            phase=row["phase"],
+            cpu_busy_percent=row["cpu_busy_percent"],
+            cpu_iowait_percent=row["cpu_iowait_percent"],
+            cpu_scan_top_percent=row["cpu_scan_top_percent"],
+            load_avg_1m=row["load_avg_1m"],
+            memory_total_kb=row["memory_total_kb"],
+            memory_available_kb=row["memory_available_kb"],
+            memory_used_percent=row["memory_used_percent"],
+            active_accounts=row["active_accounts"] or 0,
+        )
+        for row in scan_store.load_samples(conn, run_id)
+    ]
+
+
+def collect_night_loads(data_dir: Path, days: int = NIGHT_COMPARE_DAYS) -> List[NightLoad]:
+    """최근 실행들을 밤 하나씩의 부하 요약으로 정리한다 (최신순)."""
+
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover - 스캔 DB가 없어도 보고서는 나와야 한다
+        return []
+
+    result: List[NightLoad] = []
+    try:
+        for row in scan_store.recent_runs(conn, days):
+            changes = {change.metric: change for change in loadstat.changes(_snapshots_for(conn, row["run_id"]))}
+            load = changes.get("load_avg")
+            iowait = changes.get("cpu_iowait")
+            keys = row.keys()
+            result.append(
+                NightLoad(
+                    started_at=str(row["started_at"]),
+                    status=str(row["status"]),
+                    weekend_night=bool(row["weekend_night"]) if "weekend_night" in keys else False,
+                    parallel_accounts=(
+                        row["parallel_accounts"] if "parallel_accounts" in keys else None
+                    ) or 1,
+                    duration_hours=_duration_hours(row),
+                    load_delta=load.delta if load else None,
+                    iowait_delta=iowait.delta if iowait else None,
+                    load_peak=load.peak if load else None,
+                    iowait_peak=iowait.peak if iowait else None,
+                )
+            )
+    finally:
+        conn.close()
+    return result
+
+
+def _median_of(values: List[float]) -> Optional[float]:
+    numbers = sorted(value for value in values if value is not None)
+    if not numbers:
+        return None
+    middle = len(numbers) // 2
+    if len(numbers) % 2:
+        return numbers[middle]
+    return (numbers[middle - 1] + numbers[middle]) / 2
+
+
+def _append_night_comparison(lines: List[str], data_dir: Path) -> None:
+    nights = [night for night in collect_night_loads(data_dir) if night.has_numbers]
+    if not nights:
+        return
+
+    lines.append("")
+    lines.append(i18n.t("reports.night_heading"))
+    lines.append("-" * 72)
+    lines.append(i18n.t("reports.night_intro", days=NIGHT_COMPARE_DAYS))
+    lines.append("")
+
+    header = (
+        pad(i18n.t("reports.night_col.kind"), 12)
+        + pad(i18n.t("reports.night_col.count"), 8, ">")
+        + pad(i18n.t("reports.night_col.parallel"), 12, ">")
+        + pad(i18n.t("reports.night_col.load_delta"), 17, ">")
+        + pad(i18n.t("reports.night_col.iowait_delta"), 19, ">")
+        + pad(i18n.t("reports.night_col.duration"), 14, ">")
+    )
+    lines.append(header)
+
+    for is_weekend in (False, True):
+        group = [night for night in nights if night.weekend_night == is_weekend]
+        if not group:
+            continue
+        parallels = sorted({night.parallel_accounts for night in group})
+        parallel_text = (
+            str(parallels[0]) if len(parallels) == 1 else f"{parallels[0]}~{parallels[-1]}"
+        )
+        lines.append(
+            pad(
+                i18n.t("reports.night_weekend" if is_weekend else "reports.night_weekday"), 12
+            )
+            + pad(str(len(group)), 8, ">")
+            + pad(parallel_text, 12, ">")
+            + pad(_fmt_delta(_median_of([n.load_delta for n in group]), "load"), 17, ">")
+            + pad(_fmt_delta(_median_of([n.iowait_delta for n in group]), "pct"), 19, ">")
+            + pad(_fmt_hours(_median_of([n.duration_hours for n in group])), 14, ">")
+        )
+
+    lines.append("")
+    lines.append(i18n.t("reports.night_caveat"))
+
+    lines.append("")
+    lines.append(i18n.t("reports.night_detail_heading"))
+    detail_header = (
+        pad(i18n.t("reports.night_col.date"), 13)
+        + pad(i18n.t("reports.night_col.kind"), 10)
+        + pad(i18n.t("reports.night_col.parallel"), 12, ">")
+        + pad(i18n.t("reports.night_col.load_peak"), 14, ">")
+        + pad(i18n.t("reports.night_col.iowait_peak"), 16, ">")
+        + pad(i18n.t("reports.night_col.duration"), 13, ">")
+        + "  "
+        + i18n.t("reports.night_col.status")
+    )
+    lines.append(detail_header)
+    for night in nights[:NIGHT_DETAIL_ROWS]:
+        lines.append(
+            pad(night.started_at[:10], 13)
+            + pad(
+                i18n.t(
+                    "reports.night_weekend" if night.weekend_night else "reports.night_weekday"
+                ),
+                10,
+            )
+            + pad(str(night.parallel_accounts), 12, ">")
+            + pad(_fmt_metric(night.load_peak, "load_avg"), 14, ">")
+            + pad(_fmt_metric(night.iowait_peak, "pct"), 16, ">")
+            + pad(_fmt_hours(night.duration_hours), 13, ">")
+            + "  "
+            + night.status
+        )
+    if len(nights) > NIGHT_DETAIL_ROWS:
+        lines.append(i18n.t("reports.night_detail_more", count=len(nights) - NIGHT_DETAIL_ROWS))
+
+
+def _fmt_delta(value: Optional[float], kind: str) -> str:
+    if value is None:
+        return "-"
+    sign = "+" if value >= 0 else "-"
+    magnitude = abs(value)
+    return f"{sign}{magnitude:.2f}" if kind == "load" else f"{sign}{magnitude:.1f}%p"
+
+
+def _fmt_hours(value: Optional[float]) -> str:
+    if value is None:
+        return "-"
+    return i18n.t("reports.night_hours", hours=f"{value:.1f}")

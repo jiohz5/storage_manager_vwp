@@ -101,7 +101,56 @@ COLUMN_KEYS = [
 # 것보다는 낫다.
 PATH_MIN_WIDTH = 240
 
+
+def _format_duration(seconds: float) -> str:
+    """남은 시간을 사람이 읽는 단위로. 항상 **두 자리 이내**로 줄인다.
+
+    `1시간 23분 45초`처럼 정밀하게 적지 않는 이유: 이 값은 관측한 속도에
+    남은 개수를 곱한 어림이라 초 단위는 있지도 않은 정확도를 흉내 내는 것이다.
+    실제로 쓸모 있는 판단은 "지금 기다릴까, 자고 올까" 수준이므로 그 정도만
+    구분되면 된다."""
+
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return i18n.t("duration.under_minute")
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return i18n.t("duration.minutes", minutes=minutes)
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        if minutes:
+            return i18n.t("duration.hours_minutes", hours=hours, minutes=minutes)
+        return i18n.t("duration.hours", hours=hours)
+    days, hours = divmod(hours, 24)
+    return i18n.t("duration.days_hours", days=days, hours=hours)
+
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
+
+# 상세 스캔 탭 위쪽의 계정별 현황 표.
+#
+# 예전에는 이 탭이 "고른 계정 하나의 증가 경로"만 보여 줘서, 밤새 무슨 일이
+# 있었는지 알려면 계정을 하나씩 눌러 봐야 했다. 아침에 이 화면을 여는 이유는
+# 대개 "전체가 어디까지 갔나"이므로 그 답이 먼저 보여야 한다.
+SCAN_ACCOUNT_COLUMN_KEYS = [
+    "scan.acct.name",
+    "scan.acct.kind",
+    "scan.acct.progress",
+    "scan.acct.pending",
+    "scan.acct.measured",
+    "scan.acct.eta",
+    "scan.acct.last_scan",
+    "scan.acct.note",
+]
+(
+    SCAN_ACCT_NAME,
+    SCAN_ACCT_KIND,
+    SCAN_ACCT_PROGRESS,
+    SCAN_ACCT_PENDING,
+    SCAN_ACCT_MEASURED,
+    SCAN_ACCT_ETA,
+    SCAN_ACCT_LAST,
+    SCAN_ACCT_NOTE,
+) = range(8)
 
 # 스캔이 도는 동안 진행 상황(남은 체크포인트 수)을 주기적으로 다시 읽는 간격.
 SCAN_STATUS_REFRESH_MS = 5000
@@ -549,6 +598,32 @@ class MainWindow(QMainWindow):
         scan_buttons.addWidget(self.scan_detail_btn)
         scan_buttons.addStretch(1)
         box.addLayout(scan_buttons)
+
+        # -- 계정별 현황 ------------------------------------------------
+        self.scan_accounts_caption = QLabel()
+        self.scan_accounts_caption.setObjectName("sectionTitle")
+        box.addWidget(self.scan_accounts_caption)
+
+        self.scan_accounts_table = QTableWidget(0, len(SCAN_ACCOUNT_COLUMN_KEYS))
+        accounts_header = self.scan_accounts_table.horizontalHeader()
+        accounts_header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        accounts_header.setSectionResizeMode(SCAN_ACCT_NOTE, QHeaderView.Stretch)
+        accounts_header.setHighlightSections(False)
+        # 격자선을 끈 표라, 열이 내용 폭에 딱 붙으면 옆 칸 값과 한 덩어리로
+        # 읽힌다 ("약 21분 아직 없음"). 최소 폭으로 숨 쉴 자리를 만든다.
+        accounts_header.setMinimumSectionSize(96)
+        self.scan_accounts_table.verticalHeader().setVisible(False)
+        self.scan_accounts_table.setShowGrid(False)
+        self.scan_accounts_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.scan_accounts_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.scan_accounts_table.verticalHeader().setDefaultSectionSize(30)
+        # 이 표에서 행을 고르면 아래 증가 경로도 그 계정으로 바뀐다. 표를 보고
+        # "이 계정이 이상한데" 싶을 때 곧바로 파고들 수 있어야 한다.
+        self.scan_accounts_table.itemSelectionChanged.connect(
+            self._on_scan_account_row_selected
+        )
+        self.scan_accounts_table.setMinimumHeight(140)
+        box.addWidget(self.scan_accounts_table)
 
         self.growth_caption = QLabel()
         self.growth_caption.setObjectName("muted")
@@ -1214,7 +1289,127 @@ class MainWindow(QMainWindow):
 
         self.scan_run_btn.setEnabled(not running)
         self.scan_stop_btn.setEnabled(running)
+        self._refresh_scan_accounts_table(snapshot, running)
         self._refresh_growth_table()
+
+    def _refresh_scan_accounts_table(self, snapshot, running: bool) -> None:
+        """계정별 진행·측정량·예상 남은 시간을 한 표로 보여준다."""
+
+        entries = {item.account_id: item for item in snapshot.accounts}
+        accounts = self._config.accounts
+        dash = i18n.t("common.none")
+        self.scan_accounts_caption.setText(i18n.t("scan.acct.heading"))
+
+        table = self.scan_accounts_table
+        # 칸 위젯은 안 쓰지만, 행 수가 줄어든 경우 이전 내용이 남지 않도록
+        # 매번 비우고 다시 채운다.
+        table.setRowCount(0)
+        table.setRowCount(len(accounts))
+        table.setHorizontalHeaderLabels(
+            [i18n.t(key) for key in SCAN_ACCOUNT_COLUMN_KEYS]
+        )
+
+        for row, account in enumerate(accounts):
+            entry = entries.get(account.account_id)
+            name_item = QTableWidgetItem(account.name)
+            name_item.setData(Qt.UserRole, account.account_id)
+            name_item.setToolTip(account.path)
+            table.setItem(row, SCAN_ACCT_NAME, name_item)
+            table.setItem(
+                row, SCAN_ACCT_KIND, QTableWidgetItem(i18n.t(f"account.kind.{account.kind}"))
+            )
+
+            if entry is None:
+                for column in (
+                    SCAN_ACCT_PROGRESS,
+                    SCAN_ACCT_PENDING,
+                    SCAN_ACCT_MEASURED,
+                    SCAN_ACCT_ETA,
+                    SCAN_ACCT_LAST,
+                    SCAN_ACCT_NOTE,
+                ):
+                    table.setItem(row, column, QTableWidgetItem(dash))
+                continue
+
+            if entry.baseline_total:
+                percent = int(entry.baseline_done * 100 / entry.baseline_total)
+                progress = f"{entry.baseline_done:,}/{entry.baseline_total:,}  ({percent}%)"
+            else:
+                progress = dash
+            progress_item = QTableWidgetItem(progress)
+            # 분모가 도중에 늘어날 수 있다는 사실은 숨기지 않는다 - 모르면
+            # 진행률이 뒤로 가는 것을 고장으로 읽는다.
+            progress_item.setToolTip(i18n.t("scan.acct.progress_tip"))
+            progress_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table.setItem(row, SCAN_ACCT_PROGRESS, progress_item)
+
+            pending = entry.pending_baseline_count + entry.pending_activity_count
+            pending_item = QTableWidgetItem(f"{pending:,}" if pending else dash)
+            pending_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table.setItem(row, SCAN_ACCT_PENDING, pending_item)
+
+            measured_item = QTableWidgetItem(
+                widgets.format_kb(entry.measured_kb) if entry.measured_kb else dash
+            )
+            measured_item.setToolTip(i18n.t("scan.acct.measured_tip"))
+            measured_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table.setItem(row, SCAN_ACCT_MEASURED, measured_item)
+
+            # 남은 시간은 **도는 중일 때만** 뜻이 있다. 멈춰 있는데 "약 2시간"이
+            # 떠 있으면 지금도 돌고 있다는 오해를 만든다.
+            eta_text = dash
+            if running and entry.eta_seconds:
+                eta_text = i18n.t(
+                    "scan.acct.eta_value", duration=_format_duration(entry.eta_seconds)
+                )
+            elif running and pending:
+                # 표본이 모자라 아직 못 재는 상태. 빈칸으로 두면 "안 나온다"와
+                # "0이다"가 구분되지 않는다.
+                eta_text = i18n.t("scan.acct.eta_unknown")
+            eta_item = QTableWidgetItem(eta_text)
+            eta_item.setToolTip(i18n.t("scan.acct.eta_tip"))
+            eta_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table.setItem(row, SCAN_ACCT_ETA, eta_item)
+
+            last_item = QTableWidgetItem(
+                widgets.scan_label(entry.current_scan_at, entry.last_completed_generation)
+                if entry.last_completed_generation
+                else i18n.t("scan.acct.never")
+            )
+            # 가운데 정렬로 왼쪽 숫자 열과 떼어 놓는다. 왼쪽 붙임으로 두면
+            # 오른쪽 정렬된 '예상 남은 시간'과 붙어 한 덩어리로 읽힌다.
+            last_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, SCAN_ACCT_LAST, last_item)
+
+            notes = []
+            if entry.failed_count:
+                notes.append(i18n.t("scan.acct.note_failed", count=entry.failed_count))
+            if entry.partial_paths:
+                notes.append(
+                    i18n.t("scan.acct.note_partial", count=len(entry.partial_paths))
+                )
+            if entry.last_activity_total_changed is not None:
+                notes.append(
+                    i18n.t("scan.acct.note_changed", count=entry.last_activity_total_changed)
+                )
+            note_item = QTableWidgetItem("  ·  ".join(notes) if notes else "")
+            if entry.failed_count or entry.partial_paths:
+                note_item.setForeground(QColor(tiers.color(tiers.WARN)))
+            table.setItem(row, SCAN_ACCT_NOTE, note_item)
+
+    def _on_scan_account_row_selected(self) -> None:
+        """현황 표에서 고른 계정을 아래 증가 경로 콤보에도 맞춘다."""
+
+        row = self.scan_accounts_table.currentRow()
+        if row < 0:
+            return
+        item = self.scan_accounts_table.item(row, SCAN_ACCT_NAME)
+        if item is None:
+            return
+        account_id = item.data(Qt.UserRole)
+        index = self.scan_account_combo.findData(account_id)
+        if index >= 0 and index != self.scan_account_combo.currentIndex():
+            self.scan_account_combo.setCurrentIndex(index)
 
     def _refresh_growth_table(self) -> None:
         snapshot = self._scan_snapshot

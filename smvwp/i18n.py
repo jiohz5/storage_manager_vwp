@@ -164,6 +164,43 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
         "reports.scan_progress_heading": "[상세 스캔 진행 상황]",
+        # -- 상세 스캔 탭: 계정별 현황 표 --------------------------
+        "scan.acct.heading": "계정별 현황",
+        "scan.acct.name": "계정",
+        "scan.acct.kind": "성격",
+        "scan.acct.progress": "진행",
+        "scan.acct.pending": "남은 작업",
+        "scan.acct.measured": "지금까지 찾은 용량",
+        "scan.acct.eta": "예상 남은 시간",
+        "scan.acct.last_scan": "최근 스캔",
+        "scan.acct.note": "비고",
+        "scan.acct.never": "아직 없음",
+        "scan.acct.progress_tip": (
+            "완료한 디렉터리 / 전체. 전체는 진행 중 늘어날 수 있습니다 - "
+            "시간이 오래 걸리는 디렉터리를 쪼개면 작업이 추가되기 때문입니다. "
+            "진행률이 가끔 뒤로 가는 것은 고장이 아닙니다."
+        ),
+        "scan.acct.measured_tip": (
+            "이번 스캔에서 지금까지 실제로 측정한 용량입니다. 스캔이 도는 동안 "
+            "계속 늘어납니다. 계정 전체 용량이 아니라 '여기까지 세어 본 양'입니다."
+        ),
+        "scan.acct.eta_value": "약 {duration}",
+        "scan.acct.eta_unknown": "측정 중",
+        "scan.acct.eta_tip": (
+            "이번 스캔이 실제로 낸 속도(디렉터리 하나당 걸린 시간의 중앙값)에 "
+            "남은 개수를 곱한 어림값입니다. 미리 계산한 예측이 아닙니다.\n\n"
+            "남은 디렉터리가 지나온 것보다 무거우면 더 걸리고, 쪼개기로 작업이 "
+            "늘면 값이 커집니다. 표본이 모자라면 '측정 중'으로 남습니다."
+        ),
+        "scan.acct.note_failed": "실패 {count}곳",
+        "scan.acct.note_partial": "일부만 읽음 {count}곳",
+        "scan.acct.note_changed": "변경 파일 {count:,}개",
+        # -- 기간 표기 ---------------------------------------------
+        "duration.under_minute": "1분 미만",
+        "duration.minutes": "{minutes}분",
+        "duration.hours": "{hours}시간",
+        "duration.hours_minutes": "{hours}시간 {minutes}분",
+        "duration.days_hours": "{days}일 {hours}시간",
         # -- 과제 생성 (의뢰서 기반 워크플로) ----------------------
         "reports.new_tasks_heading": "[과제 생성]",
         "reports.new_tasks_none": "직전 스캔 이후 새로 생긴 과제가 없습니다.",
@@ -176,6 +213,34 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.new_tasks_truncated": "  … 계정당 {shown}건까지만 표시했습니다",
         # -- 스캔 중 리소스 변화 ------------------------------------
         "reports.resource_heading": "[스캔 중 리소스 변화]",
+        # -- 평일 밤 vs 주말 밤 부하 비교 ---------------------------
+        "reports.night_heading": "[야간 부하 비교 - 평일 밤 vs 주말 밤]",
+        "reports.night_intro": (
+            "최근 {days}일. '증가폭'은 그날 스캔 직전 값 대비 최고치라, 밤마다 "
+            "평소 부하가 달라도 서로 비교됩니다. 밤의 구분은 **끝나는 아침** "
+            "기준입니다 - 금요일 밤은 주말, 일요일 밤은 평일입니다."
+        ),
+        "reports.night_weekday": "평일 밤",
+        "reports.night_weekend": "주말 밤",
+        "reports.night_col.kind": "구분",
+        "reports.night_col.count": "밤 수",
+        "reports.night_col.parallel": "동시계정",
+        "reports.night_col.load_delta": "load 증가폭",
+        "reports.night_col.iowait_delta": "I/O대기 증가폭",
+        "reports.night_col.load_peak": "load 최고",
+        "reports.night_col.iowait_peak": "I/O대기 최고",
+        "reports.night_col.duration": "스캔 시간",
+        "reports.night_col.date": "날짜",
+        "reports.night_col.status": "상태",
+        "reports.night_hours": "{hours}시간",
+        "reports.night_caveat": (
+            "값은 밤마다의 중앙값입니다 (한 밤이 유난히 무거워도 끌려가지 않게). "
+            "주말 밤의 증가폭이 크더라도 '스캔 시간'이 함께 줄었다면 같은 일을 "
+            "짧게 끝낸 것이고, 시간이 안 줄었는데 부하만 늘었다면 이 장비에서는 "
+            "병렬이 이득이 아닙니다 - 그때는 weekend_parallel_accounts를 내리세요."
+        ),
+        "reports.night_detail_heading": "밤별 상세",
+        "reports.night_detail_more": "  … 외 {count}개 밤",
         "reports.resource_context": (
             "표본 {samples}개 · 동시 실행 계정 {parallel}개 기준"
         ),
@@ -562,6 +627,45 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
         "reports.scan_progress_heading": "[Detail scan progress]",
+        # -- Detail scan tab: per-account status --------------------
+        "scan.acct.heading": "Accounts",
+        "scan.acct.name": "Account",
+        "scan.acct.kind": "Kind",
+        "scan.acct.progress": "Progress",
+        "scan.acct.pending": "Pending",
+        "scan.acct.measured": "Measured so far",
+        "scan.acct.eta": "Est. remaining",
+        "scan.acct.last_scan": "Last scan",
+        "scan.acct.note": "Notes",
+        "scan.acct.never": "never",
+        "scan.acct.progress_tip": (
+            "Directories done / total. The total can GROW while the scan runs - "
+            "slow directories get split into more work. Progress moving backwards "
+            "is not a bug."
+        ),
+        "scan.acct.measured_tip": (
+            "How much this scan has actually measured so far. It keeps growing "
+            "while the scan runs. This is not the account total - it is what has "
+            "been counted up to now."
+        ),
+        "scan.acct.eta_value": "~{duration}",
+        "scan.acct.eta_unknown": "measuring",
+        "scan.acct.eta_tip": (
+            "A rough figure: the median time this scan actually took per directory, "
+            "multiplied by the number left. It is not a precomputed prediction.\n\n"
+            "It grows if the remaining directories are heavier than the ones already "
+            "done, or if splitting adds work. With too few samples it stays "
+            "'measuring'."
+        ),
+        "scan.acct.note_failed": "{count} failed",
+        "scan.acct.note_partial": "{count} partially read",
+        "scan.acct.note_changed": "{count:,} changed files",
+        # -- Durations ---------------------------------------------
+        "duration.under_minute": "under a minute",
+        "duration.minutes": "{minutes} min",
+        "duration.hours": "{hours} h",
+        "duration.hours_minutes": "{hours} h {minutes} min",
+        "duration.days_hours": "{days} d {hours} h",
         # -- New tasks (request-driven workflow) --------------------
         "reports.new_tasks_heading": "[New tasks]",
         "reports.new_tasks_none": "No new tasks since the previous scan.",
@@ -575,6 +679,36 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.new_tasks_truncated": "  ... showing at most {shown} per account",
         # -- Resource change during the scan ------------------------
         "reports.resource_heading": "[Resource change during scan]",
+        # -- Weekday vs weekend night load comparison ---------------
+        "reports.night_heading": "[Night load - weekday vs weekend]",
+        "reports.night_intro": (
+            "Last {days} days. 'Delta' is the peak measured against that night's "
+            "own pre-scan baseline, so nights with different ambient load are "
+            "still comparable. A night is classified by the MORNING IT ENDS ON - "
+            "Friday night counts as weekend, Sunday night does not."
+        ),
+        "reports.night_weekday": "Weekday",
+        "reports.night_weekend": "Weekend",
+        "reports.night_col.kind": "Kind",
+        "reports.night_col.count": "Nights",
+        "reports.night_col.parallel": "Parallel",
+        "reports.night_col.load_delta": "load delta",
+        "reports.night_col.iowait_delta": "iowait delta",
+        "reports.night_col.load_peak": "load peak",
+        "reports.night_col.iowait_peak": "iowait peak",
+        "reports.night_col.duration": "Scan time",
+        "reports.night_col.date": "Date",
+        "reports.night_col.status": "Status",
+        "reports.night_hours": "{hours} h",
+        "reports.night_caveat": (
+            "Figures are medians across nights, so one unusually heavy night does "
+            "not skew them. A larger weekend delta is fine IF scan time dropped "
+            "too - the same work finished sooner. If load rose and scan time did "
+            "not fall, parallel is not paying off on this machine: lower "
+            "weekend_parallel_accounts."
+        ),
+        "reports.night_detail_heading": "Per night",
+        "reports.night_detail_more": "  ... and {count} more nights",
         "reports.resource_context": (
             "{samples} samples - {parallel} account(s) scanned concurrently"
         ),

@@ -155,6 +155,12 @@ _COLUMNS_ADDED = {
         # 비교할 때 **가장 먼저 알아야 하는 조건**이라 실행 행에 박아 둔다
         # (설정값은 그 사이 바뀔 수 있어 나중에 config를 봐도 소용없다).
         "parallel_accounts": "INTEGER",
+        # 이 밤이 주말 밤이었는가 (끝나는 아침이 토/일).
+        #
+        # 나중에 started_at으로 다시 계산하면 될 것 같지만 그러면 안 된다 -
+        # 시간창 설정(detail_scan_window_end_hour)이 그 사이 바뀌면 같은 밤이
+        # 다르게 판정된다. 판정한 시점의 사실을 그대로 박아 둔다.
+        "weekend_night": "INTEGER",
     },
     "baseline_results": {
         # `du -k` 한 번이 서브트리 전체를 주므로 부모와 자식이 함께 들어온다.
@@ -825,14 +831,35 @@ def prune_completed_activity_checkpoints(conn: sqlite3.Connection, account_id: s
 
 # -- 리소스 시계열 ---------------------------------------------------------
 
-def record_parallelism(conn: sqlite3.Connection, run_id: str, parallel_accounts: int) -> None:
-    """이 실행의 병렬도를 남긴다. 시계열을 나중에 해석하려면 반드시 필요하다."""
+def record_parallelism(
+    conn: sqlite3.Connection,
+    run_id: str,
+    parallel_accounts: int,
+    weekend_night: bool = False,
+) -> None:
+    """이 실행의 병렬도와 밤 성격을 남긴다.
+
+    시계열을 나중에 해석하려면 둘 다 필요하다. 숫자만 있으면 "동시 3개"가
+    주말이라 그런 것인지 사람이 실험하려고 지정한 것인지 구분되지 않는다."""
 
     conn.execute(
-        "UPDATE scan_runs SET parallel_accounts = ? WHERE run_id = ?",
-        (int(parallel_accounts), run_id),
+        "UPDATE scan_runs SET parallel_accounts = ?, weekend_night = ? WHERE run_id = ?",
+        (int(parallel_accounts), 1 if weekend_night else 0, run_id),
     )
     conn.commit()
+
+
+def recent_runs(conn: sqlite3.Connection, days: int = 30) -> List[sqlite3.Row]:
+    """최근 N일 안에 시작한 실행들 (최신순).
+
+    리소스 표본(`scan_load_samples`)의 보존 기간과 맞춰 쓰는 것이 전제다 -
+    표본이 지워진 실행은 행만 남고 비교에 쓸 숫자가 없다."""
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return conn.execute(
+        "SELECT * FROM scan_runs WHERE started_at >= ? ORDER BY started_at DESC",
+        (cutoff,),
+    ).fetchall()
 
 
 def save_load_samples(conn: sqlite3.Connection, run_id: str, samples) -> int:
@@ -960,3 +987,118 @@ def generation_paths(
             (account_id, generation),
         ).fetchall()
     return [row["path"] for row in rows]
+
+
+# -- 진행 현황용 집계 -------------------------------------------------------
+
+def measured_total_kb(
+    conn: sqlite3.Connection, account_id: str, generation: int
+) -> Optional[int]:
+    """이 세대에서 지금까지 **실제로 잰** 용량 합계 (KB).
+
+    깊이 0만 더한다. `du -k`는 부모와 자식을 함께 주므로 전부 더하면 같은
+    바이트를 여러 번 세게 된다 (`top_paths`가 깊이를 제한하는 것과 같은 이유).
+    깊이 0은 체크포인트 루트 = 계정 바로 아래 최상위 디렉터리들이라, 이들의
+    합이 곧 "지금까지 훑어서 찾아낸 양"이다.
+
+    아직 한 개도 못 쟀으면 None을 준다 - 0으로 주면 "0바이트를 찾았다"로
+    읽히는데, 그것과 "아직 모른다"는 다르다.
+    """
+
+    row = conn.execute(
+        "SELECT SUM(size_kb) AS total FROM baseline_results "
+        "WHERE account_id = ? AND generation = ? AND COALESCE(depth, 0) = 0",
+        (account_id, generation),
+    ).fetchone()
+    return row["total"] if row and row["total"] is not None else None
+
+
+# 남은 시간 추정에 쓸 최근 완료 개수. 너무 적으면 우연에 흔들리고, 너무 많으면
+# 옛날(다른 밤, 다른 계정 상태)의 속도가 섞인다.
+ETA_SAMPLE_SIZE = 30
+# 중앙값을 내려면 최소 이만큼의 간격이 있어야 한다. 이보다 적으면 숫자를
+# 내놓지 않는다 - 근거 없는 예상 시간은 없느니만 못하다.
+ETA_MIN_INTERVALS = 4
+
+
+def completion_intervals(
+    conn: sqlite3.Connection,
+    account_id: str,
+    kind: str,
+    generation: int,
+    limit: int = ETA_SAMPLE_SIZE,
+) -> List[float]:
+    """최근 완료된 체크포인트들 **사이의 간격**(초) 목록.
+
+    평균이 아니라 간격 목록을 그대로 주는 이유는 호출부에서 중앙값을 쓰기
+    위해서다. 스캔은 밤을 걸쳐 이어지므로 "06:00에 멈췄다가 다음 날 22:00에
+    재개" 같은 16시간짜리 간격이 섞인다. 평균을 내면 그 하나가 전체를 지배해
+    남은 시간이 며칠로 나온다. 중앙값은 그런 이상치에 흔들리지 않는다.
+    """
+
+    rows = conn.execute(
+        "SELECT scanned_at FROM scan_checkpoints "
+        "WHERE account_id = ? AND kind = ? AND generation = ? "
+        "AND status IN (?, ?) AND scanned_at IS NOT NULL "
+        "ORDER BY scanned_at DESC LIMIT ?",
+        (account_id, kind, generation, STATUS_DONE, STATUS_ERROR, limit),
+    ).fetchall()
+    if len(rows) < 2:
+        return []
+
+    stamps = []
+    for row in rows:
+        try:
+            stamps.append(datetime.fromisoformat(str(row["scanned_at"])))
+        except (TypeError, ValueError):  # pragma: no cover - 깨진 값은 건너뛴다
+            continue
+    if len(stamps) < 2:
+        return []
+
+    stamps.sort()
+    return [
+        (later - earlier).total_seconds()
+        for earlier, later in zip(stamps, stamps[1:])
+        if (later - earlier).total_seconds() > 0
+    ]
+
+
+def _median(values: List[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def estimate_remaining_seconds(
+    conn: sqlite3.Connection,
+    account_id: str,
+    kind: str,
+    generation: int,
+    pending: int,
+) -> Optional[float]:
+    """남은 체크포인트를 다 도는 데 걸릴 대략의 시간(초). 모르면 None.
+
+    ## 이 값이 '예측'이 아닌 이유
+
+    README가 "얼마나 걸릴지 미리 예측하지 않는다"고 못 박은 것은 **돌기 전에**
+    내놓는 숫자를 말한다. 여기 값은 반대로 **지금 이 스캔이 실제로 낸 속도**를
+    관측해서 남은 개수에 곱한 것이다. 근거가 이 실행 안에 있다.
+
+    그래도 어긋날 수 있는 이유가 두 가지 있어 화면에서 '대략'이라고 말해야 한다:
+
+    1. 디렉터리마다 크기가 천차만별이라 남은 것이 지나온 것보다 무거울 수 있다.
+    2. **분모가 늘어난다.** 시간 초과로 디렉터리를 쪼개면 작업이 추가되므로
+       남은 개수 자체가 도중에 커진다.
+
+    표본이 모자라면(`ETA_MIN_INTERVALS` 미만) None을 준다. 근거 없는 숫자를
+    내놓느니 '-'가 낫다.
+    """
+
+    if pending <= 0:
+        return None
+    intervals = completion_intervals(conn, account_id, kind, generation)
+    if len(intervals) < ETA_MIN_INTERVALS:
+        return None
+    return _median(intervals) * pending

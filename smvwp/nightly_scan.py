@@ -553,7 +553,7 @@ def run_nightly_scan(
     )
     try:
         scan_store.start_run(conn, run_id, triggered_by)
-        scan_store.record_parallelism(conn, run_id, parallel_accounts)
+        scan_store.record_parallelism(conn, run_id, parallel_accounts, weekend_night)
         # 기준값은 반드시 **스캔을 시작하기 전에** 잡는다. 이 표본이 없으면
         # 나중에 "스캔 때문에 튄 것"과 "원래 그랬던 것"을 구분할 수 없다.
         recorder.baseline(warmup_seconds=baseline_warmup_seconds)
@@ -617,9 +617,18 @@ def run_nightly_scan(
 
     # 아래 후처리는 모두 "이미 저장된 스캔 결과"를 소비하기만 한다. 여기서
     # 실패해도 스캔 자체의 성패를 뒤집지 않는다.
-    _notify_growth(data_dir, config, outcomes, local_now)
+    #
+    # **시작 시각이 아니라 끝난 시각을 넘긴다.** 야간 스캔은 자정을 넘어가므로
+    # 둘은 다른 날이다. 시작 시각(목요일 22:00)으로 보고서 날짜를 매기면 그
+    # 결과가 목요일자 파일에 들어가는데, 정작 그것을 읽는 사람은 금요일 아침에
+    # 금요일자 보고서를 연다 - 리소스 수치가 통째로 안 보인다.
+    # 알림도 마찬가지다: 06:00에 나가는 알림에 22:00 시각을 찍으면 8시간 묵은
+    # 것으로 보이고 cooldown 계산도 그만큼 어긋난다.
+    # (주말 밤 판정이 '끝나는 아침'을 보는 것과 같은 이유다.)
+    finished_at = clock()
+    _notify_growth(data_dir, config, outcomes, finished_at)
     _prune_orphan_search_indexes(data_dir, config)
-    _generate_reports(data_dir, config, local_now)
+    _generate_reports(data_dir, config, finished_at)
     return RunSummary(
         started=True,
         status=status,
@@ -759,6 +768,14 @@ class AccountScanSnapshot:
     # 사용자에게는 "스캔이 그냥 실패했다"로만 보인다.
     failed_paths: List[tuple] = field(default_factory=list)
     failed_count: int = 0
+    # 지금까지 실제로 잰 용량 (KB). 진행 중인 세대 기준이라 스캔이 도는 동안
+    # 계속 커진다 - "얼마나 찾았나"에 답하는 값이다. 아직 하나도 못 쟀으면
+    # None (0과 '모름'은 다르다).
+    measured_kb: Optional[int] = None
+    # 남은 체크포인트를 다 도는 데 걸릴 **대략의** 시간(초). 이 실행이 실제로
+    # 낸 속도의 중앙값 x 남은 개수다. 표본이 모자라면 None
+    # (`scan_store.estimate_remaining_seconds` 참고).
+    eta_seconds: Optional[float] = None
 
 
 @dataclass
@@ -851,6 +868,19 @@ def get_status_snapshot(
                     ),
                     failed_count=scan_store.failed_count(
                         conn, account.account_id, state.working_generation
+                    ),
+                    # 진행 중인 세대로 본다. 완료 세대로 보면 스캔이 도는
+                    # 동안에는 어제 값이 그대로 떠 있어 "지금 얼마나 찾았나"에
+                    # 답하지 못한다.
+                    measured_kb=scan_store.measured_total_kb(
+                        conn, account.account_id, state.working_generation
+                    ),
+                    eta_seconds=scan_store.estimate_remaining_seconds(
+                        conn,
+                        account.account_id,
+                        scan_store.BASELINE,
+                        state.working_generation,
+                        pending_baseline_count,
                     ),
                 )
             )

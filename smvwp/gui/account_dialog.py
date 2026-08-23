@@ -134,6 +134,12 @@ class AccountDialog(QDialog):
         header = self.account_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(ACCOUNT_COL_PATH, QHeaderView.Stretch)
+        # 콤보가 든 두 열은 `ResizeToContents`만으로는 좁게 잡힌다. 칸 위젯의
+        # sizeHint는 "지금 선택된 항목"만 보기 때문에, 짧은 값이 선택된 행이
+        # 있으면 그 폭에 맞춰 눌리고 긴 값('데이터 백업', 긴 계정 이름)이
+        # 잘린다. 아래 `_combo_width`로 **선택지 전체 중 가장 긴 것** 기준의
+        # 최소 폭을 계산해 바닥을 깔아 준다.
+        header.setMinimumSectionSize(60)
         header.setHighlightSections(False)
         self.account_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.account_table.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -323,12 +329,28 @@ class AccountDialog(QDialog):
         finally:
             self._loading = False
 
+    def _combo_width(self, combo: QComboBox) -> int:
+        """선택지 **전부**가 잘리지 않는 폭.
+
+        `AdjustToContents`만 쓰면 항목이 많을 때 콤보가 과하게 넓어지고,
+        기본값(`AdjustToContentsOnFirstShow`)은 현재 선택값만 본다. 둘 다
+        원하는 동작이 아니라 직접 잰다. 화살표와 좌우 여백으로 44px를 더한다
+        (스타일마다 다르지만 잘리는 것보다 조금 남는 편이 낫다)."""
+
+        metrics = combo.fontMetrics()
+        widest = max(
+            (metrics.horizontalAdvance(combo.itemText(index)) for index in range(combo.count())),
+            default=0,
+        )
+        return widest + 44
+
     def _make_kind_combo(self, account: config_module.Account) -> QComboBox:
         combo = QComboBox()
         for kind in ACCOUNT_KIND_ORDER:
             combo.addItem(kind_label(kind), kind)
         combo.setCurrentIndex(max(0, combo.findData(account.kind)))
         combo.setToolTip(i18n.t("accounts.kind_hint"))
+        combo.setMinimumWidth(self._combo_width(combo))
         account_id = account.account_id
         combo.currentIndexChanged.connect(
             lambda _index, combo=combo, account_id=account_id: self._on_kind_changed(
@@ -350,6 +372,7 @@ class AccountDialog(QDialog):
         for backup in backups:
             combo.addItem(backup.name, backup.account_id)
         combo.setCurrentIndex(max(0, combo.findData(account.backup_account_id or "")))
+        combo.setMinimumWidth(self._combo_width(combo))
         if not account.kind_is_project:
             combo.setEnabled(False)
             return combo
