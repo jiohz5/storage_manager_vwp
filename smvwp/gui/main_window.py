@@ -552,7 +552,7 @@ class MainWindow(QMainWindow):
         self.scan_account_label.setObjectName("muted")
         self.scan_account_combo = QComboBox()
         self.scan_account_combo.setMinimumWidth(200)
-        self.scan_account_combo.currentIndexChanged.connect(self._refresh_growth_table)
+        self.scan_account_combo.currentIndexChanged.connect(self._on_scan_account_chosen)
         account_row.addWidget(self.scan_account_label)
         account_row.addWidget(self.scan_account_combo)
         account_row.addStretch(1)
@@ -1396,6 +1396,28 @@ class MainWindow(QMainWindow):
             if entry.failed_count or entry.partial_paths:
                 note_item.setForeground(QColor(tiers.color(tiers.WARN)))
             table.setItem(row, SCAN_ACCT_NOTE, note_item)
+
+    def _on_scan_account_chosen(self) -> None:
+        """콤보에서 계정을 고르면 현황 표의 해당 행도 함께 짚어 준다.
+
+        예전에는 표 -> 콤보 방향만 맞췄다. 그러면 콤보로 계정을 바꿔도 표는
+        엉뚱한 행이 선택된 채 남아, **두 조작이 서로 다른 것을 가리키는 것처럼**
+        보였다. 표를 눌러서 바꿀 수 있다는 것도 그래서 눈에 안 들어왔다.
+        """
+
+        self._refresh_growth_table()
+
+        account_id = self.scan_account_combo.currentData()
+        table = self.scan_accounts_table
+        for row in range(table.rowCount()):
+            item = table.item(row, SCAN_ACCT_NAME)
+            if item is not None and item.data(Qt.UserRole) == account_id:
+                if table.currentRow() != row:
+                    # 표 선택이 다시 콤보를 건드리지 않게 막는다 (무한 왕복).
+                    table.blockSignals(True)
+                    table.selectRow(row)
+                    table.blockSignals(False)
+                return
 
     def _on_scan_account_row_selected(self) -> None:
         """현황 표에서 고른 계정을 아래 증가 경로 콤보에도 맞춘다."""

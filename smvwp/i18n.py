@@ -165,7 +165,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
         "reports.scan_progress_heading": "[상세 스캔 진행 상황]",
         # -- 상세 스캔 탭: 계정별 현황 표 --------------------------
-        "scan.acct.heading": "계정별 현황",
+        "scan.acct.heading": "계정별 현황  ·  행을 누르면 아래 증가 경로가 그 계정으로 바뀝니다",
         "scan.acct.name": "계정",
         "scan.acct.kind": "성격",
         "scan.acct.progress": "진행",
@@ -628,7 +628,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
         "reports.scan_progress_heading": "[Detail scan progress]",
         # -- Detail scan tab: per-account status --------------------
-        "scan.acct.heading": "Accounts",
+        "scan.acct.heading": "Accounts  ·  click a row to switch the growth list below",
         "scan.acct.name": "Account",
         "scan.acct.kind": "Kind",
         "scan.acct.progress": "Progress",

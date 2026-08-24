@@ -172,6 +172,10 @@ class AccountDialog(QDialog):
         for kind in ACCOUNT_KIND_ORDER:
             self.kind_combo.addItem(kind_label(kind), kind)
         self.kind_combo.setToolTip(i18n.t("accounts.kind_hint"))
+        # 표 안의 콤보와 같은 이유로 폭을 직접 잡는다 - 기본 폭은 '지금 선택된
+        # 항목'에 맞춰지므로 '미지정'이 선택된 상태에서는 좁게 잡히고, 그러면
+        # '데이터 백업'을 골랐을 때 잘린다.
+        self.kind_combo.setMinimumWidth(self._combo_width(self.kind_combo))
         add_btn = QPushButton(i18n.t("accounts.btn.add"))
         add_btn.setObjectName("primary")
         add_btn.clicked.connect(self._add_account)
