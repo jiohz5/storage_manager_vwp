@@ -11,6 +11,7 @@ SQLite는 표준 라이브러리(`sqlite3`)만으로 충분해 폐쇄망 제약�
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import paths
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -113,6 +116,67 @@ def db_path(data_dir: Path) -> Path:
     return data_dir / "samples.db"
 
 
+
+def _apply_journal_mode(conn: sqlite3.Connection, data_dir: Path) -> str:
+    """이 위치에 안전한 journal 모드로 맞춘다. 최종 모드를 돌려준다.
+
+    ## 왜 먼저 읽어 보는가
+
+    `journal_mode`는 **DB 파일에 영구 저장되는 값**이다. 이미 원하는 모드면
+    바꿀 이유가 없는데, 그냥 `PRAGMA journal_mode=...`를 쓰면 쓰기 잠금을
+    잡으려 든다.
+
+    ## 왜 예외를 삼키는가
+
+    WAL에서 다른 모드로 바꾸려면 **다른 연결이 하나도 없어야** 한다. 있으면
+    `database is locked`가 난다. 이 프로그램은 수집기(cron)·야간 스캔·GUI·
+    알림기가 같은 DB를 건드리므로 그 상황이 일상이다.
+
+    여기서 예외를 올리면 **연결 자체가 실패해 수집도 화면도 통째로 멈춘다.**
+    실제로 그랬다 - GUI가 5초마다 연결하면서 매번 `timeout=10`만큼 기다렸다
+    실패해 화면이 끊겼다. 모드를 못 바꾼 것은 다음 기회에 바꾸면 되는 일이고,
+    지금 할 일은 있는 그대로라도 여는 것이다. 실제 모드는 진단이 보여 준다.
+    """
+
+    desired = paths.journal_mode_for(data_dir)
+    try:
+        current = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    except sqlite3.Error:  # pragma: no cover - 방어적 처리
+        current = ""
+
+    if str(current).lower() == desired.lower():
+        return desired
+
+    try:
+        return conn.execute(f"PRAGMA journal_mode={desired}").fetchone()[0]
+    except sqlite3.Error as exc:
+        logger.warning(
+            "journal 모드를 %s로 바꾸지 못했습니다 (%s). 지금은 %s로 씁니다 - "
+            "데이터 디렉터리가 네트워크 파일시스템이면 다른 프로세스를 모두 "
+            "멈춘 뒤 다시 열어야 바뀝니다.",
+            desired, exc, current or "알 수 없음",
+        )
+        return str(current)
+
+
+def journal_mode(data_dir: Path) -> Optional[str]:
+    """지금 DB가 실제로 쓰고 있는 journal 모드 (진단용). 못 읽으면 None."""
+
+    target = db_path(data_dir)
+    if not target.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(target), timeout=2)
+    except sqlite3.Error:
+        return None
+    try:
+        return conn.execute("PRAGMA journal_mode").fetchone()[0]
+    except sqlite3.Error:  # pragma: no cover
+        return None
+    finally:
+        conn.close()
+
+
 def connect(data_dir: Path) -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
@@ -126,15 +190,7 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     if not first_time:
         return conn
 
-    # journal 모드는 **데이터 디렉터리가 어디 있느냐**에 따라 정한다.
-    #
-    # WAL은 네트워크 파일시스템에서 동작하지 않는다 - 프로세스들이 작은 공유
-    # 메모리(`-shm`)를 함께 봐야 하는데 그게 성립하지 않는다. 그 결과는 느려짐이
-    # 아니라 **DB 손상**이고, 깨지면 그동안 쌓은 이력이 통째로 날아간다.
-    # NFS 위에서는 고전 롤백 저널(DELETE)로 물러선다 (`paths.journal_mode_for`).
-    #
-    # 이 값은 DB 파일에 영구 저장되므로 프로세스당 한 번만 걸면 된다.
-    conn.execute(f"PRAGMA journal_mode={paths.journal_mode_for(data_dir)}")
+    _apply_journal_mode(conn, data_dir)
     conn.executescript(SCHEMA)
     conn.commit()
     _migrate(conn)

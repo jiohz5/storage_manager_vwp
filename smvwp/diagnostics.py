@@ -165,10 +165,27 @@ def check_data_dir(data_dir: Optional[Path]) -> dict:
     # 여기서 FAIL로 만들지는 않는다 - 프로그램은 DELETE 저널로 물러서서
     # 계속 돌고, 사람이 옮길 때까지 경고만 띄우는 것이 맞다.
     fs_type = paths.filesystem_type(data_dir)
+
+    # 실제로 어떤 journal 모드로 열려 있는지도 본다. 이 값은 DB 파일에 영구
+    # 저장되므로, 예전에 WAL 로 만들어진 DB는 다른 프로세스가 붙어 있는 한
+    # DELETE 로 안 바뀐다 - 그러면 NFS 위에서 WAL 인 채로 도는 최악이 된다.
+    # 조용히 그 상태로 남지 않도록 진단이 드러낸다.
+    modes = {}
+    try:
+        from . import scan_store, store
+
+        for label, module in (("samples.db", store), ("detail_scan.db", scan_store)):
+            mode = module.journal_mode(data_dir)
+            if mode:
+                modes[label] = mode
+    except Exception:  # pragma: no cover - 진단이 실패로 끝나면 안 된다
+        modes = {}
+
     return {
         "configured": True, "ok": True, "path": str(data_dir), "error": None,
         "filesystem": fs_type,
         "network": paths.is_network_filesystem(data_dir),
+        "journal_modes": modes,
     }
 
 
@@ -242,6 +259,17 @@ def format_report(result: dict) -> str:
         fs_type = data_dir.get("filesystem")
         suffix = f" ({fs_type})" if fs_type else ""
         lines.append(f"데이터 디렉터리: {data_dir['path']} - 쓰기 OK{suffix}")
+        for label, mode in sorted((data_dir.get("journal_modes") or {}).items()):
+            lines.append(f"  └ {label}: journal={mode}")
+        if data_dir.get("network") and any(
+            str(mode).lower() == "wal"
+            for mode in (data_dir.get("journal_modes") or {}).values()
+        ):
+            lines.append(
+                "  └ 위험: 네트워크 파일시스템 위인데 WAL 로 열려 있습니다. "
+                "다른 프로세스(cron/GUI/알림기)를 모두 멈춘 뒤 다시 열어야 "
+                "DELETE 로 바뀝니다."
+            )
         if data_dir.get("network"):
             lines.append(
                 "  └ 경고: 네트워크 파일시스템 위입니다. SQLite WAL은 여기서 "
