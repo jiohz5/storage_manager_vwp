@@ -298,12 +298,31 @@ class ParallelScanTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_weekday_night_stays_serial(self):
-        """평일 밤은 지금까지와 똑같이 하나씩 돈다."""
+    def test_both_nights_use_the_same_parallelism_by_default(self):
+        """기본값에서는 평일과 주말이 같게 돈다.
 
-        summary = self._run()
-        self.assertEqual(summary.parallel_accounts, 1)
-        self.assertFalse(summary.weekend_night)
+        야간에는 결재 같은 예외가 아니면 평일에도 사람이 없다는 것이 운영 쪽
+        판단이라, 요일로 세기를 가를 이유가 없다. 두 설정을 따로 두는 것은
+        나중에 갈라야 할 일이 생겼을 때를 위한 여지일 뿐이다."""
+
+        settings = self.config.settings
+        self.assertEqual(
+            settings.nightly_parallel_accounts, settings.weekend_parallel_accounts
+        )
+        weekday = self._run()
+        weekend = self._run(now=self.FRIDAY_NIGHT)
+        self.assertEqual(weekday.parallel_accounts, weekend.parallel_accounts)
+        # 값은 같아도 밤의 성격은 사실대로 갈려야 한다 (보고서 비교에 쓴다).
+        self.assertFalse(weekday.weekend_night)
+        self.assertTrue(weekend.weekend_night)
+
+    def test_split_still_works_when_the_two_settings_differ(self):
+        """야간 작업이 잡힌 기간에 평일만 낮추는 식으로 쓸 수 있어야 한다."""
+
+        self.config.settings.nightly_parallel_accounts = 1
+        self.config.settings.weekend_parallel_accounts = 3
+        self.assertEqual(self._run().parallel_accounts, 1)
+        self.assertEqual(self._run(now=self.FRIDAY_NIGHT).parallel_accounts, 3)
 
     def test_friday_night_is_a_weekend_night(self):
         """금요일 밤의 부하는 토요일 아침에 청구된다 - 그날은 한산하다."""
@@ -322,7 +341,10 @@ class ParallelScanTests(unittest.TestCase):
 
         summary = self._run(now=self.SUNDAY_NIGHT)
         self.assertFalse(summary.weekend_night)
-        self.assertEqual(summary.parallel_accounts, 1)
+        self.assertEqual(
+            summary.parallel_accounts,
+            self.config.settings.nightly_parallel_accounts,
+        )
 
     def test_explicit_parallel_beats_the_weekend_rule(self):
         """실측하려면 사람이 지정한 값이 이겨야 한다."""
