@@ -12,6 +12,7 @@ SQLite는 표준 라이브러리(`sqlite3`)만으로 충분해 폐쇄망 제약�
 from __future__ import annotations
 
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,6 +20,20 @@ from typing import Dict, List, Optional
 
 from . import paths
 
+
+
+# 이미 스키마를 확인한 DB 파일. **이 프로세스 안에서만** 유효하다.
+#
+# `connect()`는 원래 부를 때마다 `executescript(SCHEMA)` + `_migrate()` +
+# `commit()`을 했다. 로컬 디스크에서는 무시할 만한 비용이지만, 데이터 디렉터리가
+# NFS에 있고 저널이 DELETE 모드면 그 commit 하나가 **저널 파일 생성·fsync·삭제
+# 왕복**이 된다. GUI는 5초마다, 스캔 작업자들은 체크포인트마다 연결하므로
+# 그 비용이 그대로 화면 멈춤과 스캔 지연으로 나타났다.
+#
+# 스키마는 멱등이라 프로세스당 한 번이면 충분하다. 프로세스가 여럿이어도
+# 각자 한 번씩 하므로 여전히 안전하다.
+_INITIALIZED = set()
+_INIT_LOCK = threading.Lock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
@@ -102,12 +117,23 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
     conn.row_factory = sqlite3.Row
+    # 스키마 확인은 프로세스당 한 번이면 된다 (_INITIALIZED 주석 참고).
+    key = str(db_path(data_dir))
+    with _INIT_LOCK:
+        first_time = key not in _INITIALIZED
+        if first_time:
+            _INITIALIZED.add(key)
+    if not first_time:
+        return conn
+
     # journal 모드는 **데이터 디렉터리가 어디 있느냐**에 따라 정한다.
     #
     # WAL은 네트워크 파일시스템에서 동작하지 않는다 - 프로세스들이 작은 공유
     # 메모리(`-shm`)를 함께 봐야 하는데 그게 성립하지 않는다. 그 결과는 느려짐이
     # 아니라 **DB 손상**이고, 깨지면 그동안 쌓은 이력이 통째로 날아간다.
     # NFS 위에서는 고전 롤백 저널(DELETE)로 물러선다 (`paths.journal_mode_for`).
+    #
+    # 이 값은 DB 파일에 영구 저장되므로 프로세스당 한 번만 걸면 된다.
     conn.execute(f"PRAGMA journal_mode={paths.journal_mode_for(data_dir)}")
     conn.executescript(SCHEMA)
     conn.commit()

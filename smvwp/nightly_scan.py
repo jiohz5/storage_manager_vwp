@@ -215,7 +215,15 @@ def _drain_checkpoints(
                         return
                     time.sleep(0.2)
                     continue
-                if run_id:
+                # "지금 이 경로"는 작업자가 하나일 때만 적는다.
+                #
+                # 여럿이면 값이 애초에 뜻을 잃는다 - 넷이 동시에 도는데 그중
+                # 마지막에 쓴 하나만 남으니 화면이 "하나씩 돈다"고 오해하게
+                # 만든다. 게다가 이 UPDATE는 체크포인트마다 commit을 부르는데,
+                # 데이터 디렉터리가 NFS면 그 하나가 저널 파일 왕복이라
+                # 작업자 수만큼 쓰기 경합이 늘어난다. 표시용 정보를 위해
+                # 스캔을 느리게 만들 이유가 없다.
+                if run_id and workers <= 1:
                     scan_store.set_current_target(
                         conn, run_id, account.account_id, kind, checkpoint["path"]
                     )
