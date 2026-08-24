@@ -204,6 +204,11 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             if info is not None:
                 scan_lock.request_stop(self.data_dir, info.run_id)
 
+        # 중지 경로를 결정적으로 보려고 작업자를 1개로 고정한다. 여러 개면
+        # 중지 요청이 도착하기 전에 이미 시작된 것들이 있어 개수가 흔들린다
+        # (그 상황은 아래 test_stop_works_with_multiple_workers 가 본다).
+        self.config.settings.checkpoint_workers = 1
+
         runner = FakeCommandRunner(on_du=request_stop_after_first_du)
         with self._patch_commands(runner):
             summary = nightly_scan.run_nightly_scan(
@@ -219,6 +224,38 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertEqual(runner.du_count, 1)
         # 잠금 파일은 어떤 종료 경로에서도 반드시 회수되어야 한다.
         self.assertIsNone(scan_lock.read_lock(self.data_dir))
+        self.assertFalse(scan_lock.is_locked(self.data_dir))
+
+    def test_stop_works_with_multiple_workers(self):
+        """작업자가 여럿이어도 중지는 듣고 잠금은 회수된다.
+
+        이미 시작된 `du`는 끝까지 간다 (강제 kill 없음 - DESIGN 1부 2절 4번).
+        그래서 처리 개수는 작업자 수만큼 흔들릴 수 있고, 여기서 고정할 것은
+        **개수가 아니라 상태와 잠금**이다."""
+
+        self.config.settings.checkpoint_workers = 4
+        self.top_dirs = [f"{self.account_path}/dir{n}" for n in range(1, 13)]
+
+        def request_stop_after_first_du(du_call_no):
+            if du_call_no != 1:
+                return
+            info = scan_lock.read_lock(self.data_dir)
+            if info is not None:
+                scan_lock.request_stop(self.data_dir, info.run_id)
+
+        runner = FakeCommandRunner(on_du=request_stop_after_first_du)
+        with self._patch_commands(runner):
+            summary = nightly_scan.run_nightly_scan(
+                self.data_dir,
+                self.config,
+                bypass_window=True,
+                clock=lambda: datetime(2026, 7, 31, 23, 0),
+                top_level_lister=self.lister,
+            )
+
+        self.assertEqual(summary.status, nightly_scan.STATUS_STOPPED)
+        # 12개를 다 돌지는 않았어야 한다 (중지가 실제로 들었다는 뜻).
+        self.assertLess(runner.du_count, len(self.top_dirs))
         self.assertFalse(scan_lock.is_locked(self.data_dir))
 
 

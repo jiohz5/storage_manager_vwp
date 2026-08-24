@@ -437,14 +437,45 @@ def is_seeded(conn: sqlite3.Connection, account_id: str, kind: str, generation: 
     return count > 0
 
 
-def next_pending(conn: sqlite3.Connection, account_id: str, kind: str, generation: int) -> Optional[sqlite3.Row]:
+def next_pending(
+    conn: sqlite3.Connection,
+    account_id: str,
+    kind: str,
+    generation: int,
+    exclude_ids=None,
+) -> Optional[sqlite3.Row]:
+    """다음에 처리할 대기 체크포인트 하나.
+
+    `exclude_ids`는 **다른 작업자가 지금 붙잡고 있는 것**을 건너뛰기 위한
+    것이다. 여러 작업자가 같은 계정의 체크포인트를 나눠 처리할 때 같은 행을
+    두 번 집지 않게 한다.
+
+    **DB에 'running' 상태를 만들지 않은 것은 의도다** (DESIGN.md 1부 7절).
+    중간 상태를 두면 프로세스가 죽었을 때 그 행을 되돌리는 복구 로직이
+    따로 필요해진다. 배정 정보는 이 프로세스 메모리에만 두므로, 죽으면 함께
+    사라지고 DB에는 여전히 pending만 남아 다음 실행이 그대로 이어받는다.
+    """
+
+    if not exclude_ids:
+        return conn.execute(
+            """
+            SELECT * FROM scan_checkpoints
+            WHERE account_id = ? AND kind = ? AND generation = ? AND status = 'pending'
+            ORDER BY id LIMIT 1
+            """,
+            (account_id, kind, generation),
+        ).fetchone()
+
+    ids = list(exclude_ids)
+    placeholders = ",".join("?" for _ in ids)
     return conn.execute(
-        """
+        f"""
         SELECT * FROM scan_checkpoints
         WHERE account_id = ? AND kind = ? AND generation = ? AND status = 'pending'
+          AND id NOT IN ({placeholders})
         ORDER BY id LIMIT 1
         """,
-        (account_id, kind, generation),
+        (account_id, kind, generation, *ids),
     ).fetchone()
 
 

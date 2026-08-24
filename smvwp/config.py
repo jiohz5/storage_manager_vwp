@@ -96,7 +96,22 @@ ACCOUNT_KINDS = (ACCOUNT_KIND_UNSET, ACCOUNT_KIND_PROJECT, ACCOUNT_KIND_BACKUP)
 # 2->4 구간의 한계 효율이 100%라 4에서 포화가 아니다. 128 슬롯 대비로도
 # 한참 낮다. 더 올릴 여지가 있지만, 서버 쪽 부담은 이쪽에서 관측할 수 없으므로
 # (DESIGN.md 1부 2절 "부하에 대한 겸손함") 재 본 범위 안에서 멈춘다.
-DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS = 4
+# 계정 단위 병렬은 다시 1로 둔다. 아래 `checkpoint_workers`가 같은 동시성을
+# **더 잘** 내기 때문이다 - 계정 병렬은 계정이 여럿일 때만 듣지만, 체크포인트
+# 병렬은 큰 계정 하나짜리 상황에서도 듣는다. 둘을 같이 올리면 동시 `du` 수가
+# 곱으로 늘어 서버에 그만큼 몰린다.
+DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS = 1
+
+# 계정 **하나 안에서** 체크포인트를 동시에 몇 개 처리할지.
+#
+# 이것이 실질적인 동시 `du` 개수다. 실기 실측: 같은 트리에서 병렬
+# walker(`gdu`)가 `du`보다 4배 빨랐다 - 서버가 아니라 우리 요청 방식이
+# 병목이라는 뜻이다. `du`는 한 줄로 걸어 RPC 슬롯 128 중 1개만 쓴다.
+#
+# 계정 병렬 대신 이쪽을 기본으로 삼는 이유: 밤을 다 먹는 큰 계정 하나가
+# 문제였는데, 계정 병렬은 그 계정을 전혀 도와주지 못한다. 체크포인트 병렬은
+# 그 계정 안의 디렉터리들을 동시에 돌므로 바로 듣는다.
+DEFAULT_CHECKPOINT_WORKERS = 4
 
 # 주말 밤에 쓸 동시 실행 계정 수.
 #
@@ -141,6 +156,8 @@ class Settings:
     # 야간 스캔 동시 실행 계정 수 (1 = 직렬). 위 상수의 주석 참고 - 부하
     # 실측용이지 상시 운용값이 아니다.
     nightly_parallel_accounts: int = DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS
+    # 계정 하나 안에서 동시에 처리할 체크포인트 수 (= 실질 동시 du 개수).
+    checkpoint_workers: int = DEFAULT_CHECKPOINT_WORKERS
     # 주말 밤(=끝나는 아침이 토/일인 밤)에 쓸 동시 실행 계정 수. 위 상수 참고.
     weekend_parallel_accounts: int = DEFAULT_WEEKEND_PARALLEL_ACCOUNTS
     # 스캔 중 리소스 표본 주기와 보관 기간.
@@ -290,6 +307,8 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("nightly_parallel_accounts는 1~16이어야 합니다")
     if not 1 <= settings.weekend_parallel_accounts <= 16:
         raise ConfigError("weekend_parallel_accounts는 1~16이어야 합니다")
+    if not 1 <= settings.checkpoint_workers <= 16:
+        raise ConfigError("checkpoint_workers는 1~16이어야 합니다")
     if settings.load_sample_interval_seconds < 5:
         raise ConfigError("load_sample_interval_seconds는 5 이상이어야 합니다")
     if settings.load_sample_retention_days < 1:

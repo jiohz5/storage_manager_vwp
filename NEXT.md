@@ -6,7 +6,7 @@
 
 ## 현재 상태
 
-- 브랜치 `main`. 테스트 **481 passed / 1 skipped**.
+- 브랜치 `main`. 테스트 **490 passed / 1 skipped**.
 - 개발 PC는 Windows + Anaconda Python 3.10, 반입 대상은 RHEL + Python 3.12다.
   GUI 확인은 위젯을 직접 grab해 PNG로 저장하는 방식을 썼다 (창을 밖에서
   캡처하면 DPI 배율과 다른 창 가림이 섞여 판단이 흐려진다).

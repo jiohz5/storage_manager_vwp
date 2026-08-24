@@ -36,6 +36,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -125,6 +126,123 @@ class _ActiveCounter:
             self._count = max(0, self._count - 1)
 
 
+class _CheckpointDispatcher:
+    """대기 중인 체크포인트를 작업자들에게 겹치지 않게 나눠 준다.
+
+    ## 왜 이게 필요한가 - `du`는 혼자서는 NFS를 못 채운다
+
+    반입 대상이 NFS라 병목은 파일 하나당 `getattr` RPC 왕복이다. `du`는
+    디렉터리를 한 줄로 걷기 때문에 **언제나 요청이 하나만** 떠 있고, 실기의
+    RPC 슬롯 상한 128 중 1개만 쓴다.
+
+    실측이 이를 확인해 준다 - 같은 트리에서 병렬 walker(`gdu`)가 `du`보다
+    **4배 빨랐다.** 서버가 아니라 우리 요청 방식이 병목이라는 뜻이다.
+
+    그런데 `gdu`로 갈아탈 수는 없다. 트리를 메모리에 다 만든 뒤 내보내므로
+    시간 초과 시 부분 결과가 통째로 사라지고, 그러면 재개 설계가 무너진다
+    (`detail_scan.process_one_checkpoint` 참고). 대신 **이미 쪼개 둔 체크포인트
+    여러 개를 동시에 `du`로 돌린다** - 같은 동시성을 얻으면서 `du`의 점진적
+    출력은 그대로 유지된다.
+
+    ## DB에 상태를 추가하지 않는다
+
+    배정 정보는 이 프로세스 메모리에만 둔다. DESIGN.md 1부 7절이 체크포인트에
+    'running' 상태를 만들지 않기로 한 것을 지키기 위해서다 - 중간 상태가 있으면
+    프로세스가 죽었을 때 되돌리는 복구 로직이 필요해진다. 여기서는 죽으면 이
+    집합도 함께 사라지고 DB에는 pending만 남으므로, 다음 실행이 아무 조치 없이
+    이어받는다.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._claimed = set()
+
+    def claim(self, conn, account_id: str, kind: str, generation: int):
+        """다음 체크포인트를 잡는다. 남은 것이 없으면 None."""
+
+        with self._lock:
+            row = scan_store.next_pending(
+                conn, account_id, kind, generation, exclude_ids=self._claimed
+            )
+            if row is not None:
+                self._claimed.add(row["id"])
+            return row
+
+    def release(self, checkpoint_id) -> None:
+        with self._lock:
+            self._claimed.discard(checkpoint_id)
+
+    def busy(self) -> int:
+        with self._lock:
+            return len(self._claimed)
+
+
+def _drain_checkpoints(
+    data_dir: Path,
+    account: config_module.Account,
+    kind: str,
+    generation: int,
+    workers: int,
+    handle,
+    should_stop,
+    deadline_reached,
+    load,
+    run_id,
+) -> bool:
+    """이 계정의 대기 체크포인트를 작업자 `workers`개로 비운다.
+
+    끝까지 비웠으면 True, 중지·시간창으로 중단됐으면 False.
+
+    `handle(conn, checkpoint)`가 체크포인트 하나를 처리한다 (`du` 또는 `find`).
+    """
+
+    dispatcher = _CheckpointDispatcher()
+    interrupted = threading.Event()
+
+    def worker():
+        conn = scan_store.connect(data_dir)
+        try:
+            while True:
+                if should_stop() or deadline_reached():
+                    interrupted.set()
+                    return
+                checkpoint = dispatcher.claim(conn, account.account_id, kind, generation)
+                if checkpoint is None:
+                    # 큐가 잠깐 비었다고 끝난 것이 아니다. 다른 작업자가 붙잡고
+                    # 있는 체크포인트가 시간 초과로 **분할되면 자식이 새로
+                    # 들어온다.** 아무도 일하고 있지 않을 때만 진짜 끝이다.
+                    if dispatcher.busy() == 0:
+                        return
+                    time.sleep(0.2)
+                    continue
+                if run_id:
+                    scan_store.set_current_target(
+                        conn, run_id, account.account_id, kind, checkpoint["path"]
+                    )
+                try:
+                    handle(conn, checkpoint)
+                finally:
+                    dispatcher.release(checkpoint["id"])
+                if load is not None:
+                    load.sample()
+        finally:
+            conn.close()
+
+    if workers <= 1:
+        worker()
+    else:
+        threads = [
+            threading.Thread(target=worker, name=f"smvwp-cp-{index}", daemon=True)
+            for index in range(workers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    return not interrupted.is_set()
+
+
 def _rotate_accounts(accounts, today: datetime):
     """오늘 날짜를 시드로 시작 인덱스를 돌려, 특정 계정이 항상 먼저(또는
     항상 나중에) 처리되지 않게 한다."""
@@ -141,6 +259,7 @@ def _default_top_level_lister(account_path: str) -> List[str]:
 
 def _process_baseline(
     conn,
+    data_dir: Path,
     account: config_module.Account,
     settings: config_module.Settings,
     clock: Callable[[], datetime],
@@ -157,27 +276,29 @@ def _process_baseline(
         top_dirs = top_level_lister(account.path)
         scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, generation, top_dirs)
 
-    while True:
-        if should_stop():
-            return "interrupted", generation
-        if deadline_reached():
-            return "interrupted", generation
-        checkpoint = scan_store.next_pending(conn, account.account_id, scan_store.BASELINE, generation)
-        if checkpoint is None:
-            break
-        if run_id:
-            scan_store.set_current_target(
-                conn, run_id, account.account_id, scan_store.BASELINE, checkpoint["path"]
-            )
+    def handle(worker_conn, checkpoint):
         detail_scan.process_one_checkpoint(
-            conn,
+            worker_conn,
             checkpoint,
             settings.detail_task_timeout_seconds,
             max_depth=settings.detail_scan_max_depth,
             generation=generation,
         )
-        if load is not None:
-            load.sample()
+
+    completed = _drain_checkpoints(
+        data_dir,
+        account,
+        scan_store.BASELINE,
+        generation,
+        settings.checkpoint_workers,
+        handle,
+        should_stop,
+        deadline_reached,
+        load,
+        run_id,
+    )
+    if not completed:
+        return "interrupted", generation
 
     # 결과는 체크포인트를 처리하면서 이미 baseline_results에 들어갔다
     # (`du -k` 한 번이 서브트리 전체를 주므로). 예전처럼 끝에서 체크포인트를
@@ -251,7 +372,8 @@ def _process_account(
     run_id: Optional[str] = None,
 ) -> AccountOutcome:
     baseline_status, generation = _process_baseline(
-        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load, run_id
+        conn, data_dir, account, settings, clock, should_stop, deadline_reached,
+        top_level_lister, load, run_id
     )
     if baseline_status == "interrupted":
         return AccountOutcome(
