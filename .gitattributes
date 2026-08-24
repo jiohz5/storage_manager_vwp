@@ -3,6 +3,11 @@
 # Keep source and RHEL launchers portable when the repository is checked out on Windows.
 *.py text eol=lf
 *.csh text eol=lf
+# `.sh`도 같은 이유로 못박는다. Windows 작업본은 CRLF로 체크아웃되는데, 그
+# 상태로 반입하면 `#!/bin/sh\r`이 되어 RHEL에서 "bad interpreter"로 아예
+# 실행되지 않는다. 리눅스 체크아웃만 쓴다면 문제가 없지만, 이 저장소는
+# Windows에서 작업해 반입하는 것이 정상 흐름이다.
+*.sh text eol=lf
 *.md text eol=lf
 *.json text eol=lf
 .gitignore text eol=lf
