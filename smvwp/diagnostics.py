@@ -155,8 +155,21 @@ def check_data_dir(data_dir: Optional[Path]) -> dict:
     try:
         paths.ensure_writable(data_dir)
     except paths.DataDirError as exc:
-        return {"configured": True, "ok": False, "path": str(data_dir), "error": str(exc)}
-    return {"configured": True, "ok": True, "path": str(data_dir), "error": None}
+        return {
+            "configured": True, "ok": False, "path": str(data_dir),
+            "error": str(exc), "filesystem": None, "network": False,
+        }
+
+    # 쓸 수 있다고 안전한 것은 아니다. 네트워크 파일시스템 위면 SQLite가
+    # 조용히 깨질 수 있으므로(WAL은 NFS에서 동작하지 않는다) 반드시 알린다.
+    # 여기서 FAIL로 만들지는 않는다 - 프로그램은 DELETE 저널로 물러서서
+    # 계속 돌고, 사람이 옮길 때까지 경고만 띄우는 것이 맞다.
+    fs_type = paths.filesystem_type(data_dir)
+    return {
+        "configured": True, "ok": True, "path": str(data_dir), "error": None,
+        "filesystem": fs_type,
+        "network": paths.is_network_filesystem(data_dir),
+    }
 
 
 def run_diagnostics(
@@ -226,7 +239,18 @@ def format_report(result: dict) -> str:
     if not data_dir["configured"]:
         lines.append("데이터 디렉터리: 미지정 (정상 - 최초 실행 시 GUI에서 지정합니다)")
     elif data_dir["ok"]:
-        lines.append(f"데이터 디렉터리: {data_dir['path']} - 쓰기 OK")
+        fs_type = data_dir.get("filesystem")
+        suffix = f" ({fs_type})" if fs_type else ""
+        lines.append(f"데이터 디렉터리: {data_dir['path']} - 쓰기 OK{suffix}")
+        if data_dir.get("network"):
+            lines.append(
+                "  └ 경고: 네트워크 파일시스템 위입니다. SQLite WAL은 여기서 "
+                "동작하지 않아 DB가 손상될 수 있습니다."
+            )
+            lines.append(
+                "     지금은 안전한 방식(DELETE 저널)으로 물러서서 돌지만 느립니다. "
+                "**서버 로컬 디스크로 옮기세요.**"
+            )
     else:
         lines.append(f"데이터 디렉터리: {data_dir['path']} - 오류: {data_dir['error']}")
 

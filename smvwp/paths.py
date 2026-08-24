@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -205,3 +206,115 @@ def assert_not_inside_monitored_paths(data_dir: Path, monitored_paths) -> None:
                 f"모니터링 대상 경로({raw_path})가 데이터 디렉터리({data_dir}) 내부에 "
                 "있습니다. 반드시 분리된 경로를 사용하세요."
             )
+
+
+# -- 네트워크 파일시스템 감지 ----------------------------------------------
+#
+# ## 왜 이걸 봐야 하는가
+#
+# SQLite의 WAL 모드는 **네트워크 파일시스템에서 동작하지 않는다.** WAL은 여러
+# 프로세스가 작은 공유 메모리(`-shm`)를 함께 보는 것을 전제로 하는데, 호스트가
+# 다르면 메모리를 공유할 수 없기 때문이다 (SQLite 공식 문서). 게다가 NFS의
+# `fcntl` 권고 잠금은 구현마다 어긋나기로 유명하다.
+#
+# 그 결과는 느려지는 것이 아니라 **DB가 깨지는 것**이고, 깨지면 그동안 쌓은
+# 이력이 통째로 날아간다. 그래서 이 프로그램은 데이터 디렉터리가 네트워크
+# 파일시스템 위에 있으면 WAL을 쓰지 않고 물러선다.
+#
+# ## 왜 마운트 지점을 직접 찾는가
+#
+# `statvfs`는 파일시스템 종류 이름을 주지 않는다. `df -T`를 부르면 외부 명령이
+# 하나 더 늘고 로케일에 따라 출력이 달라진다. `/proc/mounts`는 커널이 주는
+# 원본이라 가장 안정적이다 (`loadstat`이 `top` 대신 `/proc`을 읽는 것과 같은
+# 이유다).
+
+# 네트워크 파일시스템 종류. 여기 없는 종류는 로컬로 본다 - 모르는 것을
+# 네트워크라고 단정해 WAL을 끄면, 멀쩡한 로컬 환경에서 이유 없이 느려진다.
+NETWORK_FILESYSTEMS = frozenset({
+    "nfs", "nfs4", "cifs", "smbfs", "smb3", "afs", "9p",
+    "fuse.sshfs", "glusterfs", "lustre", "beegfs",
+})
+
+PROC_MOUNTS = Path("/proc/mounts")
+
+
+def _mount_entries(source: Optional[Path] = None) -> List["tuple"]:
+    """`/proc/mounts`에서 (마운트 지점, 종류) 목록. 못 읽으면 빈 목록."""
+
+    source = source or PROC_MOUNTS
+    try:
+        raw = source.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    entries = []
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        # /proc/mounts는 공백 등을 8진 이스케이프로 적는다 (\040 = 공백).
+        mount_point = parts[1].replace("\\040", " ")
+        entries.append((mount_point, parts[2]))
+    return entries
+
+
+def _mount_comparable(path: Path) -> str:
+    """마운트 지점과 견줄 수 있는 표기로 바꾼다.
+
+    **심링크는 반드시 풀어야 한다** - `/user/proj`가 NFS 마운트를 가리키는
+    심링크면, 풀지 않고는 그 경로가 NFS 위라는 사실을 알 수 없다. 다만 그
+    해석은 POSIX에서만 뜻이 있다 (`/proc/mounts`가 있는 곳). 개발 PC에서는
+    `/user`가 `C:\\user`로 바뀌어 오히려 비교가 깨지므로 문자열만 다듬는다.
+    """
+
+    text = str(path)
+    if os.name == "posix":
+        try:
+            text = os.path.realpath(text)
+        except OSError:  # pragma: no cover - 방어적 처리
+            pass
+    return posixpath.normpath(text.replace("\\", "/"))
+
+
+def filesystem_type(path: Path, source: Optional[Path] = None) -> Optional[str]:
+    """이 경로가 올라가 있는 파일시스템 종류 (`nfs4`, `xfs` 등). 모르면 None.
+
+    가장 긴 마운트 지점이 이긴다 - `/`와 `/user`가 둘 다 접두사면 `/user`가
+    실제로 그 경로를 담고 있는 마운트다.
+    """
+
+    entries = _mount_entries(source)
+    if not entries:
+        return None
+
+    target = _mount_comparable(path)
+
+    best_point = ""
+    best_type = None
+    for mount_point, fs_type in entries:
+        if target == mount_point or target.startswith(mount_point.rstrip("/") + "/"):
+            if len(mount_point) >= len(best_point):
+                best_point, best_type = mount_point, fs_type
+    return best_type
+
+
+def is_network_filesystem(path: Path, source: Optional[Path] = None) -> bool:
+    """이 경로가 네트워크 파일시스템 위인가.
+
+    판단이 안 되면(리눅스가 아니거나 `/proc/mounts`를 못 읽으면) False를 준다 -
+    모르는 상태에서 WAL을 끄면 개발 PC 같은 정상 환경이 이유 없이 느려진다.
+    """
+
+    fs_type = filesystem_type(path, source)
+    return bool(fs_type) and fs_type.lower() in NETWORK_FILESYSTEMS
+
+
+def journal_mode_for(path: Path, source: Optional[Path] = None) -> str:
+    """이 경로에서 안전한 SQLite journal 모드.
+
+    네트워크 파일시스템이면 `DELETE`(고전 롤백 저널)로 물러선다. 느리지만
+    `-shm` 공유 메모리를 요구하지 않아, WAL처럼 조용히 깨지지 않는다.
+    SQLite 문서가 네트워크 저장소에 권하는 방식이기도 하다.
+    """
+
+    return "DELETE" if is_network_filesystem(path, source) else "WAL"

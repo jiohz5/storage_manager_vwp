@@ -28,6 +28,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from . import paths
+
 BASELINE = "baseline"
 ACTIVITY = "activity"
 
@@ -188,7 +190,13 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # journal 모드는 **데이터 디렉터리가 어디 있느냐**에 따라 정한다.
+    #
+    # WAL은 네트워크 파일시스템에서 동작하지 않는다 - 프로세스들이 작은 공유
+    # 메모리(`-shm`)를 함께 봐야 하는데 그게 성립하지 않는다. 그 결과는 느려짐이
+    # 아니라 **DB 손상**이고, 깨지면 그동안 쌓은 이력이 통째로 날아간다.
+    # NFS 위에서는 고전 롤백 저널(DELETE)로 물러선다 (`paths.journal_mode_for`).
+    conn.execute(f"PRAGMA journal_mode={paths.journal_mode_for(data_dir)}")
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.commit()
