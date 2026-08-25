@@ -57,6 +57,58 @@ class CollectorWorker(QObject):
                 self._running = False
 
 
+class ScanStatusWorker(QObject):
+    """스캔 상태 스냅샷을 **백그라운드 스레드에서** 읽는다.
+
+    ## 왜 스레드로 빼는가
+
+    `get_status_snapshot`은 계정마다 십여 개의 쿼리를 던진다. 로컬 디스크에서는
+    무시할 만하지만, 데이터 디렉터리가 NFS 위에 있으면 캐시에 없는 페이지마다
+    네트워크 읽기가 된다. 화면은 이것을 **5초마다** 부르므로, GUI 스레드에서
+    돌리면 그 시간 동안 창이 통째로 멈춘다 - 실기에서 실제로 그랬다.
+
+    ## 겹쳐 돌리지 않는다
+
+    NFS가 느려 한 번이 5초를 넘기면 요청이 계속 쌓여 상황이 더 나빠진다.
+    이전 조회가 끝나지 않았으면 이번 차례는 그냥 건너뛴다 - 어차피 다음
+    주기에 최신값을 다시 읽는다.
+    """
+
+    finished = pyqtSignal(object)  # nightly_scan.StatusSnapshot
+    failed = pyqtSignal(str)
+
+    def __init__(self, data_dir: Path, get_config, parent: QObject = None):
+        super().__init__(parent)
+        self._data_dir = data_dir
+        self._get_config = get_config
+        self._lock = threading.Lock()
+        self._running = False
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._running
+
+    def refresh_async(self) -> bool:
+        """조회를 시작한다. 이미 돌고 있으면 False (건너뜀)."""
+
+        with self._lock:
+            if self._running:
+                return False
+            self._running = True
+        threading.Thread(target=self._run, daemon=True).start()
+        return True
+
+    def _run(self) -> None:
+        try:
+            snapshot = nightly_scan.get_status_snapshot(self._data_dir, self._get_config())
+            self.finished.emit(snapshot)
+        except Exception as exc:  # pragma: no cover - 방어적 처리
+            self.failed.emit(str(exc))
+        finally:
+            with self._lock:
+                self._running = False
+
+
 class CollectorScheduler:
     """QTimer로 `run_collection_cycle`을 주기적으로 호출하는 얇은 래퍼."""
 

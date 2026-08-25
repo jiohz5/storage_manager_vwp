@@ -53,7 +53,7 @@ from .. import (
     store,
     tiers,
 )
-from ..scheduler import CollectorScheduler, NightlyScanWorker
+from ..scheduler import CollectorScheduler, NightlyScanWorker, ScanStatusWorker
 from . import theme, widgets
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
@@ -152,8 +152,13 @@ SCAN_ACCOUNT_COLUMN_KEYS = [
     SCAN_ACCT_NOTE,
 ) = range(8)
 
-# 스캔이 도는 동안 진행 상황(남은 체크포인트 수)을 주기적으로 다시 읽는 간격.
+# 스캔이 도는 동안 진행 상황을 다시 읽는 간격.
 SCAN_STATUS_REFRESH_MS = 5000
+
+# 스캔이 안 돌 때의 간격. 5초로 계속 두면 아무 일도 없는 시간에도 DB를 계속
+# 두들긴다 - 데이터 디렉터리가 NFS 위면 그 자체가 부담이고, 정작 바뀌는 것도
+# 없다. 스캔이 시작되면 위 간격으로 다시 좁힌다.
+SCAN_STATUS_IDLE_REFRESH_MS = 30000
 
 # 히어로 - 창을 열자마자 시선이 먼저 닿는 자리. "지금 가장 급한 것 하나"를
 # 큰 숫자로 못박고, 나머지는 그 아래 작은 글씨로 둔다. 표를 훑기 전에 판단이
@@ -203,9 +208,15 @@ class MainWindow(QMainWindow):
         self._scan_worker.finished.connect(self._on_scan_finished)
         self._scan_worker.failed.connect(self._on_scan_failed)
 
+        # 스캔 상태 조회는 계정마다 십여 개의 쿼리를 던진다. NFS 위에서는
+        # 그것만으로 창이 멈추므로 **GUI 스레드에서 하지 않는다.**
+        self._status_worker = ScanStatusWorker(self._data_dir, lambda: self._config, self)
+        self._status_worker.finished.connect(self._on_scan_status_ready)
+        self._status_worker.failed.connect(self._on_scan_status_failed)
+
         self._scan_status_timer = QTimer(self)
         self._scan_status_timer.timeout.connect(self._refresh_scan_section)
-        self._scan_status_timer.start(SCAN_STATUS_REFRESH_MS)
+        self._scan_status_timer.start(SCAN_STATUS_IDLE_REFRESH_MS)
         self._refresh_scan_section()
 
     def show_first_run_if_needed(self) -> None:
@@ -341,7 +352,12 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSortIndicator(
             column, Qt.DescendingOrder if self._sort_desc else Qt.AscendingOrder
         )
-        self._refresh_table_from_store()
+        # 다시 **그리기만** 한다. 예전에는 `_refresh_table_from_store()`를 불러
+        # 표본을 다시 읽고 FULL 예측까지 새로 계산했는데, 예측은 30일치 표본
+        # (계정당 약 2,880행)을 읽는 작업이라 데이터 디렉터리가 NFS 위면
+        # **헤더를 누를 때마다 창이 멈췄다.** 정렬은 이미 들고 있는 값의
+        # 순서만 바꾸는 일이라 다시 읽을 이유가 없다.
+        self._render_table(self._latest_samples)
 
     def _sorted_accounts(self, latest) -> list:
         """정렬 기준에 맞춰 계정 순서를 정한다.
@@ -1209,14 +1225,19 @@ class MainWindow(QMainWindow):
         self._refresh_growth_table()
 
     def _refresh_scan_section(self) -> None:
-        """스캔 상태를 DB에서 읽어 표시한다 (읽기 전용 - 여기서 스캔을 돌리지
-        않는다)."""
+        """스캔 상태 조회를 **요청만** 한다. 실제 읽기는 백그라운드에서 돈다.
 
-        try:
-            snapshot = nightly_scan.get_status_snapshot(self._data_dir, self._config)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.scan_status_label.setText(i18n.t("scan.status_error", message=exc))
-            return
+        예전에는 여기서 바로 DB를 읽었는데, 계정마다 십여 개의 쿼리라 데이터
+        디렉터리가 NFS 위면 그동안 창이 통째로 멈췄다. 결과는
+        `_on_scan_status_ready`가 받는다."""
+
+        self._status_worker.refresh_async()
+
+    def _on_scan_status_failed(self, message: str) -> None:
+        self.scan_status_label.setText(i18n.t("scan.status_error", message=message))
+
+    def _on_scan_status_ready(self, snapshot) -> None:
+        """백그라운드가 읽어 온 스냅샷을 화면에 그린다 (GUI 스레드)."""
 
         self._scan_snapshot = snapshot
         running = snapshot.is_running or self._scan_worker.is_running()
@@ -1286,6 +1307,11 @@ class MainWindow(QMainWindow):
         # 막대는 도는 동안에만 보인다. 멈춰 있는데도 계속 떠 있으면 "뭔가
         # 돌고 있나?"라는 오해를 만든다.
         self.scan_progress.setVisible(running)
+
+        # 도는 동안만 촘촘히 본다. 멈춰 있으면 30초로 늦춰 NFS 부담을 줄인다.
+        wanted = SCAN_STATUS_REFRESH_MS if running else SCAN_STATUS_IDLE_REFRESH_MS
+        if self._scan_status_timer.interval() != wanted:
+            self._scan_status_timer.start(wanted)
 
         self.scan_run_btn.setEnabled(not running)
         self.scan_stop_btn.setEnabled(running)
