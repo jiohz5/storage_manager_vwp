@@ -32,6 +32,7 @@ import pathlib
 import subprocess
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 
 
 # 순회 구현은 `smvwp.walker` 하나만 쓴다.
@@ -58,6 +59,64 @@ def walk_once(path: str, workers: int):
     return elapsed, total, outcome.unreadable
 
 
+def _walk_subtree(job):
+    """프로세스 하나가 맡은 서브트리들을 훑는다.
+
+    **모듈 최상위 함수여야 한다** - 프로세스 풀이 함수를 pickle 로 보내기
+    때문에 지역 함수나 람다는 쓸 수 없다.
+
+    돌려주는 것은 숫자 몇 개뿐이다. 경로 목록을 통째로 돌려주면 pickle 비용이
+    측정을 오염시킨다.
+    """
+
+    paths, workers = job
+    total_kb = 0
+    unreadable = 0
+    for path in paths:
+        outcome = walker_module.walk_tree(path, max_depth=0, workers=workers)
+        total_kb += outcome.root_size_kb or 0
+        unreadable += outcome.unreadable
+    return total_kb, unreadable
+
+
+def top_level_dirs(path: str):
+    """프로세스에 나눠 줄 단위. 야간 스캔의 체크포인트와 같은 단위다."""
+
+    try:
+        with os.scandir(path) as entries:
+            return sorted(
+                entry.path for entry in entries if entry.is_dir(follow_symlinks=False)
+            )
+    except OSError:
+        return []
+
+
+def walk_multiprocess(path: str, procs: int, workers: int):
+    """최상위 디렉터리를 프로세스 `procs` 개에 나눠 훑는다.
+
+    루트 바로 아래 파일은 별도로 세지 않고 최상위 디렉터리 합만 본다 - 이
+    측정의 목적은 절대값이 아니라 **프로세스를 늘리면 빨라지는가**이다.
+    """
+
+    subtrees = top_level_dirs(path)
+    if not subtrees:
+        return None, 0, 0
+
+    buckets = [[] for _ in range(procs)]
+    for index, subtree in enumerate(subtrees):
+        buckets[index % procs].append(subtree)
+    jobs = [(bucket, workers) for bucket in buckets if bucket]
+
+    started = time.monotonic()
+    total_kb = 0
+    unreadable = 0
+    with ProcessPoolExecutor(max_workers=procs) as pool:
+        for kb, failed in pool.map(_walk_subtree, jobs):
+            total_kb += kb
+            unreadable += failed
+    return time.monotonic() - started, total_kb, unreadable
+
+
 def run_du(path: str):
     started = time.monotonic()
     proc = subprocess.run(["du", "-sk", "--", path], capture_output=True)
@@ -75,6 +134,18 @@ def main() -> int:
     parser.add_argument(
         "--workers", default="1,2,4,8,16",
         help="시험할 스레드 수 (쉼표 구분). 기본 1,2,4,8,16",
+    )
+    parser.add_argument(
+        "--procs", default="",
+        help=(
+            "시험할 **프로세스** 수 (쉼표 구분, 예: 1,2,4,8). "
+            "스레드는 --proc-threads 로 고정한다. GIL 때문에 스레드만으로는 "
+            "안 빨라지는 경우 이쪽이 답이다."
+        ),
+    )
+    parser.add_argument(
+        "--proc-threads", type=int, default=4,
+        help="프로세스 측정에서 프로세스마다 쓸 스레드 수 (기본 4)",
     )
     args = parser.parse_args()
 
@@ -122,6 +193,30 @@ def main() -> int:
         if unreadable:
             print(f"{'':16}읽지 못한 항목 {unreadable:,}개 (권한 등)")
 
+    if args.procs:
+        print("-" * 68)
+        print(f"프로세스 분할 (프로세스마다 스레드 {args.proc_threads}개)")
+        for text in args.procs.split(","):
+            text = text.strip()
+            if not text.isdigit():
+                continue
+            procs = int(text)
+            elapsed, kilobytes, unreadable = walk_multiprocess(
+                args.path, procs, args.proc_threads
+            )
+            if elapsed is None:
+                print("  최상위 디렉터리가 없어 나눌 수 없습니다")
+                break
+            total = procs * args.proc_threads
+            speed = f"{cold_seconds / elapsed:.1f}x" if elapsed > 0 else "-"
+            print(
+                f"proc x{procs:<3} (동시 {total:>3}) {elapsed:8.1f}s"
+                f"   {kilobytes:>14,} KB   {speed:>6}"
+            )
+            results.append((f"proc{procs}x{args.proc_threads}", elapsed))
+            if unreadable:
+                print(f"{'':16}읽지 못한 항목 {unreadable:,}개")
+
     warm_seconds, _ = run_du(args.path)
     print("-" * 68)
     print(f"{'du -sk (따뜻함)':<20}{warm_seconds:8.1f}s"
@@ -136,9 +231,9 @@ def main() -> int:
     else:
         fair = cold_seconds
         print("  · 캐시 영향이 작습니다. 위 배수를 그대로 읽으면 됩니다.")
-    for workers, elapsed in results:
+    for label, elapsed in results:
         if elapsed > 0:
-            print(f"      x{workers:<3} {fair / elapsed:5.1f}x")
+            print(f"      {str(label):<12} {fair / elapsed:5.1f}x")
     print("  · 크기가 '일치'해야 의미가 있습니다. 차이가 크면 세는 기준이")
     print("    어긋난 것이니 그대로 쓰면 안 됩니다.")
     print("  · 스레드를 늘려도 안 빨라지는 지점이 이 서버의 한계입니다.")
