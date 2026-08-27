@@ -189,10 +189,17 @@ def main() -> int:
         print("      du 와 일치하지 않는 것이 정상이며 속도만 참고하세요.")
         print("      실제 판단은 리눅스에서 하세요.\n")
 
-    du_seconds, du_kb = run_du(args.path)
-    print(f"{'du -sk':<16}{du_seconds:8.1f}s   {du_kb if du_kb is not None else '?':>14,} KB")
-    print("-" * 62)
+    # `du` 를 **먼저 한 번, 파이썬 뒤에 또 한 번** 잰다.
+    #
+    # 처음 것은 차가운 캐시를 다 물고, 뒤 것은 파이썬과 같은(따뜻한) 조건이다.
+    # 이걸 안 하면 파이썬이 캐시 덕을 본 것을 실력으로 착각한다 - 실제로
+    # 첫 측정에서 x1 이 du 보다 4배 빠르게 나왔는데, 그 대부분이 캐시였다.
+    cold_seconds, du_kb = run_du(args.path)
+    print(f"{'du -sk (차가움)':<20}{cold_seconds:8.1f}s   "
+          f"{du_kb if du_kb is not None else '?':>14,} KB")
+    print("-" * 68)
 
+    results = []
     baseline = None
     for text in args.workers.split(","):
         text = text.strip()
@@ -206,21 +213,36 @@ def main() -> int:
         if baseline is None:
             baseline = elapsed
 
-        speed = f"{du_seconds / elapsed:.1f}x" if elapsed > 0 else "-"
+        speed = f"{cold_seconds / elapsed:.1f}x" if elapsed > 0 else "-"
         match = ""
         if du_kb:
             gap = abs(walker.kilobytes - du_kb) / du_kb * 100
             match = "일치" if gap < 1 else f"차이 {gap:.1f}%"
         print(
-            f"python x{workers:<7}{elapsed:8.1f}s   {walker.kilobytes:>14,} KB"
-            f"   du 대비 {speed:>6}   {match}"
+            f"python x{workers:<11}{elapsed:8.1f}s   {walker.kilobytes:>14,} KB"
+            f"   {speed:>6}   {match}"
         )
+        results.append((workers, elapsed))
         if walker.errors:
             print(f"{'':16}읽지 못한 항목 {walker.errors:,}개 (권한 등)")
 
+    warm_seconds, _ = run_du(args.path)
+    print("-" * 68)
+    print(f"{'du -sk (따뜻함)':<20}{warm_seconds:8.1f}s"
+          f"   <- 파이썬과 같은 조건에서의 du")
+
     print()
     print("읽는 법")
-    print("  · 'du 대비'가 1.0x 를 넘는 지점부터 파이썬 순회가 이깁니다.")
+    if cold_seconds > 0 and warm_seconds * 2 < cold_seconds:
+        fair = warm_seconds
+        print(f"  · 캐시 영향이 큽니다 (du 가 {cold_seconds:.1f}s -> {warm_seconds:.1f}s).")
+        print(f"    **공정한 기준은 따뜻한 du {warm_seconds:.1f}s** 입니다:")
+    else:
+        fair = cold_seconds
+        print("  · 캐시 영향이 작습니다. 위 배수를 그대로 읽으면 됩니다.")
+    for workers, elapsed in results:
+        if elapsed > 0:
+            print(f"      x{workers:<3} {fair / elapsed:5.1f}x")
     print("  · 크기가 '일치'해야 의미가 있습니다. 차이가 크면 세는 기준이")
     print("    어긋난 것이니 그대로 쓰면 안 됩니다.")
     print("  · 스레드를 늘려도 안 빨라지는 지점이 이 서버의 한계입니다.")
