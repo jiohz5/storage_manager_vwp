@@ -57,8 +57,9 @@ from typing import List, Optional, Set
 HAVE_ST_BLOCKS = hasattr(os.stat(os.curdir), "st_blocks")
 FALLBACK_BLOCK_SIZE = 4096
 
-# 큐가 비었지만 다른 작업자가 아직 일하는 중일 때 쉬는 간격.
-IDLE_SLEEP_SECONDS = 0.005
+# 알림을 놓쳤을 때를 대비한 안전망. 정상 흐름에서는 알림으로 깨어나므로
+# 이 시간만큼 기다리는 일이 없다.
+WAIT_TIMEOUT_SECONDS = 0.05
 
 
 def disk_blocks(info) -> int:
@@ -118,7 +119,17 @@ class ParallelWalker:
         self.timeout_seconds = timeout_seconds
         self.exclude_names = exclude_names or set()
 
-        self._lock = threading.Lock()
+        # 잠금을 둘로 나눈다. 하나로 두면 큐를 집는 스레드와 트리를 갱신하는
+        # 스레드가 서로를 막는다.
+        #
+        # 그리고 **조건변수를 쓴다.** 예전에는 큐가 비면 5ms 자고 다시 잠금을
+        # 잡는 폴링이었는데, 스레드가 늘수록 그 폴링만으로 초당 수천 번 잠금을
+        # 다퉜다. 실측이 이를 드러냈다 - 한 프로세스 8스레드는 4스레드와 같은
+        # 시간이었지만, 두 프로세스로 4스레드씩 돌리면 처리량이 2배였다.
+        # 서버가 아니라 이쪽이 한계였다는 뜻이다.
+        self._queue_lock = threading.Lock()
+        self._cond = threading.Condition(self._queue_lock)
+        self._tree_lock = threading.Lock()
         self._queue = deque()
         self._busy = 0
         self._deadline: Optional[float] = None
@@ -135,23 +146,47 @@ class ParallelWalker:
         self.unreadable = 0
 
     # -- 큐 -----------------------------------------------------------
-    def _take(self) -> Optional[_Node]:
-        with self._lock:
-            if self._queue:
-                self._busy += 1
-                return self._queue.popleft()
-            return None
+    def _next(self) -> Optional[_Node]:
+        """다음 디렉터리를 받는다. 더 없으면 None (그때가 순회의 끝).
 
-    def _idle(self) -> bool:
-        with self._lock:
-            return not self._queue and self._busy == 0
+        큐가 비었다고 바로 끝내지 않는다 - 다른 스레드가 처리 중인 디렉터리에서
+        하위가 새로 나올 수 있기 때문이다. **아무도 일하지 않고 큐도 비었을
+        때**만 진짜 끝이고, 그 사실을 확인하면 남은 스레드도 모두 깨워 내보낸다.
+
+        `wait`에 시간 제한을 둔 것은 안전망이다 - 알림을 한 번 놓쳐도 영원히
+        멈춰 있지 않는다.
+        """
+
+        with self._cond:
+            while True:
+                if self._stop.is_set():
+                    return None
+                if self._queue:
+                    self._busy += 1
+                    return self._queue.popleft()
+                if self._busy == 0:
+                    self._cond.notify_all()
+                    return None
+                self._cond.wait(timeout=WAIT_TIMEOUT_SECONDS)
+
+    def _finish(self, children: List[_Node]) -> None:
+        """스캔이 끝난 뒤 큐에 자식을 넣고 대기 중인 스레드를 깨운다."""
+
+        with self._cond:
+            self._queue.extend(children)
+            self._busy -= 1
+            self._cond.notify_all()
+
+    def _wake_all(self) -> None:
+        with self._cond:
+            self._cond.notify_all()
 
     def _expired(self) -> bool:
         return self._deadline is not None and time.monotonic() >= self._deadline
 
     # -- 완료 전파 ----------------------------------------------------
     def _settle(self, node: _Node) -> None:
-        """이 디렉터리가 끝났으면 부모로 합계를 올린다 (잠금 안에서 부를 것).
+        """이 디렉터리가 끝났으면 부모로 합계를 올린다 (`_tree_lock` 안에서 부를 것).
 
         부모도 그 때문에 끝날 수 있으므로 위로 이어서 전파한다. 재귀 대신
         반복문을 쓴다 - 깊은 트리에서 스택이 넘치면 순회가 통째로 죽는다.
@@ -172,8 +207,13 @@ class ParallelWalker:
             current = parent
 
     # -- 작업자 -------------------------------------------------------
-    def _scan_one(self, node: _Node) -> List[_Node]:
-        """디렉터리 하나를 읽고 새로 찾은 하위 디렉터리 노드를 돌려준다."""
+    def _scan_one(self, node: _Node) -> tuple:
+        """디렉터리 하나를 읽는다. `(파일 수, 디렉터리 수, 못 읽은 수, 자식들)`.
+
+        **큐는 건드리지 않는다.** 큐 반납은 호출자가 `finally`에서 하므로,
+        여기서 예외가 나도 `_busy` 가 새지 않는다 (새면 아무도 일하지 않는데
+        `_busy > 0` 이라 순회가 영원히 안 끝난다).
+        """
 
         children: List[_Node] = []
         blocks = 0
@@ -205,7 +245,9 @@ class ParallelWalker:
         except OSError:
             unreadable += 1
 
-        with self._lock:
+        # 트리 갱신만 잠금 안에서 한다. 카운터는 스레드 지역으로 세고 끝에
+        # 한 번만 합친다 - 디렉터리마다 잠금을 잡을 이유가 없다.
+        with self._tree_lock:
             for key, block_count in hardlinks:
                 if key in self._seen_inodes:
                     continue
@@ -216,34 +258,45 @@ class ParallelWalker:
             node.blocks += blocks
             node.pending_children += len(children)
             node.scanned = True
-            self.file_count += files
-            self.dir_count += 1
-            self.unreadable += unreadable
-            self._queue.extend(children)
             self._all_nodes.extend(children)
             self._settle(node)
-            self._busy -= 1
-        return children
+
+        return files, 1, unreadable, children
 
     def _worker(self) -> None:
-        while not self._stop.is_set():
-            if self._expired():
-                self._stop.set()
-                return
-            node = self._take()
-            if node is None:
-                if self._idle():
+        files = dirs = unreadable = 0
+        try:
+            while True:
+                if self._expired():
+                    self._stop.set()
+                    self._wake_all()   # 자고 있는 동료들도 내보낸다
                     return
-                time.sleep(IDLE_SLEEP_SECONDS)
-                continue
-            self._scan_one(node)
+                node = self._next()
+                if node is None:
+                    return
+                children: List[_Node] = []
+                try:
+                    found, scanned, failed, children = self._scan_one(node)
+                    files += found
+                    dirs += scanned
+                    unreadable += failed
+                finally:
+                    # 무슨 일이 있어도 큐를 반납한다. 안 하면 `_busy` 가 남아
+                    # 순회가 끝나지 않는다.
+                    self._finish(children)
+        finally:
+            # 지역으로 센 것을 끝에 한 번만 합친다.
+            with self._tree_lock:
+                self.file_count += files
+                self.dir_count += dirs
+                self.unreadable += unreadable
 
     # -- 실행 ---------------------------------------------------------
     def run(self) -> WalkOutcome:
         if self.timeout_seconds is not None:
             self._deadline = time.monotonic() + self.timeout_seconds
 
-        with self._lock:
+        with self._cond:
             self._queue.append(self._root_node)
 
         try:
