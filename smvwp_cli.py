@@ -6,7 +6,7 @@
     ./smvwp_cli.py scan                    # 야간 상세 스캔 (cron, 22:00~06:00)
     ./smvwp_cli.py scan --now              # 시간창 무시하고 지금 실행
     ./smvwp_cli.py scan --stop             # 실행 중인 스캔에 안전 중지 요청
-    ./smvwp_cli.py scan --now --parallel 4 # 계정 4개 동시 - 부하 실측용
+    ./smvwp_cli.py scan --now --parallel 4 # 볼륨 4개 동시 - 부하 실측용
     ./smvwp_cli.py notify                  # 트레이 알림기 실행
     ./smvwp_cli.py notify --install-autostart
 
@@ -233,7 +233,7 @@ def command_scan(args) -> int:
     night = "주말 밤" if summary.weekend_night else "평일 밤"
     print(
         f"야간 상세 스캔 종료 (run_id={summary.run_id}, 상태={summary.status}, "
-        f"{night} · 동시 계정={summary.parallel_accounts})"
+        f"{night} · 동시 볼륨={summary.parallel_accounts})"
     )
     for outcome in summary.accounts:
         print(
@@ -279,7 +279,7 @@ def _print_scan_status(data_dir, config) -> int:
             night = "주말 밤" if weekend else "평일 밤"
         print(f"최근 실행  {run['run_id']}  상태={run['status']}")
         print(f"  시작 {str(run['started_at'])[:19]}  종료 {str(run['ended_at'] or '-')[:19]}")
-        print(f"  {night} · 동시 계정 {parallel or 1}개")
+        print(f"  {night} · 동시 볼륨 {parallel or 1}개")
         print()
 
         header = (
@@ -376,9 +376,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help=(
-            "계정 N개를 동시에 스캔한다 (기본: 설정값, 보통 1=직렬). "
-            "부하 실측용이다 - 같은 볼륨에 몰려 있으면 오히려 느려질 수 있다. "
-            "결과는 보고서의 '스캔 중 리소스 변화'에서 확인한다."
+            "서로 다른 볼륨 N개를 동시에 스캔한다 (기본: 설정값, 보통 1=직렬). "
+            "같은 볼륨의 계정은 이 값과 무관하게 하나씩 돈다 - 같은 볼륨을 "
+            "여럿이 두들겨 봐야 빨라지지 않는다. 결과는 보고서의 "
+            "'스캔 중 리소스 변화'에서 확인한다."
         ),
     )
     scan.set_defaults(func=command_scan)

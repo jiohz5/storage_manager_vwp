@@ -220,8 +220,11 @@ class ResourceReportSectionTests(unittest.TestCase):
         self.assertLessEqual(len(rows), reports.LOAD_TIMELINE_ROWS + 1)
 
 
-class ParallelScanTests(unittest.TestCase):
-    """계정 병렬 실행 (기본 꺼짐, 부하 실측용 경로)."""
+class _ScanHarness:
+    """계정 셋을 만들고 야간 스캔을 한 번 돌리는 준비 코드.
+
+    시험은 담지 않는다 - 볼륨이 서로 다를 때와 같을 때는 기대값이 정반대라
+    한쪽을 다른 쪽에 상속시키면 뜻 없는 skip 만 늘어난다."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -239,6 +242,22 @@ class ParallelScanTests(unittest.TestCase):
             )
         config_module.save_config(self.data_dir, self.config)
         self.lister = lambda path: [f"{path}/dir1", f"{path}/dir2"]
+        self._separate_volumes()
+
+    def _separate_volumes(self):
+        """세 계정이 **서로 다른 볼륨**에 있다고 본다.
+
+        임시 디렉터리는 실제로는 한 장치라, 흉내 내지 않으면 병렬 경로 자체가
+        열리지 않는다 (한 볼륨 = 직렬). 같은 볼륨일 때 어떻게 되는지는
+        `SameVolumeTests` 가 따로 본다."""
+
+        patcher = patch.object(
+            nightly_scan.paths,
+            "volume_key",
+            side_effect=lambda path, source=None: str(path),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -273,6 +292,10 @@ class ParallelScanTests(unittest.TestCase):
                 baseline_warmup_seconds=0.0,
                 **kwargs,
             )
+
+
+class ParallelScanTests(_ScanHarness, unittest.TestCase):
+    """계정들이 **서로 다른 볼륨**에 있을 때 (병렬이 실제로 이득인 경우)."""
 
     def test_parallel_run_completes_every_account(self):
         summary = self._run(parallel_accounts=3)
@@ -369,7 +392,20 @@ class ParallelScanTests(unittest.TestCase):
 
         summary = self._run(parallel_accounts=999)
         self.assertEqual(summary.status, nightly_scan.STATUS_COMPLETED)
-        self.assertEqual(summary.parallel_accounts, 16)
+        # 999는 16으로 잘리고, 볼륨이 3개뿐이라 실제로는 3갈래로 돈다.
+        # 기록에 남는 것은 상한이 아니라 이 실측치다.
+        self.assertEqual(summary.parallel_accounts, 3)
+
+    def test_more_volumes_than_the_limit_still_run_every_account(self):
+        """상한을 넘는 묶음은 버리지 않고 앞쪽 묶음에 이어 붙인다."""
+
+        summary = self._run(parallel_accounts=2)
+        self.assertEqual(summary.status, nightly_scan.STATUS_COMPLETED)
+        self.assertEqual(summary.parallel_accounts, 2)
+        self.assertEqual(
+            sorted(outcome.account_name for outcome in summary.accounts),
+            ["a", "b", "c"],
+        )
 
     def test_baseline_sample_is_recorded_before_work_starts(self):
         summary = self._run(parallel_accounts=2)
@@ -381,6 +417,53 @@ class ParallelScanTests(unittest.TestCase):
         # /proc이 없는 개발 PC에서도 'before' 행 자체는 남아야 한다 - 값이
         # 비어 있는 것과 표본이 아예 없는 것은 다르다.
         self.assertEqual([row["phase"] for row in rows][:1], ["before"])
+
+
+class SameVolumeTests(_ScanHarness, unittest.TestCase):
+    """계정이 전부 **한 볼륨**에 있을 때. 실측이 이 경우를 갈라놓았다.
+
+        같은 볼륨: 동시 4 -> 36.0s / 동시 8 -> 35.7s / 동시 16 -> 37.1s
+
+    나눠도 빨라지지 않는다. NetApp 이 볼륨 단위로 처리 능력을 가르기 때문에,
+    같은 볼륨을 여럿이 두들기면 서로를 방해할 뿐이다. 그래서 상한이 아무리
+    커도 여기서는 하나씩 돈다.
+    """
+
+    def _separate_volumes(self):
+        patcher = patch.object(
+            nightly_scan.paths,
+            "volume_key",
+            side_effect=lambda path, source=None: "ecfiler:/vol/cae",
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_one_volume_runs_serially_however_high_the_limit(self):
+        """상한을 올려도 한 볼륨 안에서는 하나씩 돈다."""
+
+        summary = self._run(parallel_accounts=999)
+        self.assertEqual(summary.status, nightly_scan.STATUS_COMPLETED)
+        self.assertEqual(summary.parallel_accounts, 1)
+
+    def test_every_account_still_runs(self):
+        summary = self._run(parallel_accounts=3)
+        self.assertEqual(summary.status, nightly_scan.STATUS_COMPLETED)
+        self.assertEqual(
+            sorted(outcome.account_name for outcome in summary.accounts),
+            ["a", "b", "c"],
+        )
+
+    def test_recorded_value_is_what_actually_ran(self):
+        """설정값을 남기면 '동시 3일 때 부하가 이랬다'고 잘못 읽는다."""
+
+        summary = self._run(parallel_accounts=3)
+        conn = scan_store.connect(self.data_dir)
+        try:
+            run = scan_store.latest_run(conn)
+        finally:
+            conn.close()
+        self.assertEqual(run["run_id"], summary.run_id)
+        self.assertEqual(run["parallel_accounts"], 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

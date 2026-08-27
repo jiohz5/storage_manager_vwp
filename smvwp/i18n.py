@@ -224,7 +224,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.night_weekend": "주말 밤",
         "reports.night_col.kind": "구분",
         "reports.night_col.count": "밤 수",
-        "reports.night_col.parallel": "동시계정",
+        "reports.night_col.parallel": "동시볼륨",
         "reports.night_col.load_delta": "load 증가폭",
         "reports.night_col.iowait_delta": "I/O대기 증가폭",
         "reports.night_col.load_peak": "load 최고",
@@ -242,7 +242,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.night_detail_heading": "밤별 상세",
         "reports.night_detail_more": "  … 외 {count}개 밤",
         "reports.resource_context": (
-            "표본 {samples}개 · 동시 실행 계정 {parallel}개 기준"
+            "표본 {samples}개 · 동시 실행 볼륨 {parallel}개 기준"
         ),
         "reports.resource_caveat": (
             "여기 숫자는 이 서버에서 본 것뿐입니다. du/find의 실제 부담은 대개 "
@@ -330,12 +330,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.parallel_weekday": "야간 동시 스캔 (평일)",
         "accounts.parallel_weekend": "야간 동시 스캔 (주말)",
         "accounts.parallel_hint": (
-            "계정을 한 번에 몇 개까지 동시에 스캔할지. 1이면 지금까지처럼 "
-            "하나씩 돕니다. 주말 밤은 '끝나는 아침이 토/일인 밤'입니다 - "
-            "금요일 밤은 주말, 일요일 밤은 평일입니다 (월요일 아침에 전원이 "
-            "출근하므로). 계정들이 같은 파일시스템에 몰려 있으면 병렬이 오히려 "
-            "느려질 수 있으니, 올리기 전에 보고서의 '스캔 중 리소스 변화'로 "
-            "확인하세요."
+            "서로 다른 저장소(볼륨)를 한 번에 몇 개까지 동시에 스캔할지. "
+            "1이면 지금까지처럼 하나씩 돕니다. 같은 볼륨에 있는 계정들은 이 "
+            "값을 올려도 자동으로 하나씩 돕니다 - 같은 볼륨을 여럿이 두들기면 "
+            "서로를 방해할 뿐 빨라지지 않는다는 것이 실측으로 확인됐습니다. "
+            "그래서 계정이 전부 한 볼륨에 있으면 값을 올려도 달라지지 않습니다. "
+            "주말 밤은 '끝나는 아침이 토/일인 밤'입니다 - 금요일 밤은 주말, "
+            "일요일 밤은 평일입니다 (월요일 아침에 전원이 출근하므로)."
         ),
         "accounts.suffix.accounts": "개",
         "accounts.col.backup_link": "연결 백업 계정",
@@ -710,7 +711,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.night_detail_heading": "Per night",
         "reports.night_detail_more": "  ... and {count} more nights",
         "reports.resource_context": (
-            "{samples} samples - {parallel} account(s) scanned concurrently"
+            "{samples} samples - {parallel} volume(s) scanned concurrently"
         ),
         "reports.resource_caveat": (
             "These numbers are what this server saw. The real cost of du/find is "
@@ -798,13 +799,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.parallel_weekday": "Concurrent scans (weekday)",
         "accounts.parallel_weekend": "Concurrent scans (weekend)",
         "accounts.parallel_hint": (
-            "How many accounts to scan at the same time. 1 keeps the current "
-            "one-at-a-time behaviour. A weekend night is one that ENDS on a "
-            "Saturday or Sunday morning - Friday night counts as weekend, "
-            "Sunday night does not (everyone is back on Monday morning). If "
-            "the accounts share one filesystem, running in parallel can be "
-            "slower, so check 'Resource change during scan' in the report "
-            "before raising it."
+            "How many separate volumes to scan at the same time. 1 keeps the "
+            "current one-at-a-time behaviour. Accounts that live on the SAME "
+            "volume always run one at a time no matter how high this is - "
+            "measurements showed that hammering one volume from several "
+            "threads does not go any faster. A weekend night is one that ENDS "
+            "on a Saturday or Sunday morning - Friday night counts as "
+            "weekend, Sunday night does not (everyone is back on Monday "
+            "morning)."
         ),
         "accounts.suffix.accounts": "",
         "accounts.col.backup_link": "Backup account",

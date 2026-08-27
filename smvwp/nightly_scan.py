@@ -13,22 +13,27 @@ DESIGN.md 1부 7절이 요구하는 안전장치들을 한 곳에 모았다:
 - 06:00에는 "완료된 체크포인트를 남기고 paused로 종료" -> `status`가
   completed/paused/stopped/error로 구분되어 강제 종료와 다르다는 게 남는다.
 
-## 계정 병렬 실행 - 평일 밤과 주말 밤이 다르다
+## 병렬 실행 - 단위는 계정이 아니라 **볼륨**이다
 
-위의 "직렬 처리" 원칙은 **평일 밤 기준**이다. 주말 아침에 출근하는 인원은
-평일의 10~20% 수준이라 같은 부하가 훨씬 적은 사람에게만 닿으므로, 주말 밤에는
-계정을 동시에 여러 개 돈다 (`weekend_parallel_accounts`, 기본 3).
+`nightly_parallel_accounts` / `weekend_parallel_accounts`, 그리고 `--parallel N`
+은 **동시에 도는 볼륨 수의 상한**이다. 계정 수가 아니다 - 실측이 그렇게 정했다:
 
-여기서 "주말 밤"은 날짜가 아니라 **끝나는 아침**으로 정한다 - 금요일 밤은
-주말이고 일요일 밤은 평일이다. 이유는 `scan_window.ends_on_weekend` 참고.
+    같은 볼륨: 동시 4 -> 36.0초 / 8 -> 35.7초 / 16 -> 37.1초 (안 줄어든다)
+    다른 볼륨: 각각 36초로 처리량이 배가 된다
 
-평일 밤은 기존과 같은 직렬(`nightly_parallel_accounts`, 기본 1)이고,
-`--parallel N`은 둘 다 무시하고 그 값을 쓴다 (실측용).
+NetApp 은 볼륨 단위로 처리 능력이 갈리므로, 같은 볼륨을 여럿이 두들기면 서로를
+방해할 뿐이다. 그래서 `group_accounts_by_volume`이 계정을 볼륨별로 묶고
+**묶음끼리는 동시에, 묶음 안에서는 하나씩** 돈다. 계정이 전부 한 볼륨에 있으면
+상한을 아무리 올려도 직렬이다 (그게 가장 빠른 길이라서다).
 
-병렬이 이 장비에서 실제로 이득인지는 미리 알 수 없다. 그래서 어느 경로로
-돌았든 같은 실행에서 리소스 시계열(`scan_load_samples`)과 그때의 동시 계정
-수를 함께 기록해, 다음 판단의 근거가 남게 한다. 자세한 득실은
-`_run_accounts_parallel` 참고.
+평일 밤과 주말 밤은 지금 같은 값을 쓴다 - 야간 결재가 없는 한 어느 쪽이든
+사람이 없기 때문이다. 구분 자체는 남겨 두었다: "주말 밤"은 날짜가 아니라
+**끝나는 아침**으로 정하므로 금요일 밤은 주말, 일요일 밤은 평일이다. 이유는
+`scan_window.ends_on_weekend` 참고.
+
+어느 경로로 돌았든 리소스 시계열(`scan_load_samples`)과 함께 **실제로** 동시에
+돈 갈래 수를 기록한다 - 설정한 상한이 아니라 실측치여야 나중에 "동시 N일 때
+부하가 이랬다"를 옳게 읽는다. 자세한 득실은 `_run_accounts_parallel` 참고.
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from . import (
     config as config_module,
     detail_scan,
     notifications,
+    paths,
     reports,
     loadstat,
     scan_lock,
@@ -84,8 +90,10 @@ class RunSummary:
     run_id: Optional[str] = None
     reason: Optional[str] = None
     accounts: List[AccountOutcome] = field(default_factory=list)
-    # 이 실행이 계정을 몇 개씩 동시에 돌렸는가 (1 = 직렬). 부하 실측 결과를
-    # 읽을 때 가장 먼저 필요한 조건이라 요약에도 싣는다.
+    # 이 실행이 **실제로** 몇 갈래를 동시에 돌렸는가 (1 = 직렬). 설정한
+    # 상한이 아니라 실측치다 - 계정이 전부 한 볼륨에 있으면 상한이 4여도
+    # 1이 된다. 부하 시계열을 읽을 때 가장 먼저 필요한 조건이라 요약에도
+    # 싣는다.
     parallel_accounts: int = 1
     # 그 값이 주말 밤이라서 정해졌는가. 숫자만 보면 "왜 오늘은 3이지"를 알 수
     # 없어 설정이 잘못된 줄 안다.
@@ -524,6 +532,40 @@ def _run_accounts_serial(
     return STATUS_COMPLETED
 
 
+def group_accounts_by_volume(
+    accounts: List[config_module.Account],
+) -> List[List[config_module.Account]]:
+    """같은 저장소(볼륨)에 있는 계정들을 한 묶음으로 만든다.
+
+    ## 왜 계정이 아니라 볼륨인가 - 실측이 정했다
+
+    같은 디렉터리를 여러 갈래로 쪼개도 빨라지지 않았다:
+
+        동시 4 -> 36.0초 / 동시 8 -> 35.7초 / 동시 16 -> 37.1초
+
+    그런데 **서로 다른** 디렉터리 둘을 동시에 돌리면 각각 36초로 처리량이
+    배가 됐다. 차이는 볼륨이다 - NetApp 은 볼륨 단위로 처리 능력이 갈리므로,
+    한 볼륨 안에서는 아무리 나눠도 그 볼륨의 한계를 넘지 못한다.
+
+    그래서 "계정 N개를 동시에"는 틀린 단위다. 같은 볼륨의 계정 둘을 동시에
+    돌리면 서로를 방해할 뿐이고, 다른 볼륨이면 그만큼 그대로 벌어진다.
+    **묶음끼리는 동시에, 묶음 안에서는 하나씩**이 맞다.
+
+    묶음 안의 순서는 유지한다 - 공정성 순환(`_rotate_accounts`)이 정한 순서를
+    여기서 뒤집으면 특정 계정이 계속 뒤로 밀린다.
+    """
+
+    grouped = paths.group_by_volume(
+        [(account.account_id, account.path) for account in accounts]
+    )
+    by_id = {account.account_id: account for account in accounts}
+    return [
+        [by_id[account_id] for account_id in ids]
+        for ids in grouped.values()
+        if ids
+    ]
+
+
 def _run_accounts_parallel(
     data_dir: Path,
     accounts: List[config_module.Account],
@@ -536,9 +578,9 @@ def _run_accounts_parallel(
     run_id: str,
     outcomes: List[AccountOutcome],
     active: _ActiveCounter,
-    workers: int,
+    groups: List[List[config_module.Account]],
 ) -> str:
-    """계정 여러 개를 동시에 돈다. **부하 실측용 경로다** (기본은 직렬).
+    """**볼륨 묶음끼리** 동시에 돈다 (묶음 안에서는 하나씩).
 
     ## 왜 연결을 스레드마다 새로 여는가
 
@@ -569,46 +611,56 @@ def _run_accounts_parallel(
 
     interrupted_status: List[Optional[str]] = [None]
 
-    def work(account: config_module.Account) -> Optional[AccountOutcome]:
-        # 큐에 미리 다 넣어 두므로, 순서를 기다리는 동안 시간창이 끝났을 수
-        # 있다. 시작 직전에 다시 확인한다.
-        if should_stop() or deadline_reached():
-            return None
+    def work(group: List[config_module.Account]) -> List[AccountOutcome]:
+        """한 볼륨의 계정들을 **하나씩** 처리한다.
+
+        같은 볼륨을 동시에 두들겨 봐야 서로를 방해할 뿐이라 순서대로 간다.
+        볼륨끼리의 동시성은 바깥 풀이 낸다."""
+
+        produced: List[AccountOutcome] = []
         worker_conn = scan_store.connect(data_dir)
         active.enter()
         try:
-            return _process_account(
-                worker_conn,
-                data_dir,
-                account,
-                settings,
-                clock,
-                should_stop,
-                deadline_reached,
-                top_level_lister,
-                load,
-                run_id,
-            )
+            for account in group:
+                # 순서를 기다리는 동안 시간창이 끝났을 수 있다.
+                if should_stop() or deadline_reached():
+                    break
+                produced.append(_process_account(
+                    worker_conn,
+                    data_dir,
+                    account,
+                    settings,
+                    clock,
+                    should_stop,
+                    deadline_reached,
+                    top_level_lister,
+                    load,
+                    run_id,
+                ))
+            return produced
         finally:
             active.leave()
             worker_conn.close()
 
     with concurrent.futures.ThreadPoolExecutor(
-        max_workers=workers, thread_name_prefix="smvwp-scan"
+        max_workers=len(groups), thread_name_prefix="smvwp-vol"
     ) as pool:
-        futures = {pool.submit(work, account): account for account in accounts}
+        futures = {pool.submit(work, group): group for group in groups}
         for future in concurrent.futures.as_completed(futures):
-            account = futures[future]
+            group = futures[future]
             try:
-                outcome = future.result()
-            except Exception:  # pragma: no cover - 계정 하나의 실패가 전체를 죽이지 않는다
-                logger.exception("계정 스캔 실패: %s", account.name)
+                produced = future.result()
+            except Exception:  # pragma: no cover - 볼륨 하나의 실패가 전체를 죽이지 않는다
+                logger.exception(
+                    "볼륨 스캔 실패: %s", ", ".join(a.name for a in group)
+                )
                 continue
-            if outcome is None:  # 시간창/중지로 시작조차 못 함
-                continue
-            outcomes.append(outcome)
-            if _outcome_interrupted(outcome):
-                interrupted_status[0] = STATUS_STOPPED if should_stop() else STATUS_PAUSED
+            for outcome in produced:
+                outcomes.append(outcome)
+                if _outcome_interrupted(outcome):
+                    interrupted_status[0] = (
+                        STATUS_STOPPED if should_stop() else STATUS_PAUSED
+                    )
 
     if interrupted_status[0]:
         return interrupted_status[0]
@@ -666,6 +718,29 @@ def run_nightly_scan(
         return RunSummary(started=False, status=STATUS_NOT_STARTED, reason=str(exc))
 
     scan_lock.clear_stop_request(data_dir)
+
+    accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
+    # 계정을 저장소(볼륨)별로 묶는다. 같은 볼륨을 동시에 두들겨 봐야 서로를
+    # 방해할 뿐이고, 다른 볼륨이면 그만큼 그대로 벌어진다
+    # (`group_accounts_by_volume` 의 실측 근거 참고).
+    #
+    # `parallel_accounts` 는 이제 **동시에 도는 볼륨 수의 상한**이다. 볼륨이
+    # 그보다 많으면 앞에서부터 그만큼만 동시에 가고, 나머지는 그 묶음 안에서
+    # 순서를 기다린다.
+    groups = group_accounts_by_volume(accounts)
+    run_parallel = parallel_accounts > 1 and len(groups) > 1
+    if run_parallel and parallel_accounts < len(groups):
+        # 상한을 넘는 묶음은 앞쪽 묶음에 이어 붙인다 - 버리지 않는다.
+        merged = groups[:parallel_accounts]
+        for index, extra in enumerate(groups[parallel_accounts:]):
+            merged[index % parallel_accounts].extend(extra)
+        groups = merged
+    # 기록에 남기는 것은 **설정값이 아니라 실제로 동시에 돈 수**다. 둘은
+    # 볼륨 묶음이 생기면서 갈라졌다 - `--parallel 4` 로 시작해도 계정이 전부
+    # 한 볼륨에 있으면 실제로는 하나씩 돈다. 이 값은 리소스 시계열을 읽는
+    # 기준이라, 설정값을 남기면 "동시 4일 때 부하가 이랬다"고 잘못 읽는다.
+    effective_parallel = len(groups) if run_parallel else 1
+
     conn = scan_store.connect(data_dir)
     outcomes: List[AccountOutcome] = []
     status = STATUS_COMPLETED
@@ -683,7 +758,7 @@ def run_nightly_scan(
     )
     try:
         scan_store.start_run(conn, run_id, triggered_by)
-        scan_store.record_parallelism(conn, run_id, parallel_accounts, weekend_night)
+        scan_store.record_parallelism(conn, run_id, effective_parallel, weekend_night)
         # 기준값은 반드시 **스캔을 시작하기 전에** 잡는다. 이 표본이 없으면
         # 나중에 "스캔 때문에 튄 것"과 "원래 그랬던 것"을 구분할 수 없다.
         recorder.baseline(warmup_seconds=baseline_warmup_seconds)
@@ -697,8 +772,7 @@ def run_nightly_scan(
 
         should_stop = lambda: scan_lock.is_stop_requested(data_dir, run_id)
 
-        accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
-        if parallel_accounts > 1 and len(accounts) > 1:
+        if run_parallel:
             status = _run_accounts_parallel(
                 data_dir,
                 accounts,
@@ -711,7 +785,7 @@ def run_nightly_scan(
                 run_id,
                 outcomes,
                 active,
-                workers=min(parallel_accounts, len(accounts)),
+                groups=groups,
             )
         else:
             status = _run_accounts_serial(
@@ -764,7 +838,7 @@ def run_nightly_scan(
         status=status,
         run_id=run_id,
         accounts=outcomes,
-        parallel_accounts=parallel_accounts,
+        parallel_accounts=effective_parallel,
         weekend_night=weekend_night,
     )
 

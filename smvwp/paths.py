@@ -239,7 +239,10 @@ PROC_MOUNTS = Path("/proc/mounts")
 
 
 def _mount_entries(source: Optional[Path] = None) -> List["tuple"]:
-    """`/proc/mounts`에서 (마운트 지점, 종류) 목록. 못 읽으면 빈 목록."""
+    """`/proc/mounts`에서 (원본, 마운트 지점, 종류) 목록. 못 읽으면 빈 목록.
+
+    원본은 NFS 라면 `ecfiler:/vol/cae` 같은 export 다. 이것이 **어느 볼륨인가**
+    를 가르는 값이라, 스캔을 볼륨 단위로 나눌 때 쓴다."""
 
     source = source or PROC_MOUNTS
     try:
@@ -254,7 +257,7 @@ def _mount_entries(source: Optional[Path] = None) -> List["tuple"]:
             continue
         # /proc/mounts는 공백 등을 8진 이스케이프로 적는다 (\040 = 공백).
         mount_point = parts[1].replace("\\040", " ")
-        entries.append((mount_point, parts[2]))
+        entries.append((parts[0], mount_point, parts[2]))
     return entries
 
 
@@ -291,7 +294,7 @@ def filesystem_type(path: Path, source: Optional[Path] = None) -> Optional[str]:
 
     best_point = ""
     best_type = None
-    for mount_point, fs_type in entries:
+    for _origin, mount_point, fs_type in entries:
         if target == mount_point or target.startswith(mount_point.rstrip("/") + "/"):
             if len(mount_point) >= len(best_point):
                 best_point, best_type = mount_point, fs_type
@@ -318,3 +321,55 @@ def journal_mode_for(path: Path, source: Optional[Path] = None) -> str:
     """
 
     return "DELETE" if is_network_filesystem(path, source) else "WAL"
+
+
+# -- 볼륨 단위 묶기 ---------------------------------------------------------
+#
+# ## 왜 볼륨으로 묶는가
+#
+# 실측에서 갈렸다. **한 디렉터리를 여러 프로세스로 쪼개도 빨라지지 않는데**,
+# 서로 다른 디렉터리 둘을 동시에 돌리면 처리량이 배가 됐다. 차이는 볼륨이다 -
+# NetApp 은 볼륨 단위로 처리 능력이 갈리므로, 같은 볼륨 안에서 아무리 나눠도
+# 그 볼륨의 한계를 넘지 못한다.
+#
+#   같은 볼륨 안에서 쪼개기 -> 안 늘어남 (동시 4개가 적정선)
+#   다른 볼륨끼리 동시에    -> 배로 늘어남
+#
+# 그래서 "계정 N개를 동시에"가 아니라 **"볼륨마다 하나씩, 볼륨끼리 동시에"**가
+# 맞는 단위다. 계정 둘이 같은 볼륨에 있으면 동시에 돌려 봐야 서로를 방해할 뿐이다.
+
+
+def volume_key(path: Path, source: Optional[Path] = None) -> str:
+    """이 경로가 올라탄 볼륨을 가리키는 값. 같은 값이면 같은 저장소다.
+
+    NFS 면 export(`ecfiler:/vol/cae`)가, 로컬이면 장치가 된다. 판단이 안 되면
+    마운트 지점을, 그것도 모르면 경로 자체를 준다 - **모를 때는 서로 다른
+    볼륨으로 보는 편이 안전하다.** 같은 볼륨을 다른 것으로 오해하면 조금
+    느려지는 정도지만, 다른 볼륨을 같다고 보면 병렬을 통째로 포기하게 된다.
+    """
+
+    entries = _mount_entries(source)
+    if not entries:
+        return str(path)
+
+    target = _mount_comparable(path)
+    best_point = ""
+    best_origin = None
+    for origin, mount_point, _fs_type in entries:
+        if target == mount_point or target.startswith(mount_point.rstrip("/") + "/"):
+            if len(mount_point) >= len(best_point):
+                best_point, best_origin = mount_point, origin
+    return best_origin or best_point or str(path)
+
+
+def group_by_volume(paths_by_key, source: Optional[Path] = None) -> "dict":
+    """`{키: 경로}` 를 볼륨별로 묶는다 -> `{볼륨: [키, ...]}`.
+
+    순서를 유지한다 (공정성 순환이 이미 정한 순서를 뒤집지 않기 위해).
+    """
+
+    grouped: "dict" = {}
+    for key, path in paths_by_key:
+        volume = volume_key(Path(path), source)
+        grouped.setdefault(volume, []).append(key)
+    return grouped
