@@ -343,6 +343,74 @@ def command_notify(args) -> int:
 
 # -- 진입점 -----------------------------------------------------------------
 
+def command_probe(args) -> int:
+    """지정 경로를 여러 각도로 재고 **짧은 코드**로 요약한다.
+
+    폐쇄망에서 사람이 화면을 보고 옮겨 적는다는 전제로 만들었다. 그래서 기본
+    출력이 세 줄이고, 상세 표는 그 아래에 참고용으로만 붙는다.
+    """
+
+    from smvwp import probe
+
+    seconds = args.seconds if args.seconds else probe.DEFAULT_SLICE_SECONDS
+    target = Path(args.path).expanduser()
+    if not target.is_dir():
+        print(f"ERROR: 디렉터리가 아닙니다: {target}", file=sys.stderr)
+        return 1
+
+    accounts = []
+    volume_key = None
+    needs_peers = not args.no_peers and not (args.peer and args.peer2)
+    if needs_peers:
+        # 이웃 계정을 찾으려면 설정이 필요하다. 없어도 진단 자체는 돌아간다 -
+        # 그 경우 L·M 이 0(재지 못함)으로 남을 뿐이다. 진단을 통째로 못 돌리는
+        # 것보다 그 두 칸이 비는 편이 낫다.
+        data_dir = paths.resolve_data_dir(args.data_dir)
+        if data_dir is None:
+            print("(데이터 디렉터리를 몰라 이웃 계정 비교는 건너뜁니다. "
+                  "--peer/--peer2 로 직접 줄 수 있습니다)")
+        else:
+            try:
+                accounts = config_module.load_config(data_dir).accounts
+                volume_key = paths.volume_key
+            except Exception as exc:  # 설정이 깨졌어도 진단은 계속한다
+                print(f"(설정을 읽지 못해 이웃 계정 비교는 건너뜁니다: {exc})")
+
+    say = (lambda message: None) if args.codes_only else print
+    if not args.codes_only:
+        pieces = len(probe.QUICK_THREAD_SWEEP if args.quick else probe.THREAD_SWEEP) + 1
+        pairs = 3 * 5
+        print(f"대상: {target}")
+        print(
+            f"예상 소요: 전체 순회 1회 + du 1회 + 조각 {pieces + pairs}개"
+            f"(조각당 {seconds:.0f}초) ≈ 순회시간 + du시간 + "
+            f"{int((pieces + pairs) * seconds) // 60}분"
+        )
+        print("이 명령은 아무것도 쓰지 않습니다 (읽기 전용).")
+        print("-" * 60)
+
+    result = probe.run_probe(
+        str(target),
+        accounts=accounts,
+        volume_key=volume_key,
+        slice_seconds=seconds,
+        workers=args.workers,
+        quick=args.quick,
+        peer_same_filer=args.peer,
+        peer_other_filer=args.peer2,
+        log=say,
+    )
+
+    if not args.codes_only:
+        print("-" * 60)
+    print(probe.format_transfer(result))
+    if not args.codes_only:
+        print(probe.format_detail(result))
+        print("")
+        print("위의 CODE/VAL 두세 줄만 옮겨 주시면 됩니다.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="smvwp_cli.py", description="Storage Manager VWP"
@@ -400,6 +468,42 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     scan.set_defaults(func=command_scan)
+
+    probe = sub.add_parser(
+        "probe",
+        help="지정 경로를 여러 각도로 재고 짧은 진단 코드로 요약 (읽기 전용)",
+    )
+    _add_data_dir(probe)
+    probe.add_argument("--path", required=True, help="진단 대상 디렉터리")
+    probe.add_argument(
+        "--seconds", type=float, default=None,
+        help="시간을 잘라 재는 조각 하나의 길이(초). 기본 15",
+    )
+    probe.add_argument(
+        "--workers", type=int, default=4,
+        help="순회 스레드 수 (기본 4 - 야간 스캔이 쓰는 값과 같게)",
+    )
+    probe.add_argument(
+        "--quick", action="store_true",
+        help="스레드 확장을 x1/x4만 본다 (시간 절반)",
+    )
+    probe.add_argument(
+        "--peer", default=None,
+        help="같은 파일러의 다른 볼륨 경로 (미지정 시 계정 목록에서 자동으로 찾음)",
+    )
+    probe.add_argument(
+        "--peer2", default=None,
+        help="다른 파일러의 경로 (미지정 시 계정 목록에서 자동으로 찾음)",
+    )
+    probe.add_argument(
+        "--no-peers", action="store_true",
+        help="이웃 계정 비교(L·M)를 아예 건너뛴다",
+    )
+    probe.add_argument(
+        "--codes-only", action="store_true",
+        help="진행 로그 없이 옮겨 적을 세 줄만 출력",
+    )
+    probe.set_defaults(func=command_probe)
 
     notify = sub.add_parser("notify", help="트레이 알림기")
     _add_data_dir(notify)

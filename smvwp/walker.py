@@ -100,6 +100,10 @@ class WalkOutcome:
     file_count: int = 0
     dir_count: int = 0
     unreadable: int = 0
+    # 아래는 진단용 - 스캔 자체는 쓰지 않는다 (`probe` 참고).
+    hardlink_files: int = 0   # nlink>1 이라 중복 검사를 거친 파일 수
+    logical_bytes: int = 0    # st_size 합. 점유 블록과 벌어지면 희소/작은 파일
+    max_depth_seen: int = 0   # 루트를 0으로 본 가장 깊은 디렉터리
 
 
 class ParallelWalker:
@@ -144,6 +148,8 @@ class ParallelWalker:
         self.file_count = 0
         self.dir_count = 0
         self.unreadable = 0
+        self.hardlink_files = 0
+        self.logical_bytes = 0
 
     # -- 큐 -----------------------------------------------------------
     def _next(self) -> Optional[_Node]:
@@ -220,6 +226,7 @@ class ParallelWalker:
         files = 0
         hardlinks: List[tuple] = []
         unreadable = 0
+        logical = 0
 
         try:
             with os.scandir(node.path) as entries:
@@ -238,9 +245,12 @@ class ParallelWalker:
                         continue
                     # 대부분의 파일은 nlink==1 이라 중복 검사 자체를 건너뛴다.
                     if info.st_nlink > 1:
-                        hardlinks.append(((info.st_dev, info.st_ino), disk_blocks(info)))
+                        hardlinks.append(
+                            ((info.st_dev, info.st_ino), disk_blocks(info), info.st_size)
+                        )
                         continue
                     blocks += disk_blocks(info)
+                    logical += info.st_size
                     files += 1
         except OSError:
             unreadable += 1
@@ -248,12 +258,15 @@ class ParallelWalker:
         # 트리 갱신만 잠금 안에서 한다. 카운터는 스레드 지역으로 세고 끝에
         # 한 번만 합친다 - 디렉터리마다 잠금을 잡을 이유가 없다.
         with self._tree_lock:
-            for key, block_count in hardlinks:
+            for key, block_count, size in hardlinks:
                 if key in self._seen_inodes:
                     continue
                 self._seen_inodes.add(key)
                 blocks += block_count
+                logical += size
                 files += 1
+            self.hardlink_files += len(hardlinks)
+            self.logical_bytes += logical
 
             node.blocks += blocks
             node.pending_children += len(children)
@@ -329,6 +342,10 @@ class ParallelWalker:
         entries.sort(key=lambda item: item[0])
 
         root = self._root_node
+        deepest = 0
+        for node in self._all_nodes:
+            if node.scanned and node.depth > deepest:
+                deepest = node.depth
         return WalkOutcome(
             entries=entries,
             root_size_kb=(root.blocks * 512 // 1024) if root.complete else None,
@@ -341,6 +358,9 @@ class ParallelWalker:
             file_count=self.file_count,
             dir_count=self.dir_count,
             unreadable=self.unreadable,
+            hardlink_files=self.hardlink_files,
+            logical_bytes=self.logical_bytes,
+            max_depth_seen=deepest,
         )
 
 
