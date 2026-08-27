@@ -339,6 +339,20 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "일요일 밤은 평일입니다 (월요일 아침에 전원이 출근하므로)."
         ),
         "accounts.suffix.accounts": "개",
+        "accounts.engine": "측정 방법",
+        "accounts.engine.python": "파이썬 순회 (빠름)",
+        "accounts.engine.du": "du 실행 (예전 방식)",
+        "accounts.engine_hint": (
+            "상세 스캔에서 용량을 무엇으로 재는지. 파이썬 순회는 파일서버에 "
+            "여러 요청을 동시에 띄워 왕복 지연을 감춥니다 - 반입 장비 실측에서 "
+            "같은 계정이 du 75~88초 대 순회 36초였고, 합계는 정확히 "
+            "일치했습니다.\n\n"
+            "du 방식은 별도 프로세스라 nice/ionice로 우선순위를 낮출 수 "
+            "있습니다. 순회는 이 프로그램 안에서 돌아 그 설정이 듣지 않으니, "
+            "낮추고 싶으면 cron 항목을 'nice -n 10 ...'으로 거세요.\n\n"
+            "밤에 문제가 생기면 여기서 du로 되돌리면 됩니다 - 다른 설정은 "
+            "그대로 두어도 됩니다."
+        ),
         "accounts.col.backup_link": "연결 백업 계정",
         "accounts.kind": "계정 성격",
         "accounts.kind_hint": (
@@ -809,6 +823,21 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "morning)."
         ),
         "accounts.suffix.accounts": "",
+        "accounts.engine": "Measured by",
+        "accounts.engine.python": "Python walk (faster)",
+        "accounts.engine.du": "Run du (the old way)",
+        "accounts.engine_hint": (
+            "How the detail scan measures sizes. The Python walk keeps several "
+            "requests in flight so the NFS round trip stops being the limit - "
+            "on the target machine the same account took 75-88s with du and "
+            "36s with the walk, and the totals matched exactly.\n\n"
+            "du runs as a separate process, so nice/ionice can lower its "
+            "priority. The walk runs inside this program, where that prefix "
+            "does not apply - put 'nice -n 10 ...' on the cron entry "
+            "instead.\n\n"
+            "If a night goes wrong, switch back to du here; nothing else needs "
+            "to change."
+        ),
         "accounts.col.backup_link": "Backup account",
         "accounts.kind": "Account kind",
         "accounts.kind_hint": (

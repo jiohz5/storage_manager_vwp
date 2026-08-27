@@ -259,6 +259,30 @@ def _drain_checkpoints(
     return not interrupted.is_set()
 
 
+def _engine_plan(settings) -> "tuple[str, int, int]":
+    """`(엔진, 동시 체크포인트 수, 순회 스레드 수)`.
+
+    동시에 띄우는 요청의 총량은 엔진과 무관하게 `checkpoint_workers` 하나로
+    정한다. 다만 **어디서 동시성을 내는지가 다르다.**
+
+    - `du`: 체크포인트를 N개 동시에 처리하고, 각 `du` 는 한 줄로 걷는다.
+    - 파이썬 순회: 체크포인트는 **하나씩** 처리하되 그 안에서 N개 스레드로
+      걷는다.
+
+    순회 쪽을 이렇게 나눈 이유는 큰 계정 때문이다. 체크포인트를 나눠 갖는
+    방식은 서브트리가 여러 개일 때만 듣지만, 순회는 **서브트리 하나짜리
+    계정에서도** 그 안을 동시에 판다 - 밤을 다 먹는 계정이 늘 그런 모양이다.
+
+    덤으로 진행 표시가 되살아난다. 체크포인트를 하나씩 처리하면 "지금 이
+    경로"가 뜻을 되찾기 때문이다 (`_drain_checkpoints` 의 `workers <= 1` 조건).
+    """
+
+    workers = max(1, settings.checkpoint_workers)
+    if getattr(settings, "scan_engine", config_module.SCAN_ENGINE_DU) == config_module.SCAN_ENGINE_PYTHON:
+        return detail_scan.ENGINE_PYTHON, 1, workers
+    return detail_scan.ENGINE_DU, workers, 1
+
+
 def _rotate_accounts(accounts, today: datetime):
     """오늘 날짜를 시드로 시작 인덱스를 돌려, 특정 계정이 항상 먼저(또는
     항상 나중에) 처리되지 않게 한다."""
@@ -292,6 +316,8 @@ def _process_baseline(
         top_dirs = top_level_lister(account.path)
         scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, generation, top_dirs)
 
+    engine, checkpoint_workers, walk_workers = _engine_plan(settings)
+
     def handle(worker_conn, checkpoint):
         detail_scan.process_one_checkpoint(
             worker_conn,
@@ -299,6 +325,8 @@ def _process_baseline(
             settings.detail_task_timeout_seconds,
             max_depth=settings.detail_scan_max_depth,
             generation=generation,
+            engine=engine,
+            workers=walk_workers,
         )
 
     completed = _drain_checkpoints(
@@ -306,7 +334,7 @@ def _process_baseline(
         account,
         scan_store.BASELINE,
         generation,
-        settings.checkpoint_workers,
+        checkpoint_workers,
         handle,
         should_stop,
         deadline_reached,

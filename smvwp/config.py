@@ -130,6 +130,33 @@ DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS = 1
 # 그 계정 안의 디렉터리들을 동시에 돌므로 바로 듣는다.
 DEFAULT_CHECKPOINT_WORKERS = 4
 
+# 상세 스캔을 무엇으로 재는가.
+#
+# "python" = 파이썬 순회(`walker`), "du" = `du -k` 실행.
+#
+# ## 파이썬 순회를 기본으로 삼은 근거
+#
+# 반입 장비 실측(같은 계정, 찬 캐시): `du -sk` 75.4~87.8초 대 순회 36초.
+# 그리고 **합계가 정확히 일치했다** - 둘 다 `st_blocks`(실제 점유 블록)를
+# 세고 하드링크를 한 번만 세기 때문이다.
+#
+# 빠른 이유는 CPU 가 아니라 동시성이다. `du` 는 디렉터리를 한 줄로 걸어
+# RPC 슬롯 128 중 1개만 쓰는데, 순회는 여러 요청을 동시에 띄워 왕복 지연을
+# 감춘다. 야간에 빨리 끝나는 것이 곧 아침 업무에 걸치지 않는 것이다.
+#
+# ## 대신 잃는 것
+#
+# `du` 는 별도 프로세스라 `nice`/`ionice` 로 우선순위를 낮출 수 있었다.
+# 순회는 이 프로세스 안에서 돌아 그 접두사가 듣지 않는다 - 낮추고 싶으면
+# cron 항목 자체를 `nice -n 10 ...` 로 건다.
+#
+# 되돌리려면 이 값을 "du" 로 두면 된다. 두 엔진은 같은 자리에 그대로 바꿔
+# 끼워지므로(`detail_scan.measure_tree`) 다른 설정은 건드릴 필요가 없다.
+SCAN_ENGINE_DU = "du"
+SCAN_ENGINE_PYTHON = "python"
+SCAN_ENGINES = (SCAN_ENGINE_DU, SCAN_ENGINE_PYTHON)
+DEFAULT_SCAN_ENGINE = SCAN_ENGINE_PYTHON
+
 # 주말 밤에 쓸 동시 실행 볼륨 수.
 #
 # **기본값은 평일과 같다.** 야간에는 결재 등 예외적인 경우가 아니면 평일에도
@@ -173,8 +200,12 @@ class Settings:
     # 야간 스캔에서 동시에 도는 **볼륨** 수의 상한 (1 = 직렬). 같은 볼륨의
     # 계정은 이 값과 무관하게 하나씩 돈다. 위 상수의 주석 참고.
     nightly_parallel_accounts: int = DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS
-    # 계정 하나 안에서 동시에 처리할 체크포인트 수 (= 실질 동시 du 개수).
+    # 계정 하나 안에서 동시에 띄울 요청 수. `du` 엔진에서는 동시 `du` 프로세스
+    # 수이고, 파이썬 순회에서는 순회 스레드 수다 - 어느 쪽이든 "이 계정에서
+    # 파일서버에 동시에 몇 개를 물어보는가"라는 뜻은 같다.
     checkpoint_workers: int = DEFAULT_CHECKPOINT_WORKERS
+    # 상세 스캔을 무엇으로 재는가 ("python" | "du"). 위 상수의 주석 참고.
+    scan_engine: str = DEFAULT_SCAN_ENGINE
     # 주말 밤(=끝나는 아침이 토/일인 밤)에 쓸 동시 볼륨 수. 위 상수 참고.
     weekend_parallel_accounts: int = DEFAULT_WEEKEND_PARALLEL_ACCOUNTS
     # 스캔 중 리소스 표본 주기와 보관 기간.
@@ -326,6 +357,10 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("weekend_parallel_accounts는 1~16이어야 합니다")
     if not 1 <= settings.checkpoint_workers <= 16:
         raise ConfigError("checkpoint_workers는 1~16이어야 합니다")
+    if settings.scan_engine not in SCAN_ENGINES:
+        raise ConfigError(
+            "scan_engine은 " + " 또는 ".join(SCAN_ENGINES) + "여야 합니다"
+        )
     if settings.load_sample_interval_seconds < 5:
         raise ConfigError("load_sample_interval_seconds는 5 이상이어야 합니다")
     if settings.load_sample_retention_days < 1:

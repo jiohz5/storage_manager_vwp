@@ -231,6 +231,9 @@ class _ScanHarness:
         self.root = Path(self.tmp.name)
         self.data_dir = self.root / "data"
         self.config = config_module.load_config(self.data_dir)
+        # `du` 출력 흉내로 도는 시험이라 엔진을 못박는다 - 여기서 보는 것은
+        # 엔진이 아니라 볼륨 병렬과 리소스 기록이다.
+        self.config.settings.scan_engine = config_module.SCAN_ENGINE_DU
         self.accounts = []
         for name in ("a", "b", "c"):
             path = self.root / name

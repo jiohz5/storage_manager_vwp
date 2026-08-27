@@ -71,6 +71,9 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.account_path.mkdir(parents=True)
 
         self.config = config_module.load_config(self.data_dir)
+        # 이 시험은 `du` 출력 흉내로 오케스트레이션을 본다 - 엔진을 못박지
+        # 않으면 기본값(파이썬 순회)이 실제 디렉터리를 걸어 흉내가 무의미해진다.
+        self.config.settings.scan_engine = config_module.SCAN_ENGINE_DU
         self.account = config_module.add_account(
             self.config, "project_a", str(self.account_path), data_dir=self.data_dir
         )

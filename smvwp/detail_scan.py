@@ -1,14 +1,27 @@
-"""`du` 기반 기준선(baseline) 스캔 엔진 - 디렉터리 단위 체크포인트, 시간 초과
-시 하위 분할, 최선 노력 nice/ionice.
+"""기준선(baseline) 스캔 엔진 - 디렉터리 단위 체크포인트, 시간 초과 시 하위
+분할, 최선 노력 nice/ionice.
+
+측정 방법은 두 가지 중에서 고른다 (`measure_tree`):
+
+- `du -k` 를 실행한다 (예전부터의 방법).
+- 파이썬 순회(`walker`)로 직접 걷는다. NFS 에서는 이쪽이 2배 이상 빠르다 -
+  `du` 는 한 줄로 걸어 RPC 슬롯 128 중 1개만 쓰는데, 순회는 여러 요청을 동시에
+  띄운다. 실기 실측(같은 트리, 찬 캐시): `du -sk` 75~88초 대 순회 36초.
+
+둘의 결과 모양은 같다(`DuTreeOutcome` / `walker.WalkOutcome`). 크기도 같다 -
+반입 장비의 실제 계정에서 두 방법의 합계가 정확히 일치하는 것을 확인했다.
 
 DESIGN.md 1부 7절의 안전장치를 그대로 따른다:
 - 디렉터리 단위 타임아웃을 넘기면 그 디렉터리를 포기하지 않고, 바로 아래
   자식 디렉터리들로 쪼개 다시 큐에 넣는다 (`_split_timed_out_directory`).
 - `nice`/`ionice`는 있으면 쓰고 없으면 그냥 진행한다 - 우선순위 조정일 뿐
   처리량의 절대 상한이 아니라는 점을 문서에도, 여기 코드에도 남긴다
-  (`build_priority_prefix`).
-- 이 모듈은 절대 쓰지 않는다 - `du`만 호출한다. 모니터링 대상에 대한 읽기
-  전용 불변식은 여기서도 깨지지 않는다.
+  (`build_priority_prefix`). **파이썬 순회에는 이 접두사가 듣지 않는다** -
+  별도 프로세스가 아니기 때문이다. 낮추려면 cron 항목 자체를 `nice -n 10 ...`
+  으로 건다.
+- 이 모듈은 절대 쓰지 않는다. `du` 실행이든 파이썬 순회든 여는 것은
+  `os.scandir`/`stat` 뿐이고, 모니터링 대상에 대한 읽기 전용 불변식은 어느
+  엔진에서도 깨지지 않는다.
 """
 
 from __future__ import annotations
@@ -19,7 +32,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
 
-from . import procio, scan_store
+from . import procio, scan_store, walker
 
 
 class DetailScanError(Exception):
@@ -350,6 +363,54 @@ def run_du_tree(path: str, timeout_seconds: int, max_depth: int = 3) -> DuTreeOu
     )
 
 
+ENGINE_DU = "du"
+ENGINE_PYTHON = "python"
+ENGINES = (ENGINE_DU, ENGINE_PYTHON)
+
+
+def measure_tree(
+    path: str,
+    timeout_seconds: int,
+    max_depth: int = 3,
+    engine: str = ENGINE_DU,
+    workers: int = 1,
+) -> DuTreeOutcome:
+    """서브트리 하나를 잰다. 결과 모양은 엔진과 무관하게 같다.
+
+    ## 두 엔진의 차이 (고르기 전에 알아야 할 것)
+
+    `du` 는 별도 프로세스라 `nice`/`ionice` 로 우선순위를 낮출 수 있다. 파이썬
+    순회는 이 프로세스 안에서 도므로 그 접두사가 듣지 않는다 - 낮추고 싶으면
+    cron 항목 자체를 `nice -n 10 ...` 로 걸어야 한다.
+
+    대신 순회는 요청을 동시에 여러 개 띄워 NFS 의 왕복 지연을 감춘다. 야간에
+    사람이 없다는 전제에서는 이쪽이 목적에 맞다 - 빨리 끝나는 것이 곧 아침에
+    걸치지 않는 것이다.
+
+    시간 초과 시 부분 결과를 살리는 성질은 둘 다 같다. `du` 는 디렉터리를 다
+    센 뒤에 그 줄을 찍기 때문이고, 순회는 완료 표시가 붙은 노드만 내보내기
+    때문이다.
+    """
+
+    if engine == ENGINE_PYTHON:
+        outcome = walker.walk_tree(
+            path,
+            timeout_seconds=timeout_seconds,
+            max_depth=max_depth,
+            workers=workers,
+            exclude_names=SNAPSHOT_DIR_NAMES,
+        )
+        return DuTreeOutcome(
+            entries=outcome.entries,
+            root_size_kb=outcome.root_size_kb,
+            completed=outcome.completed,
+            timed_out=outcome.timed_out,
+            partial=outcome.partial,
+            error_message=outcome.error_message,
+        )
+    return run_du_tree(path, timeout_seconds, max_depth=max_depth)
+
+
 def _decode_stream(raw) -> str:
     if raw is None:
         return ""
@@ -387,7 +448,13 @@ def list_immediate_subdirs(path: str, skip_snapshots: bool = True) -> List[str]:
 
 
 def process_one_checkpoint(
-    conn, checkpoint, timeout_seconds: int, max_depth: int = 3, generation: int = None
+    conn,
+    checkpoint,
+    timeout_seconds: int,
+    max_depth: int = 3,
+    generation: int = None,
+    engine: str = ENGINE_DU,
+    workers: int = 1,
 ) -> str:
     """체크포인트 하나(서브트리 하나)를 처리하고 상태 문자열을 반환한다.
 
@@ -404,7 +471,9 @@ def process_one_checkpoint(
     account_id = checkpoint["account_id"]
     path = checkpoint["path"]
 
-    outcome = run_du_tree(path, timeout_seconds, max_depth=max_depth)
+    outcome = measure_tree(
+        path, timeout_seconds, max_depth=max_depth, engine=engine, workers=workers
+    )
 
     if outcome.entries:
         scan_store.save_tree_entries(conn, account_id, generation, outcome.entries, path)

@@ -258,6 +258,20 @@ class AccountDialog(QDialog):
         self.parallel_weekend_spin.setToolTip(i18n.t("accounts.parallel_hint"))
         form.addRow(i18n.t("accounts.parallel_weekend"), self.parallel_weekend_spin)
 
+        self.engine_combo = QComboBox()
+        for engine, key in (
+            (config_module.SCAN_ENGINE_PYTHON, "accounts.engine.python"),
+            (config_module.SCAN_ENGINE_DU, "accounts.engine.du"),
+        ):
+            self.engine_combo.addItem(i18n.t(key), engine)
+        current = self.engine_combo.findData(settings.scan_engine)
+        self.engine_combo.setCurrentIndex(current if current >= 0 else 0)
+        self.engine_combo.setToolTip(i18n.t("accounts.engine_hint"))
+        # 선택지 전체 기준으로 폭을 깔아 준다 - Qt 는 현재 항목만 보고 폭을
+        # 정해서, 짧은 쪽이 골라져 있으면 긴 쪽이 잘린 채로 보인다.
+        self.engine_combo.setMinimumWidth(self._combo_width(self.engine_combo))
+        form.addRow(i18n.t("accounts.engine"), self.engine_combo)
+
         self.mode_combo = QComboBox()
         for mode, key in (
             (config_module.NOTIFY_MODE_OUTBOX, "notify.mode.outbox"),
@@ -593,6 +607,7 @@ class AccountDialog(QDialog):
         settings.sample_retention_days = self.retention_spin.value()
         settings.nightly_parallel_accounts = self.parallel_weekday_spin.value()
         settings.weekend_parallel_accounts = self.parallel_weekend_spin.value()
+        settings.scan_engine = self.engine_combo.currentData()
         settings.notification_mode = mode
         settings.notification_command = notification_command
         settings.notification_webhook_url = webhook_url

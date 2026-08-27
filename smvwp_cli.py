@@ -7,6 +7,7 @@
     ./smvwp_cli.py scan --now              # 시간창 무시하고 지금 실행
     ./smvwp_cli.py scan --stop             # 실행 중인 스캔에 안전 중지 요청
     ./smvwp_cli.py scan --now --parallel 4 # 볼륨 4개 동시 - 부하 실측용
+    ./smvwp_cli.py scan --now --engine du # 예전 du 방식으로 한 번만
     ./smvwp_cli.py notify                  # 트레이 알림기 실행
     ./smvwp_cli.py notify --install-autostart
 
@@ -216,6 +217,11 @@ def command_scan(args) -> int:
     if args.status:
         return _print_scan_status(data_dir, config)
 
+    # 설정 파일을 고치지 않고 이번 실행만 다른 엔진으로 잰다. 두 방법을 같은
+    # 밤에 번갈아 돌려 비교할 때 쓴다.
+    if args.engine:
+        config.settings.scan_engine = args.engine
+
     summary = nightly_scan.run_nightly_scan(
         data_dir,
         config,
@@ -233,7 +239,8 @@ def command_scan(args) -> int:
     night = "주말 밤" if summary.weekend_night else "평일 밤"
     print(
         f"야간 상세 스캔 종료 (run_id={summary.run_id}, 상태={summary.status}, "
-        f"{night} · 동시 볼륨={summary.parallel_accounts})"
+        f"{night} · 동시 볼륨={summary.parallel_accounts} · "
+        f"엔진={config.settings.scan_engine})"
     )
     for outcome in summary.accounts:
         print(
@@ -380,6 +387,16 @@ def build_parser() -> argparse.ArgumentParser:
             "같은 볼륨의 계정은 이 값과 무관하게 하나씩 돈다 - 같은 볼륨을 "
             "여럿이 두들겨 봐야 빨라지지 않는다. 결과는 보고서의 "
             "'스캔 중 리소스 변화'에서 확인한다."
+        ),
+    )
+    scan.add_argument(
+        "--engine",
+        choices=config_module.SCAN_ENGINES,
+        default=None,
+        help=(
+            "이번 실행만 다른 측정 엔진을 쓴다 (기본: 설정값). "
+            "python=파이썬 순회(빠름), du=du -k 실행(nice/ionice가 듣는다). "
+            "설정 파일은 건드리지 않는다."
         ),
     )
     scan.set_defaults(func=command_scan)

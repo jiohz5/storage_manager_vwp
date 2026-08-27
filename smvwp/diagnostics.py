@@ -181,11 +181,26 @@ def check_data_dir(data_dir: Optional[Path]) -> dict:
     except Exception:  # pragma: no cover - 진단이 실패로 끝나면 안 된다
         modes = {}
 
+    # 어떤 엔진으로 재고 있는지. 밤 스캔이 빠르거나 느린 이유를 가를 때 가장
+    # 먼저 봐야 하는 값인데, 설정 파일을 열어 보기 전에는 알 수 없었다.
+    engine = None
+    walker_exact = None
+    try:
+        from . import config as config_module
+        from . import walker
+
+        engine = config_module.load_config(data_dir).settings.scan_engine
+        walker_exact = walker.HAVE_ST_BLOCKS
+    except Exception:  # pragma: no cover - 진단이 실패로 끝나면 안 된다
+        engine = None
+
     return {
         "configured": True, "ok": True, "path": str(data_dir), "error": None,
         "filesystem": fs_type,
         "network": paths.is_network_filesystem(data_dir),
         "journal_modes": modes,
+        "scan_engine": engine,
+        "walker_exact_sizes": walker_exact,
     }
 
 
@@ -261,6 +276,16 @@ def format_report(result: dict) -> str:
         lines.append(f"데이터 디렉터리: {data_dir['path']} - 쓰기 OK{suffix}")
         for label, mode in sorted((data_dir.get("journal_modes") or {}).items()):
             lines.append(f"  └ {label}: journal={mode}")
+        engine = data_dir.get("scan_engine")
+        if engine:
+            lines.append(f"  └ 상세 스캔 엔진: {engine}")
+            if engine == "python" and data_dir.get("walker_exact_sizes") is False:
+                # 이 환경에서는 st_blocks 가 없어 크기가 근사값이다. 리눅스에서는
+                # 나지 않는 경고지만, 개발 PC 에서 숫자가 다르다고 놀라지 않게 한다.
+                lines.append(
+                    "      st_blocks를 지원하지 않는 환경이라 크기가 근사값입니다 "
+                    "(리눅스에서는 du와 정확히 일치합니다)"
+                )
         if data_dir.get("network") and any(
             str(mode).lower() == "wal"
             for mode in (data_dir.get("journal_modes") or {}).values()

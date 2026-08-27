@@ -321,7 +321,8 @@ storage_manager_vwp/
     scan_window.py                         # 22:00~06:00 시간창 계산
     scan_lock.py                            # 실행 잠금 + run ID 매칭 안전 중지
     scan_store.py                            # 스캔 체크포인트/기준선 SQLite
-    detail_scan.py                            # du 기반 기준선 스캔 (분할/우선순위)
+    detail_scan.py                            # 기준선 스캔 (분할/우선순위, 엔진 선택)
+    walker.py                                 # 파이썬 병렬 순회 엔진 (기본)
     activity_scan.py                           # find -newermt 기반 변경 파일 스캔
     nightly_scan.py                             # 야간 스캔 오케스트레이터
     search_index.py                              # 이름 검색 인덱스 (별도 DB)
