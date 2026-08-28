@@ -378,7 +378,11 @@ def command_probe(args) -> int:
 
     say = (lambda message: None) if args.codes_only else print
     if not args.codes_only:
-        pieces = len(probe.QUICK_THREAD_SWEEP if args.quick else probe.THREAD_SWEEP) + 1
+        sweeps = (
+            probe.QUICK_THREAD_SWEEP + probe.QUICK_PROCESS_SWEEP if args.quick
+            else probe.THREAD_SWEEP + probe.PROCESS_SWEEP
+        )
+        pieces = len(sweeps) + 1
         pairs = 3 * 5
         print(f"대상: {target}")
         print(
@@ -396,6 +400,7 @@ def command_probe(args) -> int:
         slice_seconds=seconds,
         workers=args.workers,
         quick=args.quick,
+        process_threads=args.process_threads,
         peer_same_filer=args.peer,
         peer_other_filer=args.peer2,
         log=say,
@@ -407,7 +412,7 @@ def command_probe(args) -> int:
     if not args.codes_only:
         print(probe.format_detail(result))
         print("")
-        print("위의 CODE/VAL 두세 줄만 옮겨 주시면 됩니다.")
+        print("위의 CODE / CPU / VAL 줄만 옮겨 주시면 됩니다 (줄 이름도 함께).")
     return 0
 
 
@@ -485,7 +490,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument(
         "--quick", action="store_true",
-        help="스레드 확장을 x1/x4만 본다 (시간 절반)",
+        help="스레드/프로세스 확장을 x1/x4만 본다 (시간 절반)",
+    )
+    probe.add_argument(
+        "--process-threads", type=int, default=2,
+        help=(
+            "프로세스 측정에서 프로세스마다 쓸 스레드 수 (기본 2). "
+            "프로세스 수 × 이 값이 총 동시 요청 수가 된다."
+        ),
     )
     probe.add_argument(
         "--peer", default=None,

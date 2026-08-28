@@ -6,6 +6,7 @@
 """
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -139,7 +140,7 @@ class CodeStringTests(unittest.TestCase):
 
     def test_codes_are_grouped_in_fours(self):
         result = self._result([("A", 1), ("B", 2), ("C", 3), ("D", 4), ("E", 5)])
-        self.assertEqual(probe.code_string(result), "A1B2C3D4 E5")
+        self.assertEqual(probe.code_string(result.checks), "A1B2C3D4 E5")
 
     def test_checksum_catches_a_single_wrong_character(self):
         first = probe.checksum("A1B2C3D4")
@@ -164,11 +165,28 @@ class CodeStringTests(unittest.TestCase):
         self.assertIn("CODE A1 #", text)
 
     def test_values_appear_only_when_present(self):
-        result = probe.ProbeResult(checks=[
+        checks = [
             probe.Check("A", "", 1, raw="ecfiler:/vol/cae"),
             probe.Check("B", "", 2),
-        ])
-        self.assertEqual(probe.value_line(result), "A=ecfiler:/vol/cae")
+        ]
+        self.assertEqual(probe.value_line(checks), "A=ecfiler:/vol/cae")
+
+    def test_cpu_values_are_prefixed_so_the_tables_do_not_collide(self):
+        """`CODE` 의 A 와 `CPU` 의 A 는 다른 값이다 - VAL 에서 섞이면 안 된다."""
+
+        checks = [probe.Check("A", "", 2, raw="20/10")]
+        self.assertEqual(probe.value_line(checks, prefix="c"), "cA=20/10")
+
+    def test_cpu_table_gets_its_own_line_and_checksum(self):
+        result = probe.ProbeResult(
+            checks=[probe.Check("A", "", 1)],
+            cpu=[probe.Check("A", "", 3)],
+        )
+        lines = probe.format_transfer(result).splitlines()
+        self.assertTrue(any(line.startswith("CODE ") for line in lines))
+        cpu_line = [line for line in lines if line.startswith("CPU ")][0]
+        # 같은 글자라도 값이 달라 검사합이 갈린다 - 두 줄을 섞어 적으면 걸린다.
+        self.assertIn("A3", cpu_line)
 
 
 class SubdirPickingTests(unittest.TestCase):
@@ -280,9 +298,176 @@ class FullProbeTests(unittest.TestCase):
             str(self.root), slice_seconds=0.05, quick=True, du_timeout=20
         )
         text = probe.format_transfer(result)
-        self.assertLessEqual(len(text.splitlines()), 3)
+        self.assertLessEqual(len(text.splitlines()), 4)
         for line in text.splitlines():
             self.assertLess(len(line), 200, f"옮겨 적기에 너무 깁니다: {line}")
+
+
+CPUINFO = """processor	: 0
+physical id	: 0
+core id		: 0
+siblings	: 4
+
+processor	: 1
+physical id	: 0
+core id		: 1
+siblings	: 4
+
+processor	: 2
+physical id	: 0
+core id		: 0
+siblings	: 4
+
+processor	: 3
+physical id	: 0
+core id		: 1
+siblings	: 4
+"""
+
+
+class CpuTopologyTests(unittest.TestCase):
+    """논리 CPU 수만으로는 부족하다 - 하이퍼스레딩이면 절반이 진짜 코어다."""
+
+    def test_physical_cores_are_counted_by_socket_and_core_pairs(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source = Path(tmp.name) / "cpuinfo"
+        source.write_text(CPUINFO, encoding="utf-8")
+
+        def fake_path(value):
+            return source if str(value) == "/proc/cpuinfo" else Path(value)
+
+        with patch("smvwp.probe.Path", side_effect=fake_path):
+            with patch("os.cpu_count", return_value=4):
+                topology = probe.cpu_topology()
+        # 논리 4개인데 (소켓, 코어) 쌍은 2개 - 하이퍼스레딩이다.
+        self.assertEqual(topology["logical"], 4)
+        self.assertEqual(topology["physical"], 2)
+        self.assertAlmostEqual(topology["threads_per_core"], 2.0)
+
+    def test_missing_cpuinfo_says_unknown_instead_of_guessing(self):
+        with patch("smvwp.probe.Path", side_effect=lambda p: Path("/nope/nope")):
+            topology = probe.cpu_topology()
+        self.assertIsNone(topology["physical"])
+
+
+class CpuMeterTests(unittest.TestCase):
+    def test_busy_work_shows_up_as_about_one_core(self):
+        """이 값이 '우리가 태우는 중'과 '기다리는 중'을 가른다."""
+
+        with probe.CpuMeter() as meter:
+            total = 0
+            for index in range(2_000_000):
+                total += index * index
+        self.assertIsNotNone(meter.result.cores)
+        self.assertGreater(meter.result.cores, 0.5)
+
+    def test_sleeping_shows_up_as_almost_no_cpu(self):
+        with probe.CpuMeter() as meter:
+            time.sleep(0.2)
+        self.assertLess(meter.result.cores, 0.3)
+
+
+class SaturationTests(unittest.TestCase):
+    def test_the_last_real_gain_is_the_saturation_point(self):
+        # x2 에서 늘고 x4 에서 멈췄다 -> 포화는 x2.
+        self.assertEqual(
+            probe._saturation_point([100, 190, 195, 193], [1, 2, 4, 8]), 2
+        )
+
+    def test_no_gain_at_all_means_one(self):
+        self.assertEqual(
+            probe._saturation_point([100, 101, 99, 102], [1, 2, 4, 8]), 1
+        )
+
+    def test_still_climbing_means_the_last_count(self):
+        self.assertEqual(
+            probe._saturation_point([100, 200, 400, 800], [1, 2, 4, 8]), 8
+        )
+
+    def test_nothing_measured_is_none_not_one(self):
+        self.assertIsNone(probe._saturation_point([], [1, 2]))
+        self.assertIsNone(probe._saturation_point([0, 0], [1, 2]))
+
+
+class CpuChecksTests(unittest.TestCase):
+    """`CPU` 줄의 뜻이 표와 어긋나지 않게."""
+
+    def _checks(self, **kwargs):
+        values = dict(
+            topology={"logical": 32, "physical": 16, "threads_per_core": 2.0},
+            single=probe.CpuUse(cores=0.2, system_iowait=40.0),
+            parallel=probe.CpuUse(cores=0.6, system_iowait=45.0),
+            thread_rates=[100.0, 150.0],
+            thread_counts=[1, 4],
+            process_rates=[],
+            process_counts=[],
+        )
+        values.update(kwargs)
+        checks = probe.cpu_checks(**values)
+        return {check.letter: check.digit for check in checks}
+
+    def test_waiting_looks_different_from_burning_cpu(self):
+        waiting = self._checks(
+            single=probe.CpuUse(cores=0.15), parallel=probe.CpuUse(cores=0.4)
+        )
+        burning = self._checks(
+            single=probe.CpuUse(cores=0.95), parallel=probe.CpuUse(cores=3.8)
+        )
+        self.assertEqual(waiting["C"], 1)    # 대부분 기다림
+        self.assertEqual(burning["C"], 3)    # 한 코어를 거의 다 씀
+        self.assertEqual(waiting["D"], 1)
+        self.assertEqual(burning["D"], 3)
+
+    def test_processes_clearly_faster_points_at_the_gil(self):
+        codes = self._checks(
+            thread_rates=[100.0, 120.0],
+            process_rates=[100.0, 400.0],
+            process_counts=[1, 4],
+        )
+        self.assertEqual(codes["G"], 1)   # 프로세스가 1.2배 이상
+
+    def test_processes_no_better_points_away_from_python(self):
+        codes = self._checks(
+            thread_rates=[100.0, 200.0],
+            process_rates=[100.0, 195.0],
+            process_counts=[1, 4],
+        )
+        self.assertEqual(codes["G"], 2)   # 비슷 -> 파이썬 쪽이 아니다
+
+    def test_no_process_measurement_stays_zero(self):
+        codes = self._checks()
+        self.assertEqual(codes["F"], 0)
+        self.assertEqual(codes["G"], 0)
+
+    def test_hyperthreading_is_visible(self):
+        codes = self._checks()
+        self.assertEqual(codes["B"], 2)
+        plain = self._checks(
+            topology={"logical": 16, "physical": 16, "threads_per_core": 1.0}
+        )
+        self.assertEqual(plain["B"], 1)
+
+
+class ProcessSweepTests(unittest.TestCase):
+    def test_fork_is_required_and_reported_honestly(self):
+        """윈도우에는 fork 가 없다 - 없는 것을 있다고 하면 안 된다."""
+
+        self.assertIsInstance(probe.can_fork(), bool)
+
+    def test_share_walks_every_subtree_at_least_once(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for name in ("a", "b"):
+            (root / name).mkdir()
+            (root / name / "f.dat").write_bytes(b"x" * 100)
+
+        items, unreadable = probe._walk_share(
+            ([str(root / "a"), str(root / "b")], 1, None)
+        )
+        self.assertEqual(unreadable, 0)
+        self.assertGreaterEqual(items, 4)   # 디렉터리 2 + 파일 2
 
 
 if __name__ == "__main__":  # pragma: no cover

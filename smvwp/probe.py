@@ -7,8 +7,12 @@
 점검을 **글자 하나 + 숫자 하나**(`A1`, `K2`)로 줄여, 26개 점검 전체가 한 줄에
 들어가게 한다. 숫자로 담을 수 없는 값(초, 배수 등)만 두 번째 줄에 짧게 붙인다.
 
-    CODE/1 A1B2C1D2 E3F1G1H3 ... #7c
-    VAL H=87.8/36.4 I=1.00/1.62/1.95 K=0.52 ...
+    CODE A1B2C1D2 E3F1G1H3 ... #7c
+    CPU  A3B2C1D2 E2F3G2H3
+    VAL  H=87.8/36.4 I=1.00/1.62/1.95 K=0.52 ...
+
+`CODE` 와 `CPU` 는 **서로 다른 표**다 (같은 `A` 라도 뜻이 다르다). 줄 이름을
+같이 적어야 하는 이유가 그것이다.
 
 코드의 뜻은 `PROBE_CODES.md` 에 있다. **버전(`CODE_VERSION`)을 같이 찍는
 이유**가 그것이다 - 표를 고치면 옛 코드를 잘못 읽게 되므로, 뜻이 바뀌면
@@ -33,6 +37,10 @@
    안 빨라진다는 것은 이미 실측했고, **같은 파일러의 다른 볼륨이 어떤지**가
    아직 답이 없다. `L` 이 그 답이다.
 4. **트리 모양과 장비**(Q~Z) - 왜 그런 숫자가 나왔는지 설명하는 값들.
+5. **CPU 와 프로세스**(`CPU` 줄) - "안 빨라진다"의 원인을 가른다. 순회 중
+   우리가 CPU 를 얼마나 태웠는지(C·D), 기다리기만 했는지(E), 그리고 스레드
+   대신 프로세스로 나누면 달라지는지(F·G). 스레드가 GIL 에 막힌 것이라면
+   프로세스는 늘어나고, 서버가 한계라면 프로세스도 그대로다.
 """
 
 from __future__ import annotations
@@ -46,11 +54,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
-from . import walker
+from . import loadstat, walker
 
 # 코드표 버전. `PROBE_CODES.md` 와 짝이다 - 글자/숫자의 뜻을 바꾸면 반드시
 # 올린다. 안 올리면 옛 결과를 새 표로 읽어 반대 결론이 난다.
-CODE_VERSION = 1
+CODE_VERSION = 2
 
 # 시간을 재는 조각 하나의 길이(초). 동시성 비교는 트리를 끝까지 걷지 않고
 # 이만큼씩 잘라서 처리량으로 비교한다 - 큰 계정에서도 시간이 예측 가능하다.
@@ -60,6 +68,14 @@ DEFAULT_SLICE_SECONDS = 15
 # 바뀌면 달라질 수 있으므로 확인 자체는 남긴다.
 THREAD_SWEEP = (1, 2, 4, 8)
 QUICK_THREAD_SWEEP = (1, 4)
+
+# 프로세스로 나눠 볼 수. 스레드 축과 나란히 읽으려고 같은 모양으로 둔다.
+PROCESS_SWEEP = (1, 2, 4)
+QUICK_PROCESS_SWEEP = (1, 4)
+
+# 프로세스에 나눠 줄 최상위 디렉터리 수의 상한. 다 나눠 주면 작은 것 수백 개가
+# pickle 로 오가느라 측정이 오염된다.
+MAX_PROCESS_SUBTREES = 64
 
 # 이 배속 미만이면 "더 늘려도 의미 없다"고 본다. 측정 흔들림이 10% 안팎이라
 # 그보다 넉넉히 잡았다.
@@ -80,11 +96,14 @@ class Check:
 @dataclass
 class ProbeResult:
     checks: List[Check] = field(default_factory=list)
+    # `CPU` 줄은 **다른 표**다. 같은 글자라도 뜻이 다르므로 섞어 두지 않는다.
+    cpu: List[Check] = field(default_factory=list)
     path: str = ""
     warnings: List[str] = field(default_factory=list)
 
-    def by_letter(self, letter: str) -> Optional[Check]:
-        for check in self.checks:
+    def by_letter(self, letter: str, group: str = "CODE") -> Optional[Check]:
+        source = self.cpu if group == "CPU" else self.checks
+        for check in source:
             if check.letter == letter:
                 return check
         return None
@@ -253,6 +272,107 @@ def environment_checks(path: Path, mount_source: Optional[Path] = None) -> List[
     return [a, b, c, d, e, f, g]
 
 
+# ---------------------------------------------------------------- CPU 계측
+
+
+def cpu_topology() -> dict:
+    """`{logical, physical, threads_per_core}`. 모르면 값이 None.
+
+    논리 CPU 수만으로는 "스레드를 몇 개까지 늘려도 되나"를 못 정한다.
+    하이퍼스레딩이면 논리 32개라도 실제 연산 자원은 16개다 - 순회처럼 대기가
+    많은 일에는 논리 수가 유효하지만, CPU 를 태우는 구간에서는 물리 수가
+    천장이다. 둘을 구분해서 남긴다.
+    """
+
+    logical = os.cpu_count()
+    physical = None
+    try:
+        text = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"logical": logical, "physical": None, "threads_per_core": None}
+
+    # (물리 소켓 id, 코어 id) 쌍의 가짓수가 물리 코어 수다. 소켓이 여럿인
+    # 장비에서 `cpu cores` 하나만 보면 소켓 하나 분량만 세게 된다.
+    pairs = set()
+    physical_id = core_id = None
+    for line in text.splitlines():
+        if ":" not in line:
+            if physical_id is not None and core_id is not None:
+                pairs.add((physical_id, core_id))
+            physical_id = core_id = None
+            continue
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key == "physical id":
+            physical_id = value
+        elif key == "core id":
+            core_id = value
+    if physical_id is not None and core_id is not None:
+        pairs.add((physical_id, core_id))
+
+    if pairs:
+        physical = len(pairs)
+    per_core = (logical / physical) if (logical and physical) else None
+    return {"logical": logical, "physical": physical, "threads_per_core": per_core}
+
+
+@dataclass
+class CpuUse:
+    """한 측정 구간 동안 실제로 쓴 CPU.
+
+    `cores` 는 **코어 환산**이다 - 2.0 이면 두 코어를 꽉 채워 쓴 것이고,
+    0.2 면 대부분 기다린 것이다. 이 값 하나가 "우리가 느린가, 서버가
+    느린가"를 가른다.
+    """
+
+    cores: Optional[float] = None          # 우리 프로세스(+자식)가 쓴 코어 수
+    system_busy: Optional[float] = None    # 장비 전체 CPU 사용률 %
+    system_iowait: Optional[float] = None  # 장비 전체 iowait %
+
+
+class CpuMeter:
+    """`with` 구간 동안 우리가 쓴 CPU 와 장비 전체 상태를 함께 잰다.
+
+    우리 것과 장비 전체를 **둘 다** 봐야 한다. 우리 CPU 만 보면 옆에서 도는
+    다른 작업 때문에 느린 것을 우리 탓으로 돌리고, 장비 전체만 보면 그 반대가
+    된다.
+    """
+
+    def __init__(self):
+        self.result = CpuUse()
+        self._sampler = None
+        self._started = 0.0
+        self._cpu_started = 0.0
+
+    def _process_cpu(self) -> float:
+        total = time.process_time()   # 이 프로세스의 모든 스레드
+        try:
+            import resource
+
+            children = resource.getrusage(resource.RUSAGE_CHILDREN)
+            total += children.ru_utime + children.ru_stime
+        except Exception:  # pragma: no cover - 윈도우 등
+            pass
+        return total
+
+    def __enter__(self):
+        self._sampler = loadstat.SystemSampler()
+        self._started = time.perf_counter()
+        self._cpu_started = self._process_cpu()
+        return self
+
+    def __exit__(self, *exc_info):
+        elapsed = time.perf_counter() - self._started
+        used = self._process_cpu() - self._cpu_started
+        system = self._sampler.take()
+        self.result = CpuUse(
+            cores=(used / elapsed) if elapsed > 0 else None,
+            system_busy=system.busy_percent,
+            system_iowait=system.iowait_percent,
+        )
+        return False
+
+
 # ---------------------------------------------------------------- 측정 도구
 
 
@@ -381,6 +501,80 @@ def pair_efficiency(
     return (both_left.rate / left_alone + both_right.rate / right_alone) / 2
 
 
+# ------------------------------------------------------------ 프로세스 측정
+
+
+def _walk_share(job) -> "tuple":
+    """프로세스 하나가 맡은 서브트리들을 훑는다. `(항목 수, 못 읽은 수)`.
+
+    **모듈 최상위 함수여야 한다** - 프로세스 풀이 함수를 pickle 로 보내므로
+    지역 함수나 람다는 쓸 수 없다.
+
+    돌려주는 것은 숫자 둘뿐이다. 경로 목록을 통째로 넘기면 pickle 비용이
+    측정 자체를 오염시킨다.
+    """
+
+    subtrees, workers, deadline = job
+    items = 0
+    unreadable = 0
+    # 스레드 쪽과 같은 조건이어야 비교가 성립한다 - 거기서도 시간이 남으면
+    # 다시 걷는다(`timed_walk`). 여기만 일찍 끝내면 프로세스가 불리해진다.
+    while True:
+        for path in subtrees:
+            remaining = deadline - time.monotonic() if deadline else None
+            if remaining is not None and remaining <= 0:
+                return items, unreadable
+            outcome = walker.walk_tree(
+                path, timeout_seconds=remaining, max_depth=0, workers=workers
+            )
+            items += outcome.file_count + outcome.dir_count
+            unreadable += outcome.unreadable
+        if deadline is None:
+            return items, unreadable
+
+
+def can_fork() -> bool:
+    """프로세스 측정을 할 수 있는가.
+
+    `fork` 만 쓴다. `spawn`(윈도우 기본)은 자식이 주 모듈을 다시 임포트하므로,
+    진단을 돌린 방식에 따라 예상 못 한 재실행이 일어난다. 반입 장비는
+    리눅스라 `fork` 가 있고, 없으면 이 측정만 건너뛴다(코드 0).
+    """
+
+    try:
+        import multiprocessing
+
+        return "fork" in multiprocessing.get_all_start_methods()
+    except Exception:  # pragma: no cover - 방어적 처리
+        return False
+
+
+def process_slice(
+    subtrees: List[str], procs: int, workers: int, slice_seconds: float
+) -> Slice:
+    """최상위 디렉터리를 프로세스 `procs` 개에 나눠 `slice_seconds` 동안 훑는다.
+
+    나누는 단위를 야간 스캔의 체크포인트와 같게 두었다 - 실제로 병렬화할 수
+    있는 단위가 그것이라, 여기서만 되는 방식으로 재면 쓸모가 없다.
+    """
+
+    import multiprocessing
+
+    buckets = [[] for _ in range(procs)]
+    for index, subtree in enumerate(subtrees):
+        buckets[index % procs].append(subtree)
+    deadline = time.monotonic() + slice_seconds
+    jobs = [(bucket, workers, deadline) for bucket in buckets if bucket]
+
+    started = time.perf_counter()
+    items = 0
+    context = multiprocessing.get_context("fork")
+    with context.Pool(processes=len(jobs)) as pool:
+        for count, _unreadable in pool.map(_walk_share, jobs):
+            items += count
+    return Slice(seconds=time.perf_counter() - started, items=items)
+
+
 # ---------------------------------------------------------------- 이웃 찾기
 
 
@@ -446,6 +640,130 @@ def largest_subdirs(entries, root: str, count: int = 2) -> List[str]:
         children.append((size_kb, path))
     children.sort(reverse=True)
     return [path for _, path in children[:count]]
+
+
+
+
+def cpu_checks(
+    topology: dict,
+    single: Optional[CpuUse],
+    parallel: Optional[CpuUse],
+    thread_rates: Sequence[float],
+    thread_counts: Sequence[int],
+    process_rates: Sequence[float],
+    process_counts: Sequence[int],
+) -> List[Check]:
+    """`CPU` 줄. "안 빨라진다"의 원인을 가르는 값들.
+
+    ## 읽는 법
+
+    - **C·D 가 낮고 E 가 높다** -> 우리는 기다리고만 있다. 스레드를 늘리는 것이
+      맞는 방향이고, 안 늘어난다면 서버나 연결이 천장이다.
+    - **D 가 코어 수에 가깝다** -> 우리가 CPU 를 태우고 있다. 이때는 프로세스로
+      나누는 것이 듣는다(GIL).
+    - **G1 (프로세스가 확실히 빠름)** -> GIL 이 병목이었다는 뜻.
+    - **G2 (비슷)** -> 파이썬 쪽이 아니라 저장소/연결이 천장이다.
+    """
+
+    logical = topology.get("logical")
+    physical = topology.get("physical")
+    per_core = topology.get("threads_per_core")
+
+    checks = [
+        Check(
+            "A", "논리 CPU 수",
+            bucket(logical, [8, 32, 64]),
+            (
+                f"논리 {logical} / 물리 {physical}" if (logical and physical)
+                else (f"논리 {logical} (물리 코어 수 확인 불가)" if logical else "확인 불가")
+            ),
+            f"{logical}/{physical}" if logical and physical else (str(logical) if logical else None),
+        ),
+        Check(
+            "B", "하이퍼스레딩",
+            0 if not per_core else (1 if per_core < 1.5 else (2 if per_core < 2.5 else 3)),
+            f"코어당 스레드 {per_core:.1f}" if per_core else "확인 불가",
+        ),
+    ]
+
+    # C: 스레드 하나로 돌 때 우리가 태운 CPU. 1코어에 가까우면 파이썬 쪽이
+    # 이미 한 코어를 다 쓰는 것이고, 낮으면 대부분 기다린 것이다.
+    single_cores = single.cores if single else None
+    checks.append(Check(
+        "C", "x1 CPU 점유",
+        bucket(single_cores, [0.25, 0.7, 1.0]),
+        f"{single_cores:.2f} 코어" if single_cores is not None else "확인 불가",
+        f"{single_cores:.2f}" if single_cores is not None else None,
+    ))
+
+    # D: 스레드를 늘렸을 때 실제로 몇 코어를 태웠는가. 여기가 낮은데 속도도
+    # 안 늘면 병목은 우리 CPU 가 아니다.
+    parallel_cores = parallel.cores if parallel else None
+    checks.append(Check(
+        "D", "병렬 CPU 점유",
+        bucket(parallel_cores, [1.0, 2.0, 4.0]),
+        f"{parallel_cores:.2f} 코어" if parallel_cores is not None else "확인 불가",
+        f"{parallel_cores:.2f}" if parallel_cores is not None else None,
+    ))
+
+    # E: 장비 전체 iowait. 우리 CPU 가 낮은 이유가 "기다리는 중"인지 확인한다.
+    iowait = parallel.system_iowait if parallel else None
+    checks.append(Check(
+        "E", "iowait",
+        bucket(iowait, [5, 20, 50]),
+        f"{iowait:.1f}%" if iowait is not None else "확인 불가 (/proc 없음)",
+        f"{iowait:.0f}%" if iowait is not None else None,
+    ))
+
+    # F: 프로세스를 늘리면 어디까지 늘어나는가.
+    saturated = _saturation_point(process_rates, process_counts)
+    checks.append(Check(
+        "F", "프로세스 확장 포화점",
+        {1: 1, 2: 2, 4: 3, 8: 4, 16: 5}.get(saturated, 0),
+        f"x{saturated} 이후로는 늘지 않음" if saturated else "재지 못함 (fork 불가 또는 건너뜀)",
+        "/".join(f"{rate / process_rates[0]:.2f}" for rate in process_rates)
+        if process_rates and process_rates[0] > 0 else None,
+    ))
+
+    # G: 같은 동시성에서 프로세스가 스레드보다 나은가. **이 한 칸이 GIL
+    # 가설의 답이다.**
+    best_threads = max(thread_rates) if thread_rates else None
+    best_procs = max(process_rates) if process_rates else None
+    if best_threads and best_procs:
+        ratio = best_procs / best_threads
+        digit = 1 if ratio >= 1.2 else (2 if ratio >= 0.8 else 3)
+        checks.append(Check(
+            "G", "프로세스 대 스레드",
+            digit,
+            f"프로세스가 스레드의 {ratio:.2f}배",
+            f"{ratio:.2f}",
+        ))
+    else:
+        checks.append(Check("G", "프로세스 대 스레드", 0, "재지 못함"))
+
+    # H: 어떤 방식으로든 x1 대비 얼마나 벌었는가. 병렬화 전체의 성적표다.
+    base = thread_rates[0] if thread_rates else None
+    best = max([rate for rate in list(thread_rates) + list(process_rates) if rate], default=None)
+    gain = (best / base) if (base and best) else None
+    checks.append(Check(
+        "H", "최대 달성 배율",
+        bucket(gain, [1.2, 2.0, 4.0]),
+        f"x1 대비 {gain:.2f}배" if gain else "재지 못함",
+        f"{gain:.2f}" if gain else None,
+    ))
+    return checks
+
+
+def _saturation_point(rates: Sequence[float], counts: Sequence[int]) -> Optional[int]:
+    """더 늘려도 의미가 없어지는 지점. 재지 못했으면 None."""
+
+    if not rates or not counts or rates[0] <= 0:
+        return None
+    index = 0
+    for position in range(1, len(rates)):
+        if rates[position] > rates[position - 1] * SCALING_GAIN:
+            index = position
+    return counts[index]
 
 
 # ---------------------------------------------------------------- 장비 상태
@@ -519,6 +837,7 @@ def run_probe(
     slice_seconds: float = DEFAULT_SLICE_SECONDS,
     workers: int = 4,
     quick: bool = False,
+    process_threads: int = 2,
     peer_same_filer: Optional[str] = None,
     peer_other_filer: Optional[str] = None,
     log: Optional[Callable[[str], None]] = None,
@@ -583,23 +902,54 @@ def run_probe(
     sweep = QUICK_THREAD_SWEEP if quick else THREAD_SWEEP
     say(f"[3/5] 스레드 확장 {sweep} (조각당 {slice_seconds:.0f}초)")
     rates = []
+    cpu_single = None
+    cpu_parallel = None
     for count in sweep:
-        piece = timed_walk(str(target), count, slice_seconds)
+        # 조각마다 CPU 를 함께 잰다. 속도만 보면 "안 빨라졌다"까지밖에 모르고,
+        # 그것이 우리가 CPU 를 다 쓴 탓인지 기다린 탓인지는 여기서 갈린다.
+        with CpuMeter() as meter:
+            piece = timed_walk(str(target), count, slice_seconds)
         rates.append(piece.rate)
-        say(f"      x{count}: {piece.rate:,.0f} 항목/초")
+        if count == sweep[0]:
+            cpu_single = meter.result
+        cpu_parallel = meter.result   # 마지막(=가장 많은 스레드) 구간이 남는다
+        cores = meter.result.cores
+        say(
+            f"      x{count}: {piece.rate:,.0f} 항목/초"
+            + (f" · CPU {cores:.2f}코어" if cores is not None else "")
+        )
 
     base = rates[0] if rates else 0
-    saturate_index = 0
-    for index in range(1, len(rates)):
-        if rates[index] > rates[index - 1] * SCALING_GAIN:
-            saturate_index = index
-    saturated_at = sweep[saturate_index] if rates else None
+    saturated_at = _saturation_point(rates, sweep)
     checks.append(Check(
         "I", "스레드 확장 포화점",
         {1: 1, 2: 2, 4: 3, 8: 4, 16: 5}.get(saturated_at, 0),
         f"x{saturated_at} 이후로는 늘지 않음" if saturated_at else "재지 못함",
         "/".join(f"{rate / base:.2f}" for rate in rates) if base else None,
     ))
+
+    # --- 3b. 프로세스 축 -------------------------------------------------
+    #
+    # 스레드가 안 늘 때 원인이 둘이다: 파이썬(GIL)이거나 저장소다. 프로세스로
+    # 나눠 보면 갈린다 - GIL 이면 늘어나고, 저장소면 그대로다.
+    process_rates: List[float] = []
+    process_counts = list(QUICK_PROCESS_SWEEP if quick else PROCESS_SWEEP)
+    subtrees = largest_subdirs(full.entries, str(target), MAX_PROCESS_SUBTREES)
+    if not can_fork():
+        say("[3b] 프로세스 축: fork 를 쓸 수 없어 건너뜁니다")
+        process_counts = []
+    elif len(subtrees) < 2:
+        say("[3b] 프로세스 축: 나눌 하위 디렉터리가 부족해 건너뜁니다")
+        process_counts = []
+    else:
+        say(
+            f"[3b] 프로세스 확장 {tuple(process_counts)}"
+            f" (프로세스마다 스레드 {process_threads}개)"
+        )
+        for count in process_counts:
+            piece = process_slice(subtrees, count, process_threads, slice_seconds)
+            process_rates.append(piece.rate)
+            say(f"      proc x{count}: {piece.rate:,.0f} 항목/초")
 
     # P: 처음 x1 과 마지막 x1 의 차이. 캐시가 데워지면서 뒤 측정이 유리해지는
     # 흐름이 얼마나 되는지 - 위 확장 결과를 얼마나 믿을지가 여기서 갈린다.
@@ -740,16 +1090,25 @@ def run_probe(
     checks.extend(system_checks(_peak_rss_kb()))
 
     result.checks = sorted(checks, key=lambda check: check.letter)
+    result.cpu = cpu_checks(
+        cpu_topology(),
+        cpu_single,
+        cpu_parallel,
+        rates,
+        sweep,
+        process_rates,
+        process_counts,
+    )
     return result
 
 
 # ---------------------------------------------------------------- 출력
 
 
-def code_string(result: ProbeResult) -> str:
+def code_string(checks: Sequence[Check]) -> str:
     """`A1B2C1D2 E3F1G1H3 ...` - 손으로 옮겨 적기 좋게 넷씩 끊는다."""
 
-    tokens = [f"{check.letter}{check.digit}" for check in result.checks]
+    tokens = [f"{check.letter}{check.digit}" for check in checks]
     groups = [
         "".join(tokens[index:index + 4]) for index in range(0, len(tokens), 4)
     ]
@@ -768,28 +1127,38 @@ def checksum(codes: str) -> str:
     return f"{total:02x}"
 
 
-def value_line(result: ProbeResult) -> str:
+def value_line(checks: Sequence[Check], prefix: str = "") -> str:
     """코드로 못 담는 원값. 있는 것만 짧게."""
 
-    parts = [
-        f"{check.letter}={check.raw}"
-        for check in result.checks
-        if check.raw
-    ]
-    return " ".join(parts)
+    return " ".join(
+        f"{prefix}{check.letter}={check.raw}" for check in checks if check.raw
+    )
 
 
 def format_transfer(result: ProbeResult) -> str:
-    """이 세 줄만 옮겨 적으면 된다."""
+    """옮겨 적을 줄들. 표가 둘이면 줄도 둘이다.
 
-    codes = code_string(result)
+    `CODE` 와 `CPU` 는 서로 다른 표다 - 같은 글자라도 뜻이 다르므로 **줄
+    이름을 반드시 함께** 적어야 한다.
+    """
+
+    codes = code_string(result.checks)
     lines = [
         f"== SMVWP PROBE v{CODE_VERSION} ==",
         f"CODE {codes} #{checksum(codes)}",
     ]
-    values = value_line(result)
+    if result.cpu:
+        cpu_codes = code_string(result.cpu)
+        lines.append(f"CPU  {cpu_codes} #{checksum(cpu_codes)}")
+
+    values = " ".join(
+        piece for piece in (
+            value_line(result.checks),
+            value_line(result.cpu, prefix="c"),
+        ) if piece
+    )
     if values:
-        lines.append(f"VAL {values}")
+        lines.append(f"VAL  {values}")
     return "\n".join(lines)
 
 
@@ -799,10 +1168,14 @@ def format_detail(result: ProbeResult) -> str:
     from .reports import pad
 
     lines = ["", "상세 (옮겨 적지 않아도 됩니다)", "-" * 60]
-    for check in result.checks:
-        mark = f"{check.letter}{check.digit}"
-        # 한글은 두 칸을 차지한다. `%-22s` 로는 줄이 어긋나 읽기 어려워진다.
-        lines.append(f"  {mark:<4} {pad(check.title, 24)} {check.note}")
+    for group, checks in (("CODE", result.checks), ("CPU", result.cpu)):
+        if not checks:
+            continue
+        lines.append(f"[{group}]")
+        for check in checks:
+            mark = f"{check.letter}{check.digit}"
+            # 한글은 두 칸을 차지한다. `%-22s` 로는 줄이 어긋나 읽기 어려워진다.
+            lines.append(f"  {mark:<4} {pad(check.title, 24)} {check.note}")
     if result.warnings:
         lines.append("")
         for warning in result.warnings:
