@@ -355,8 +355,12 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("nightly_parallel_accounts는 1~16이어야 합니다")
     if not 1 <= settings.weekend_parallel_accounts <= 16:
         raise ConfigError("weekend_parallel_accounts는 1~16이어야 합니다")
-    if not 1 <= settings.checkpoint_workers <= 16:
-        raise ConfigError("checkpoint_workers는 1~16이어야 합니다")
+    # 상한을 32로 둔 근거: 실기의 RPC 슬롯 상한이 128이고, 순회는 32코어 중
+    # 0.19코어(0.6%)밖에 안 쓴다. 즉 우리 쪽에는 여유가 많고 천장은 파일서버에
+    # 있다. 그렇다고 128을 열어 주지는 않는다 - 서버 쪽 부담은 이 프로세스에서
+    # 관측할 수 없으므로(DESIGN.md 1부 2절), 진단으로 재 본 범위까지만 연다.
+    if not 1 <= settings.checkpoint_workers <= 32:
+        raise ConfigError("checkpoint_workers는 1~32여야 합니다")
     if settings.scan_engine not in SCAN_ENGINES:
         raise ConfigError(
             "scan_engine은 " + " 또는 ".join(SCAN_ENGINES) + "여야 합니다"

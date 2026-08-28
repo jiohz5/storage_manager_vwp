@@ -58,20 +58,27 @@ from . import loadstat, walker
 
 # 코드표 버전. `PROBE_CODES.md` 와 짝이다 - 글자/숫자의 뜻을 바꾸면 반드시
 # 올린다. 안 올리면 옛 결과를 새 표로 읽어 반대 결론이 난다.
-CODE_VERSION = 3
+CODE_VERSION = 4
 
 # 시간을 재는 조각 하나의 길이(초). 동시성 비교는 트리를 끝까지 걷지 않고
 # 이만큼씩 잘라서 처리량으로 비교한다 - 큰 계정에서도 시간이 예측 가능하다.
 DEFAULT_SLICE_SECONDS = 15
 
-# 스레드 확장을 볼 때 시험할 수. 실측에서 4 위로는 늘지 않았지만, 장비가
-# 바뀌면 달라질 수 있으므로 확인 자체는 남긴다.
-THREAD_SWEEP = (1, 2, 4, 8)
-QUICK_THREAD_SWEEP = (1, 4)
+# 스레드 확장을 볼 때 시험할 수.
+#
+# **32까지 본다.** 예전에는 8에서 멈췄는데, 실기의 RPC 슬롯 상한이 128이고
+# 순회가 32코어 중 0.19코어(0.6%)밖에 안 쓴다는 것이 확인됐다. 스레드 4개는
+# 슬롯 128개 중 4개를 쓰는 것이라 천장 근처에도 못 간 상태였고, 8에서 끊으면
+# "여기가 한계"인지 "여기까지만 쟀다"인지 구분이 안 된다.
+THREAD_SWEEP = (1, 2, 4, 8, 16, 32)
+QUICK_THREAD_SWEEP = (1, 4, 16)
 
 # 프로세스로 나눠 볼 수. 스레드 축과 나란히 읽으려고 같은 모양으로 둔다.
-PROCESS_SWEEP = (1, 2, 4)
+PROCESS_SWEEP = (1, 2, 4, 8)
 QUICK_PROCESS_SWEEP = (1, 4)
+
+# 포화점을 코드 숫자로 옮기는 표. 스윕에 값을 더하면 여기도 같이 늘려야 한다.
+SATURATION_DIGITS = {1: 1, 2: 2, 4: 3, 8: 4, 16: 5, 32: 6}
 
 # 프로세스에 나눠 줄 최상위 디렉터리 수의 상한. 다 나눠 주면 작은 것 수백 개가
 # pickle 로 오가느라 측정이 오염된다.
@@ -620,26 +627,47 @@ def find_peers(target: Path, accounts, volume_key) -> "tuple[Optional[str], Opti
     return same_filer, other_filer
 
 
-def largest_subdirs(entries, root: str, count: int = 2) -> List[str]:
-    """루트 바로 아래에서 큰 디렉터리를 고른다 (같은 볼륨 짝짓기에 쓴다).
+def _children_at(entries, root: str, depth: int) -> List[str]:
+    """루트에서 `depth` 단계 아래 디렉터리들을 큰 것부터."""
 
-    비슷한 크기끼리 재야 한쪽이 먼저 끝나 버리는 일이 없다. 그래서 큰 것부터
-    이어진 것으로 고른다.
-    """
-
-    prefix = root.rstrip("/").rstrip("\\")
-    children = []
+    base = root.rstrip("/").rstrip("\\").replace("\\", "/")
+    found = []
     for path, size_kb in entries:
         normalized = path.replace("\\", "/").rstrip("/")
-        base = prefix.replace("\\", "/")
         if not normalized.startswith(base + "/"):
             continue
         rest = normalized[len(base) + 1:]
-        if "/" in rest:
+        if rest.count("/") != depth - 1:
             continue
-        children.append((size_kb, path))
-    children.sort(reverse=True)
-    return [path for _, path in children[:count]]
+        found.append((size_kb, path))
+    found.sort(reverse=True)
+    return [path for _, path in found]
+
+
+def largest_subdirs(entries, root: str, count: int = 2, max_depth: int = 3) -> List[str]:
+    """짝지어 잴 하위 디렉터리를 고른다. 큰 것부터.
+
+    ## 왜 한 단계 더 내려가는가
+
+    처음에는 루트 바로 아래만 봤는데, 실기에서 그 아래에 디렉터리가 하나뿐인
+    경로가 나왔다. 그러면 동시성 비교(K)와 프로세스 축이 통째로 `0`(재지
+    못함)이 되어 **정작 알고 싶은 것을 못 잰다.** 한 단계 내려가면 있는
+    경우가 대부분이므로, 짝이 될 만큼 나올 때까지 내려간다.
+
+    얕은 쪽을 먼저 쓰는 이유는 크기다. 깊이 내려갈수록 조각이 작아져 조각
+    하나가 금방 끝나고, 그러면 동시 실행이 겹치지 않는다.
+
+    비슷한 크기끼리 재야 한쪽이 먼저 끝나 버리지 않으므로 큰 것부터 고른다.
+    """
+
+    best: List[str] = []
+    for depth in range(1, max_depth + 1):
+        found = _children_at(entries, root, depth)
+        if len(found) > len(best):
+            best = found
+        if len(best) >= count:
+            return best[:count]
+    return best[:count]
 
 
 
@@ -719,7 +747,7 @@ def cpu_checks(
     saturated = _saturation_point(process_rates, process_counts)
     checks.append(Check(
         "F", "프로세스 확장 포화점",
-        {1: 1, 2: 2, 4: 3, 8: 4, 16: 5}.get(saturated, 0),
+        SATURATION_DIGITS.get(saturated, 0),
         f"x{saturated} 이후로는 늘지 않음" if saturated else "재지 못함 (fork 불가 또는 건너뜀)",
         "/".join(f"{rate / process_rates[0]:.2f}" for rate in process_rates)
         if process_rates and process_rates[0] > 0 else None,
@@ -875,7 +903,10 @@ def run_probe(
     # --- 1. 전체 순회 한 번 (모양과 크기는 여기서 다 나온다) --------------
     say("[1/5] 전체 순회 (스레드 %d)" % workers)
     started = time.perf_counter()
-    full = walker.walk_tree(str(target), max_depth=1, workers=workers)
+    # `max_depth=2` 인 이유는 짝짓기다. 깊이 1에 디렉터리가 하나뿐인 경로가
+    # 실제로 있었고, 그때 한 단계 더 내려가려면 그 목록이 여기서 나와 있어야
+    # 한다 (`largest_subdirs`). 크기 계산 자체는 어차피 전체를 돈다.
+    full = walker.walk_tree(str(target), max_depth=2, workers=workers)
     walk_seconds = time.perf_counter() - started
     say(f"      {walk_seconds:,.1f}초 · 파일 {full.file_count:,} · 디렉터리 {full.dir_count:,}")
 
@@ -956,7 +987,7 @@ def run_probe(
     saturated_at = _saturation_point(rates, sweep)
     checks.append(Check(
         "I", "스레드 확장 포화점",
-        {1: 1, 2: 2, 4: 3, 8: 4, 16: 5}.get(saturated_at, 0),
+        SATURATION_DIGITS.get(saturated_at, 0),
         f"x{saturated_at} 이후로는 늘지 않음" if saturated_at else "재지 못함",
         "/".join(f"{rate / base:.2f}" for rate in rates) if base else None,
     ))

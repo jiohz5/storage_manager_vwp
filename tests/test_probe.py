@@ -210,6 +210,36 @@ class SubdirPickingTests(unittest.TestCase):
         self.assertEqual(probe.largest_subdirs([("/acct/only", 5)], "/acct", 2),
                          ["/acct/only"])
 
+    def test_it_descends_when_the_top_level_has_only_one_child(self):
+        """실기에서 이 경우가 나왔다 - 그때 K 와 프로세스 축이 통째로 0이 됐다."""
+
+        entries = [
+            ("/acct", 900),
+            ("/acct/only", 900),          # 깊이 1에 하나뿐
+            ("/acct/only/a", 500),
+            ("/acct/only/b", 400),        # 깊이 2에는 둘
+        ]
+        self.assertEqual(
+            probe.largest_subdirs(entries, "/acct", 2),
+            ["/acct/only/a", "/acct/only/b"],
+        )
+
+    def test_the_shallowest_level_that_works_is_used(self):
+        """깊이 내려갈수록 조각이 작아져 동시 실행이 겹치지 않는다."""
+
+        entries = [
+            ("/acct/a", 500),
+            ("/acct/b", 400),
+            ("/acct/a/x", 300),
+            ("/acct/a/y", 200),
+        ]
+        self.assertEqual(
+            probe.largest_subdirs(entries, "/acct", 2), ["/acct/a", "/acct/b"]
+        )
+
+    def test_nothing_below_gives_an_empty_list(self):
+        self.assertEqual(probe.largest_subdirs([("/acct", 1)], "/acct", 2), [])
+
 
 class TimedWalkTests(unittest.TestCase):
     """조각은 항상 같은 길이여야 비교가 성립한다."""
@@ -384,6 +414,18 @@ class SaturationTests(unittest.TestCase):
         self.assertEqual(
             probe._saturation_point([100, 200, 400, 800], [1, 2, 4, 8]), 8
         )
+
+    def test_every_sweep_value_has_a_digit(self):
+        """스윕에 값을 더하고 표를 안 고치면 코드가 조용히 0(재지 못함)이 된다."""
+
+        for count in set(probe.THREAD_SWEEP) | set(probe.PROCESS_SWEEP):
+            with self.subTest(count=count):
+                self.assertIn(count, probe.SATURATION_DIGITS)
+
+    def test_the_sweep_reaches_toward_the_rpc_slot_ceiling(self):
+        """실기 슬롯 상한이 128인데 8에서 끊으면 천장을 못 본다."""
+
+        self.assertGreaterEqual(max(probe.THREAD_SWEEP), 32)
 
     def test_nothing_measured_is_none_not_one(self):
         self.assertIsNone(probe._saturation_point([], [1, 2]))
