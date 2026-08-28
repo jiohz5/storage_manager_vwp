@@ -386,7 +386,7 @@ def command_probe(args) -> int:
         pairs = 3 * 5
         print(f"대상: {target}")
         print(
-            f"예상 소요: 전체 순회 1회 + du 1회 + 조각 {pieces + pairs}개"
+            f"예상 소요: 전체 순회 1회 + du 2회(앞뒤) + 조각 {pieces + pairs}개"
             f"(조각당 {seconds:.0f}초) ≈ 순회시간 + du시간 + "
             f"{int((pieces + pairs) * seconds) // 60}분"
         )

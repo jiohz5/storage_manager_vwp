@@ -58,7 +58,7 @@ from . import loadstat, walker
 
 # 코드표 버전. `PROBE_CODES.md` 와 짝이다 - 글자/숫자의 뜻을 바꾸면 반드시
 # 올린다. 안 올리면 옛 결과를 새 표로 읽어 반대 결론이 난다.
-CODE_VERSION = 2
+CODE_VERSION = 3
 
 # 시간을 재는 조각 하나의 길이(초). 동시성 비교는 트리를 끝까지 걷지 않고
 # 이만큼씩 잘라서 처리량으로 비교한다 - 큰 계정에서도 시간이 예측 가능하다.
@@ -845,9 +845,13 @@ def run_probe(
 ) -> ProbeResult:
     """전체 진단을 돌리고 `ProbeResult` 를 준다.
 
-    순서에 뜻이 있다. 전체 순회를 **가장 먼저** 하고 `du` 를 나중에 돌린다 -
-    그러면 `du` 쪽이 따뜻한 캐시로 도는 셈이라, 그래도 순회가 빠르면 그 결론은
-    보수적으로 안전하다. 반대로 돌리면 순회에 유리한 착시가 생긴다.
+    순서에 뜻이 있다. `du` -> 순회 -> `du` 로 **du 를 앞뒤로 한 번씩** 돌린다.
+    한쪽만 재면 나중에 돈 쪽이 캐시 덕을 보고, 그 상태에서 나온 승패는 아무것도
+    말해 주지 않는다. 앞뒤 평균을 쓰면 그 흐름이 상쇄된다.
+
+    (예전에는 순회를 먼저 하고 `du` 를 나중에 한 번만 돌렸다. "그래도 순회가
+    빠르면 보수적으로 안전하다"고 적어 두었는데, **반대 결과가 나오면 아무
+    결론도 못 낸다**는 점을 놓친 설계였다.)
     """
 
     say = log or (lambda _message: None)
@@ -856,6 +860,17 @@ def run_probe(
 
     checks: List[Check] = []
     checks.extend(environment_checks(target))
+
+    # --- 0. du -sk (순회 앞) ----------------------------------------------
+    #
+    # 이 첫 번째가 가장 차가운 상태에서 도는 값이다. 야간 스캔이 실제로 만나는
+    # 조건이 이쪽이라, 절대값으로는 이 값이 가장 쓸모 있다.
+    say("[0/5] du -sk 기준 (순회 앞, 가장 차가운 상태)")
+    du_before, du_kb_before = run_du_sk(str(target), du_timeout)
+    if du_before is None:
+        say("      du 를 실행하지 못했습니다 (없거나 실패)")
+    else:
+        say(f"      {du_before:,.1f}초" + (f" · {du_kb_before:,} KB" if du_kb_before else ""))
 
     # --- 1. 전체 순회 한 번 (모양과 크기는 여기서 다 나온다) --------------
     say("[1/5] 전체 순회 (스레드 %d)" % workers)
@@ -869,21 +884,39 @@ def run_probe(
             "순회가 완주하지 못했습니다 - 아래 숫자는 일부만 본 값입니다."
         )
 
-    # --- 2. du -sk (따뜻한 캐시에서) --------------------------------------
-    say("[2/5] du -sk 비교")
-    du_seconds, du_kb = run_du_sk(str(target), du_timeout)
-    if du_seconds is None:
+    # --- 2. du -sk (순회 뒤에 한 번 더) -----------------------------------
+    #
+    # 앞의 `du` 는 순회보다 먼저 돌았고 이 `du` 는 나중에 돈다. 둘의 평균을
+    # 써야 순회와 조건이 맞는다 - 한쪽만 재면 나중에 돈 쪽이 캐시 덕을 보고,
+    # 그 상태에서 나온 승패는 아무것도 말해 주지 않는다.
+    say("[2/5] du -sk 비교 (순회 뒤)")
+    du_after, du_kb_after = run_du_sk(str(target), du_timeout)
+    if du_after is None:
         say("      du 를 실행하지 못했습니다 (없거나 실패)")
     else:
-        say(f"      {du_seconds:,.1f}초 · {du_kb:,} KB" if du_kb else f"      {du_seconds:,.1f}초")
+        say(f"      {du_after:,.1f}초" + (f" · {du_kb_after:,} KB" if du_kb_after else ""))
 
-    # H: 같은 트리에서 순회가 du 보다 몇 배인가.
+    du_times = [value for value in (du_before, du_after) if value]
+    du_seconds = sum(du_times) / len(du_times) if du_times else None
+    du_kb = du_kb_after or du_kb_before
+
+    # H: 같은 트리에서 순회가 du 보다 몇 배인가 (앞뒤 du 평균 기준).
     speed = (du_seconds / walk_seconds) if (du_seconds and walk_seconds > 0) else None
+    if du_before and du_after:
+        raw = f"{du_before:.1f}+{du_after:.1f}/{walk_seconds:.1f}"
+    elif du_seconds:
+        raw = f"{du_seconds:.1f}/{walk_seconds:.1f}"
+    else:
+        raw = None
     checks.append(Check(
         "H", "순회 대 du 배속",
         0 if speed is None else (5 if speed < 1.0 else bucket(speed, [1.2, 2.0, 4.0])),
-        f"{speed:.2f}배" if speed else "du 실행 불가",
-        f"{du_seconds:.1f}/{walk_seconds:.1f}" if du_seconds else None,
+        (
+            f"{speed:.2f}배 (du {du_before:.1f}초/{du_after:.1f}초 평균)"
+            if speed and du_before and du_after
+            else (f"{speed:.2f}배" if speed else "du 실행 불가")
+        ),
+        raw,
     ))
 
     # J: 크기가 같은가. 이게 어긋나면 위의 속도 이야기는 의미가 없다.

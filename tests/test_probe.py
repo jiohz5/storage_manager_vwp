@@ -470,5 +470,55 @@ class ProcessSweepTests(unittest.TestCase):
         self.assertGreaterEqual(items, 4)   # 디렉터리 2 + 파일 2
 
 
+class DuComparisonTests(unittest.TestCase):
+    """H 는 `du` 를 앞뒤로 재서 평균한다 - 한쪽만 재면 캐시가 승패를 정한다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        for name in ("a", "b"):
+            (self.root / name).mkdir()
+            (self.root / name / "f.dat").write_bytes(b"x" * 4096)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_du_runs_before_and_after_the_walk(self):
+        calls = []
+
+        def fake_du(path, timeout):
+            calls.append(time.perf_counter())
+            return 10.0, 1234
+
+        with patch.object(probe, "run_du_sk", side_effect=fake_du):
+            result = probe.run_probe(
+                str(self.root), slice_seconds=0.05, quick=True
+            )
+        self.assertEqual(len(calls), 2, "du 는 앞뒤로 한 번씩 돌아야 한다")
+        self.assertIn("+", result.by_letter("H").raw or "")
+
+    def test_average_is_used_not_just_the_second_run(self):
+        """앞이 10초, 뒤가 30초면 20초로 본다 - 뒤만 쓰면 du 가 유리해진다."""
+
+        times = iter([(10.0, 1000), (30.0, 1000)])
+
+        def fake_du(path, timeout):
+            return next(times)
+
+        with patch.object(probe, "run_du_sk", side_effect=fake_du):
+            result = probe.run_probe(
+                str(self.root), slice_seconds=0.05, quick=True
+            )
+        raw = result.by_letter("H").raw
+        self.assertEqual(raw.split("/")[0], "10.0+30.0")
+
+    def test_missing_du_leaves_the_check_unmeasured(self):
+        with patch.object(probe, "run_du_sk", return_value=(None, None)):
+            result = probe.run_probe(
+                str(self.root), slice_seconds=0.05, quick=True
+            )
+        self.assertEqual(result.by_letter("H").digit, 0)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
