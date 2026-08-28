@@ -562,5 +562,77 @@ class DuComparisonTests(unittest.TestCase):
         self.assertEqual(result.by_letter("H").digit, 0)
 
 
+class SubtreePickingFromDiskTests(unittest.TestCase):
+    """짝은 파일시스템에서 직접 고른다 - 경로 표기 때문에 실패하면 안 된다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "acct"
+        self.root.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_two_children_are_found(self):
+        for name in ("a", "b"):
+            (self.root / name).mkdir()
+        picked = probe.pick_subtrees(str(self.root), 2)
+        self.assertEqual([Path(p).name for p in picked], ["a", "b"])
+
+    def test_it_descends_when_the_root_has_only_one_child(self):
+        """실기에서 K 와 프로세스 축이 두 번 다 0이 됐던 경우."""
+
+        for name in ("x", "y", "z"):
+            (self.root / "LAYOUT" / name).mkdir(parents=True)
+        picked = probe.pick_subtrees(str(self.root), 2)
+        self.assertEqual(len(picked), 2)
+        for path in picked:
+            self.assertEqual(Path(path).parent.name, "LAYOUT")
+
+    def test_snapshot_directories_are_never_candidates(self):
+        """스냅숏을 짝으로 재면 같은 데이터를 두 번 읽으며 속도를 잰다."""
+
+        (self.root / ".snapshot").mkdir()
+        (self.root / "real").mkdir()
+        picked = probe.pick_subtrees(str(self.root), 2)
+        self.assertEqual([Path(p).name for p in picked], ["real"])
+
+    def test_bigger_subtrees_come_first(self):
+        """한쪽이 먼저 끝나 버리면 동시 실행 비교가 성립하지 않는다."""
+
+        for name in ("small", "big"):
+            (self.root / name).mkdir()
+        sizes = {str(self.root / "small"): 1, str(self.root / "big"): 999}
+        picked = probe.pick_subtrees(str(self.root), 2, sizes=sizes)
+        self.assertEqual([Path(p).name for p in picked], ["big", "small"])
+
+    def test_no_subdirectories_gives_an_empty_list(self):
+        (self.root / "just_a_file").write_bytes(b"x")
+        self.assertEqual(probe.pick_subtrees(str(self.root), 2), [])
+
+    def test_unreadable_root_does_not_raise(self):
+        self.assertEqual(probe.pick_subtrees(str(self.root / "nope"), 2), [])
+
+
+class DuExclusionTests(unittest.TestCase):
+    def test_du_skips_the_same_directories_the_walk_skips(self):
+        """`du` 만 스냅숏을 세면 J(크기 일치)가 거짓으로 어긋난다.
+
+        실기에서 두 번 다 0.543% 로 **같은** 차이가 나왔다 - 경합이라면 값이
+        흔들렸을 것이므로, 규칙이 어긋나 있다는 신호였다."""
+
+        from smvwp.detail_scan import SNAPSHOT_DIR_NAMES
+
+        argv = probe.du_command("/target")
+        for name in SNAPSHOT_DIR_NAMES:
+            self.assertIn(f"--exclude={name}", argv)
+
+    def test_the_path_comes_after_a_double_dash(self):
+        """`-` 로 시작하는 경로가 옵션으로 먹히면 엉뚱한 곳을 잰다."""
+
+        argv = probe.du_command("-weird")
+        self.assertEqual(argv[-2:], ["--", "-weird"])
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

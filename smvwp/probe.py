@@ -58,7 +58,7 @@ from . import loadstat, walker
 
 # 코드표 버전. `PROBE_CODES.md` 와 짝이다 - 글자/숫자의 뜻을 바꾸면 반드시
 # 올린다. 안 올리면 옛 결과를 새 표로 읽어 반대 결론이 난다.
-CODE_VERSION = 4
+CODE_VERSION = 5
 
 # 시간을 재는 조각 하나의 길이(초). 동시성 비교는 트리를 끝까지 걷지 않고
 # 이만큼씩 잘라서 처리량으로 비교한다 - 큰 계정에서도 시간이 예측 가능하다.
@@ -431,13 +431,35 @@ def timed_walk(
     return Slice(seconds=elapsed, items=items)
 
 
+def du_command(path: str) -> List[str]:
+    """비교용 `du -sk` argv.
+
+    **순회와 같은 것을 세게 해야 한다.** 순회는 `.snapshot` 같은 디렉터리를
+    건너뛰는데(`detail_scan.SNAPSHOT_DIR_NAMES`) `du` 에 그 규칙을 안 주면
+    `du` 만 스냅숏을 세고, 그 차이가 "크기가 다르다"로 보고된다. 실기에서
+    정확히 그 일이 났다 - 두 번 다 0.543% 로 **같은** 차이가 나왔는데, 경합이
+    원인이라면 값이 흔들렸을 것이다.
+
+    야간 엔진의 `du` 는 이미 같은 제외 규칙을 붙인다
+    (`detail_scan.du_tree_command`). 어긋나 있던 쪽은 진단이었다.
+    """
+
+    from .detail_scan import SNAPSHOT_DIR_NAMES
+
+    command = ["du", "-sk"]
+    for name in sorted(SNAPSHOT_DIR_NAMES):
+        command.append(f"--exclude={name}")
+    command += ["--", path]
+    return command
+
+
 def run_du_sk(path: str, timeout_seconds: float) -> "tuple[Optional[float], Optional[int]]":
     """`du -sk` 를 한 번 돌려 `(걸린 시간, KB)`. 못 돌면 `(None, None)`."""
 
     try:
         started = time.perf_counter()
         proc = subprocess.run(
-            ["du", "-sk", path],
+            du_command(path),
             capture_output=True, text=True, timeout=timeout_seconds,
         )
         elapsed = time.perf_counter() - started
@@ -642,6 +664,76 @@ def _children_at(entries, root: str, depth: int) -> List[str]:
         found.append((size_kb, path))
     found.sort(reverse=True)
     return [path for _, path in found]
+
+
+def pick_subtrees(root: str, count: int = 2, max_depth: int = 3, sizes=None) -> List[str]:
+    """짝지어 잴 하위 디렉터리를 **파일시스템에서 직접** 고른다.
+
+    ## 왜 순회 결과를 안 쓰는가
+
+    처음에는 순회가 낸 경로 목록을 접두사로 걸러 골랐다. 그런데 그 방식은
+    경로 표기가 조금만 달라도 조용히 아무것도 못 찾고, 그러면 K(같은 볼륨
+    동시)와 프로세스 축이 통째로 `0`(재지 못함)이 된다. 실기에서 두 번 다 그렇게
+    됐다 - **정작 알고 싶은 것을 못 잰 것이다.**
+
+    `scandir` 한 번이면 그 실패가 아예 없어진다. 값이 싸기도 하다(디렉터리 한
+    단계 읽기).
+
+    ## 얕은 쪽부터
+
+    짝이 될 만큼 나올 때까지 한 단계씩 내려간다. 얕은 쪽을 먼저 쓰는 이유는
+    크기다 - 깊이 내려갈수록 조각이 작아져 조각 하나가 금방 끝나고, 그러면
+    동시 실행이 겹치지 않아 비교가 성립하지 않는다.
+
+    `sizes` 를 주면(순회가 낸 `{경로: KB}`) 큰 것부터 고른다. 비슷한 크기끼리
+    재야 한쪽이 먼저 끝나 버리지 않는다.
+    """
+
+    def children(path: str) -> List[str]:
+        try:
+            with os.scandir(path) as entries:
+                return sorted(
+                    entry.path for entry in entries
+                    if entry.is_dir(follow_symlinks=False)
+                    and entry.name not in _snapshot_names()
+                )
+        except OSError:
+            return []
+
+    level = children(root)
+    best = level
+    for _ in range(max_depth - 1):
+        if len(best) >= count:
+            break
+        if not level:
+            break
+        # 가장 큰(또는 첫) 후보 하나를 열어 한 단계 내려간다.
+        deeper: List[str] = []
+        for candidate in _by_size(level, sizes):
+            deeper.extend(children(candidate))
+            if len(deeper) >= count:
+                break
+        if not deeper:
+            break
+        level = deeper
+        if len(deeper) > len(best):
+            best = deeper
+
+    return _by_size(best, sizes)[:count]
+
+
+def _snapshot_names():
+    from .detail_scan import SNAPSHOT_DIR_NAMES
+
+    return SNAPSHOT_DIR_NAMES
+
+
+def _by_size(paths: List[str], sizes) -> List[str]:
+    """큰 것부터. 크기를 모르면 준 순서를 지킨다."""
+
+    if not sizes:
+        return list(paths)
+    return sorted(paths, key=lambda path: -sizes.get(path, 0))
 
 
 def largest_subdirs(entries, root: str, count: int = 2, max_depth: int = 3) -> List[str]:
@@ -910,6 +1002,9 @@ def run_probe(
     walk_seconds = time.perf_counter() - started
     say(f"      {walk_seconds:,.1f}초 · 파일 {full.file_count:,} · 디렉터리 {full.dir_count:,}")
 
+    # 후보를 큰 것부터 고르기 위한 크기표. 순회가 이미 낸 값이라 공짜다.
+    entry_sizes = {path: size for path, size in full.entries}
+
     if not full.completed:
         result.warnings.append(
             "순회가 완주하지 못했습니다 - 아래 숫자는 일부만 본 값입니다."
@@ -998,7 +1093,7 @@ def run_probe(
     # 나눠 보면 갈린다 - GIL 이면 늘어나고, 저장소면 그대로다.
     process_rates: List[float] = []
     process_counts = list(QUICK_PROCESS_SWEEP if quick else PROCESS_SWEEP)
-    subtrees = largest_subdirs(full.entries, str(target), MAX_PROCESS_SUBTREES)
+    subtrees = pick_subtrees(str(target), MAX_PROCESS_SUBTREES, sizes=entry_sizes)
     if not can_fork():
         say("[3b] 프로세스 축: fork 를 쓸 수 없어 건너뜁니다")
         process_counts = []
@@ -1050,7 +1145,7 @@ def run_probe(
 
     # K: 같은 볼륨 두 갈래. 이미 실측으로 "안 늘어난다"를 봤지만, 이 장비에서
     # 다시 확인해 두어야 아래 L·M 을 비교할 기준이 생긴다.
-    pair = largest_subdirs(full.entries, str(target), 2)
+    pair = pick_subtrees(str(target), 2, sizes=entry_sizes)
     if len(pair) == 2:
         say("  K 같은 볼륨 두 갈래")
         # K·L·M 은 **같은 방식으로** 재야 나란히 놓고 읽을 수 있다 - 셋 다
