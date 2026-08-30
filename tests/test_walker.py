@@ -193,5 +193,72 @@ class UnreadableTests(unittest.TestCase):
         self.assertGreater(outcome.unreadable, 0)
 
 
+class DirectoryOwnBlocksTests(unittest.TestCase):
+    """디렉터리 자기 자신이 차지하는 블록도 세야 `du` 와 맞는다.
+
+    빠뜨리고 있었다. 파일이 큰 트리에서는 티가 안 나지만 디렉터리가 많으면
+    그만큼 통째로 빠진다 - 실기에서 디렉터리 6만 개짜리 계정이 `du` 보다
+    0.543% 작게 나왔고, 그 값이 두 번 다 소수점까지 같았다(= 우연이 아니라
+    규칙적인 누락).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "tree"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _expected_kb(self, root):
+        """`du` 가 세는 것과 같은 방식으로 손으로 더한 값."""
+
+        total = 0
+        for current, dirnames, filenames in os.walk(root):
+            total += walker.disk_blocks(os.stat(current))
+            for name in filenames:
+                total += walker.disk_blocks(os.stat(os.path.join(current, name)))
+        return total * 512 // 1024
+
+    def test_empty_directories_are_not_free(self):
+        for index in range(5):
+            (self.root / f"d{index}").mkdir(parents=True)
+        outcome = walker.walk_tree(str(self.root), max_depth=0, workers=2)
+        self.assertEqual(outcome.root_size_kb, self._expected_kb(self.root))
+
+    def test_nested_tree_matches_a_manual_sum(self):
+        for a in range(3):
+            for b in range(3):
+                target = self.root / f"a{a}" / f"b{b}"
+                target.mkdir(parents=True)
+                (target / "f.dat").write_bytes(b"x" * 3000)
+        outcome = walker.walk_tree(str(self.root), max_depth=0, workers=4)
+        self.assertEqual(outcome.root_size_kb, self._expected_kb(self.root))
+
+    def test_each_directory_is_counted_once_not_per_thread(self):
+        """스레드 수를 바꿔도 합계는 같아야 한다."""
+
+        for index in range(12):
+            (self.root / f"d{index}" / "inner").mkdir(parents=True)
+        sizes = {
+            workers: walker.walk_tree(
+                str(self.root), max_depth=0, workers=workers
+            ).root_size_kb
+            for workers in (1, 2, 8)
+        }
+        self.assertEqual(len(set(sizes.values())), 1, sizes)
+
+    def test_excluded_directories_add_nothing(self):
+        """`du --exclude` 와 같아야 한다 - 건너뛴 디렉터리는 자기 블록도 안 센다."""
+
+        (self.root / "real").mkdir(parents=True)
+        plain = walker.walk_tree(str(self.root), max_depth=0, workers=1).root_size_kb
+
+        (self.root / ".snapshot" / "old").mkdir(parents=True)
+        with_snapshot = walker.walk_tree(
+            str(self.root), max_depth=0, workers=1, exclude_names={".snapshot"}
+        ).root_size_kb
+        self.assertEqual(with_snapshot, plain)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -228,6 +228,23 @@ class ParallelWalker:
         unreadable = 0
         logical = 0
 
+        # 디렉터리 **자기 자신**이 차지하는 블록. `du` 는 이것을 센다.
+        #
+        # 빠뜨리고 있었다. 디렉터리를 만나면 자식 노드만 만들고 넘어갔기
+        # 때문이다. 파일이 큰 트리에서는 티가 안 나지만, 디렉터리가 많으면
+        # 그만큼 통째로 빠진다 - 실기에서 디렉터리 6만 개짜리 계정이 `du` 보다
+        # 0.543% 작게 나왔고, 그 값이 두 번 다 소수점까지 같았다.
+        #
+        # 여기서 재면 루트를 포함해 **훑는 디렉터리마다 정확히 한 번** 세어진다.
+        # 제외된 디렉터리(`.snapshot` 등)는 애초에 훑지 않으므로 세지 않는다 -
+        # `du --exclude` 와 같은 결과다.
+        try:
+            blocks += disk_blocks(os.stat(node.path, follow_symlinks=False))
+        except OSError:
+            # 읽지 못한 것은 바로 아래 `scandir` 가 잡는다. 여기서 또 세면
+            # 같은 실패가 두 번 계산된다.
+            pass
+
         try:
             with os.scandir(node.path) as entries:
                 for entry in entries:
