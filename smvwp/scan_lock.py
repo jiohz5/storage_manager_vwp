@@ -104,20 +104,49 @@ def acquire_lock(data_dir: Path, triggered_by: str) -> str:
     프로세스가 남긴 잠금이면 조용히 회수한다 (자기 자신을 대체).
     """
 
-    existing = read_lock(data_dir)
-    if existing is not None and _pid_alive(existing.pid):
-        raise LockBusyError(
-            f"이미 실행 중인 야간 스캔이 있습니다 (run_id={existing.run_id}, pid={existing.pid})"
-        )
+    path = lock_file(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    info = LockInfo(
-        run_id=uuid.uuid4().hex,
-        pid=os.getpid(),
-        triggered_by=triggered_by,
-        started_at=datetime.now(timezone.utc).isoformat(),
-    )
-    _atomic_write_json(lock_file(data_dir), asdict(info))
-    return info.run_id
+    # **`O_EXCL` 로 만든다.** 예전에는 "읽어 보고 없으면 쓴다" 였는데, 그 사이가
+    # 비어 있다 - cron 이 22:00:00 에 뜨는 순간 사람이 GUI 에서 버튼을 누르면
+    # 둘 다 "없음"을 읽고 둘 다 써서, 둘 다 자기가 잠금을 쥔 줄 알고 돈다.
+    #
+    # NFS 위에서도 안전하다. NFSv3 의 EXCLUSIVE create 는 verifier 로 원자성을
+    # 보장한다 - 이 프로그램의 데이터 디렉터리가 NFS 라 그 점이 중요하다.
+    for attempt in (0, 1):
+        info = LockInfo(
+            run_id=uuid.uuid4().hex,
+            pid=os.getpid(),
+            triggered_by=triggered_by,
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
+        try:
+            handle = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            existing = read_lock(data_dir)
+            if existing is not None and _pid_alive(existing.pid):
+                raise LockBusyError(
+                    f"이미 실행 중인 야간 스캔이 있습니다 "
+                    f"(run_id={existing.run_id}, pid={existing.pid})"
+                )
+            # 죽은 프로세스가 남긴 잠금이다. 지우고 딱 한 번 더 해 본다 - 그
+            # 사이에 다른 실행이 먼저 쥐었다면 위에서 LockBusyError 가 난다.
+            if attempt == 0:
+                try:
+                    os.unlink(str(path))
+                except OSError:  # pragma: no cover - 남이 먼저 지웠을 뿐
+                    pass
+                continue
+            raise LockBusyError("잠금 파일을 회수하지 못했습니다")
+
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            json.dump(asdict(info), stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        return info.run_id
+
+    raise LockBusyError("잠금을 얻지 못했습니다")  # pragma: no cover - 위에서 끝난다
 
 
 def release_lock(data_dir: Path, run_id: str) -> None:

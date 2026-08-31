@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from smvwp import config as config_module
+from smvwp import detail_scan
 from smvwp import nightly_scan, scan_lock, scan_store
 from tests import support
 
@@ -33,6 +34,12 @@ class FakeCommandRunner:
         self.on_du = on_du
 
     def __call__(self, command, **kwargs):
+        if command and command[-1] == "true":
+            # `nice`/`ionice` 접두사가 실제로 되는지 보는 탐색 호출
+            # (`detail_scan._prefix_works`). 이 파일만 따로 돌리면 캐시가
+            # 비어 있어 여기부터 들어온다 - 없으면 시험이 **실행 순서에**
+            # 의존하게 된다.
+            return support.completed(command)
         if "du" in command:
             self.du_calls.append(command)
             if self.on_du is not None:
@@ -70,6 +77,9 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.account_path = self.tmp_root / "acct"
         self.account_path.mkdir(parents=True)
 
+        # 접두사 탐색 결과는 모듈 전역에 캐시된다. 지우고 시작해야 이 파일을
+        # 혼자 돌리든 전체와 함께 돌리든 같은 경로를 지난다.
+        detail_scan.reset_priority_prefix()
         self.config = config_module.load_config(self.data_dir)
         # 이 시험은 `du` 출력 흉내로 오케스트레이션을 본다 - 엔진을 못박지
         # 않으면 기본값(파이썬 순회)이 실제 디렉터리를 걸어 흉내가 무의미해진다.

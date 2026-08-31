@@ -208,11 +208,13 @@ class Settings:
     scan_engine: str = DEFAULT_SCAN_ENGINE
     # GUI 가 야간 시간창에 스스로 상세 스캔을 시작하는가.
     #
-    # 켜면 cron 없이 GUI 만으로 밤 스캔이 돌고, 창을 닫으면 같이 멈춘다.
-    # 대신 **그날 아무도 창을 안 켜 두면 그 밤은 통째로 빈다** - cron 은 사람이
-    # 없어도 돌지만 이쪽은 창이 떠 있어야 한다. 어느 쪽을 쓸지는 운영 판단이라
-    # 값으로 뺐다 (`auto_scan.should_start` 참고).
-    gui_auto_nightly_scan: bool = True
+    # **기본은 꺼짐**이다. 정규 경로는 cron(`setup_cron.csh`)이고, 그쪽은 사람이
+    # 없어도 돈다. 이 값을 켜면 cron 없이 창만으로 밤 스캔이 돌고 창을 닫으면
+    # 같이 멈추는데, 그 대가로 **아무도 창을 안 켜 둔 밤은 통째로 빈다.**
+    #
+    # 둘 다 켜 두어도 안전하다 - `scan_lock`이 프로세스를 가로질러 하나만 돌게
+    # 막는다. 다만 그러면 "창을 닫으면 멈춘다"는 성립하지 않는다.
+    gui_auto_nightly_scan: bool = False
     # 주말 밤(=끝나는 아침이 토/일인 밤)에 쓸 동시 볼륨 수. 위 상수 참고.
     weekend_parallel_accounts: int = DEFAULT_WEEKEND_PARALLEL_ACCOUNTS
     # 스캔 중 리소스 표본 주기와 보관 기간.

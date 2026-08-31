@@ -312,6 +312,25 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.already_running": "상세 스캔이 이미 실행 중입니다.",
         "scan.started": "상세 스캔 실행 중...",
         "scan.auto_started": "야간 시간창에 들어와 상세 스캔을 시작했습니다.",
+        "cron.ok": "cron: 수집·야간 스캔 모두 등록되어 있습니다.",
+        "cron.none": (
+            "cron에 등록된 항목이 없습니다 - 이 창을 닫으면 수집도 야간 스캔도 "
+            "돌지 않습니다. setup_cron.csh 를 한 번 실행하세요."
+        ),
+        "cron.nightly_missing": (
+            "cron에 야간 스캔이 없습니다 - 이 창을 닫아 두면 밤에 아무것도 "
+            "돌지 않습니다. setup_cron.csh 를 실행하거나, 설정에서 "
+            "'야간 자동 스캔'을 켜세요."
+        ),
+        "cron.collector_missing": (
+            "cron에 15분 수집이 없습니다 - 이 창을 닫은 동안 사용량 이력이 "
+            "끊겨 예측이 어긋납니다."
+        ),
+        "cron.nightly_by_gui": (
+            "야간 스캔은 이 창이 맡습니다 (cron 미등록). 창을 닫으면 그날 밤은 "
+            "돌지 않습니다."
+        ),
+        "cron.unknown": "cron 등록 여부를 확인하지 못했습니다.",
         "scan.stop_requested": "중지를 요청했습니다. 다음 체크포인트에서 안전하게 멈춥니다.",
         "scan.nothing_running": "실행 중인 상세 스캔이 없습니다.",
         "scan.not_started": "상세 스캔 미실행: {reason}",
@@ -805,6 +824,25 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.already_running": "A detail scan is already running.",
         "scan.started": "Detail scan running...",
         "scan.auto_started": "Entered the night window - detail scan started.",
+        "cron.ok": "cron: both the collector and the nightly scan are registered.",
+        "cron.none": (
+            "Nothing is registered in cron - close this window and neither "
+            "collection nor the nightly scan will run. Run setup_cron.csh once."
+        ),
+        "cron.nightly_missing": (
+            "The nightly scan is not in cron - with this window closed, nothing "
+            "runs at night. Run setup_cron.csh, or turn on 'Nightly auto scan' "
+            "in settings."
+        ),
+        "cron.collector_missing": (
+            "The 15-minute collector is not in cron - usage history has gaps "
+            "whenever this window is closed, which skews the forecast."
+        ),
+        "cron.nightly_by_gui": (
+            "This window handles the nightly scan (not in cron). Close it and "
+            "that night is skipped."
+        ),
+        "cron.unknown": "Could not check what is registered in cron.",
         "scan.stop_requested": "Stop requested. The scan will stop safely at its next checkpoint.",
         "scan.nothing_running": "No detail scan is running.",
         "scan.not_started": "Detail scan not started: {reason}",

@@ -165,6 +165,7 @@ QLabel#title {{ font-size: {FONT_TITLE}px; font-weight: {WEIGHT_HEAVY}; }}
 QLabel#sectionTitle {{ font-size: {FONT_SUBTITLE}px; font-weight: {WEIGHT_BOLD}; color: {TEXT}; }}
 QLabel#muted {{ color: {TEXT_MUTED}; }}
 QLabel#caption {{ color: {TEXT_MUTED}; font-size: {FONT_CAPTION}px; }}
+QLabel#captionWarn {{ color: {DANGER}; font-size: {FONT_CAPTION}px; }}
 QLabel#statLabel {{ color: {TEXT_MUTED}; font-size: {FONT_CAPTION}px; }}
 QLabel#statValue {{ font-size: {FONT_TITLE}px; font-weight: {WEIGHT_HEAVY}; }}
 

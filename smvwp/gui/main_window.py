@@ -41,11 +41,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+import threading
 from datetime import datetime
 
 from .. import config as config_module
 from .. import (
     auto_scan,
+    cron_status,
     diagnostics,
     forecast_notify,
     freshness,
@@ -234,6 +236,13 @@ class MainWindow(QMainWindow):
         # 어느 밤에 이미 시작했는지. 이것이 없으면 스캔이 01시에 끝난 뒤 곧바로
         # 또 시작해 밤새 같은 계정을 반복해서 훑는다.
         self._auto_scan_started_key = None
+        # `crontab -l` 은 로컬 명령이라 빠르지만, 이 창은 외부 명령 하나에
+        # 멈춘 전적이 있다. GUI 스레드에서 부르지 않는다.
+        self._cron_status = None
+        threading.Thread(
+            target=self._load_cron_status, name="smvwp-cron-check", daemon=True
+        ).start()
+
         self._auto_scan_timer = QTimer(self)
         self._auto_scan_timer.timeout.connect(self._maybe_start_nightly_scan)
         self._auto_scan_timer.start(AUTO_SCAN_CHECK_MS)
@@ -599,6 +608,15 @@ class MainWindow(QMainWindow):
         self.scan_status_label = QLabel()
         self.scan_status_label.setWordWrap(True)
         box.addWidget(self.scan_status_label)
+
+        # cron 등록 여부. 야간 스캔이 안 도는 가장 흔한 이유가 "등록이 안 된
+        # 것"인데, 그 사실은 아무 데도 드러나지 않아 사람은 프로그램이 고장 난
+        # 줄 안다. 다음 날 아침 보고서가 비어 있어야 알아채고, 그때는 이미
+        # 하룻밤을 버린 뒤다.
+        self.cron_status_label = QLabel()
+        self.cron_status_label.setObjectName("caption")
+        self.cron_status_label.setWordWrap(True)
+        box.addWidget(self.cron_status_label)
 
         # 스캔이 도는 동안 좌우로 오가는 막대.
         #
@@ -1253,6 +1271,7 @@ class MainWindow(QMainWindow):
         디렉터리가 NFS 위면 그동안 창이 통째로 멈췄다. 결과는
         `_on_scan_status_ready`가 받는다."""
 
+        self._render_cron_status()
         self._status_worker.refresh_async()
 
     def _on_scan_status_failed(self, message: str) -> None:
@@ -1619,6 +1638,36 @@ class MainWindow(QMainWindow):
         self._remember_scan_window()
         self.status_bar_label.setText(i18n.t("scan.started"))
         self._refresh_scan_section()
+
+    def _load_cron_status(self) -> None:
+        """cron 상태를 읽어 둔다 (작업 스레드).
+
+        위젯은 여기서 건드리지 않는다 - Qt 위젯은 GUI 스레드에서만 만져야
+        한다. 값만 담아 두고 그리기는 다음 새로고침이 한다."""
+
+        try:
+            self._cron_status = cron_status.read_status()
+        except Exception:  # pragma: no cover - 진단 표시가 창을 죽이면 안 된다
+            self._cron_status = None
+
+    def _render_cron_status(self) -> None:
+        status = self._cron_status
+        if status is None:
+            self.cron_status_label.setVisible(False)
+            return
+        auto = bool(getattr(self._config.settings, "gui_auto_nightly_scan", False))
+        key = cron_status.summary_key(status)
+        # 창이 밤을 지키는 설정이면 야간 줄이 없는 것이 정상이다 - 그때까지
+        # 경고하면 "고치라"는 잘못된 신호가 된다.
+        if auto and key == "cron.nightly_missing":
+            key = "cron.nightly_by_gui"
+        self.cron_status_label.setText(i18n.t(key))
+        # `setProperty` 로 상태를 주려면 스타일시트를 다시 적용해야 듣는다.
+        # objectName 은 그런 단계 없이 바로 먹으므로 이쪽을 쓴다.
+        warn = key in ("cron.none", "cron.nightly_missing")
+        self.cron_status_label.setObjectName("captionWarn" if warn else "caption")
+        self.cron_status_label.setStyleSheet("")  # 이름이 바뀌면 다시 물리게 한다
+        self.cron_status_label.setVisible(True)
 
     def _maybe_start_nightly_scan(self) -> None:
         """시간창에 들어왔으면 스스로 시작한다 (밤마다 한 번).
