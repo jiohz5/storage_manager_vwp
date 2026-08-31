@@ -17,6 +17,7 @@ from typing import List
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -257,6 +258,13 @@ class AccountDialog(QDialog):
         self.parallel_weekend_spin.setValue(settings.weekend_parallel_accounts)
         self.parallel_weekend_spin.setToolTip(i18n.t("accounts.parallel_hint"))
         form.addRow(i18n.t("accounts.parallel_weekend"), self.parallel_weekend_spin)
+
+        # 창을 닫으면 함께 멈추는 쪽을 쓸지. 이 값 하나가 "cron 없이 GUI 로만"
+        # 과 "사람 없어도 도는" 운영을 가른다.
+        self.auto_scan_check = QCheckBox()
+        self.auto_scan_check.setChecked(bool(getattr(settings, "gui_auto_nightly_scan", True)))
+        self.auto_scan_check.setToolTip(i18n.t("accounts.auto_scan_hint"))
+        form.addRow(i18n.t("accounts.auto_scan"), self.auto_scan_check)
 
         self.engine_combo = QComboBox()
         for engine, key in (
@@ -608,6 +616,7 @@ class AccountDialog(QDialog):
         settings.nightly_parallel_accounts = self.parallel_weekday_spin.value()
         settings.weekend_parallel_accounts = self.parallel_weekend_spin.value()
         settings.scan_engine = self.engine_combo.currentData()
+        settings.gui_auto_nightly_scan = self.auto_scan_check.isChecked()
         settings.notification_mode = mode
         settings.notification_command = notification_command
         settings.notification_webhook_url = webhook_url

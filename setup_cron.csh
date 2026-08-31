@@ -17,6 +17,14 @@
 #   setenv STORAGE_MANAGER_PYTHON_BIN /installed/python/3.12.x/bin/python3
 #   setenv STORAGE_MANAGER_DATA_DIR /path/to/data
 #   ./setup_cron.csh
+#
+# GUI 가 밤을 지키게 하려면(`gui_auto_nightly_scan`) 야간 줄이 있으면 안 된다 -
+# cron 이 22시에 또 띄우면 "창을 닫으면 멈춘다"가 성립하지 않는다. 그때는:
+#
+#   ./setup_cron.csh --collector-only
+#
+# 15분 수집만 등록하고 야간 줄은 (있으면) 지운다. 수집까지 GUI 에 맡기면 창을
+# 닫은 동안 사용량 이력이 끊겨 예측이 무너지므로, 수집은 cron 에 두는 편이 낫다.
 
 set app_dir = "$0:h"
 if ("$app_dir" == "$0") set app_dir = "."
@@ -33,6 +41,11 @@ if (! $?STORAGE_MANAGER_DATA_DIR) then
     exit 2
 endif
 
+set collector_only = 0
+if ($#argv > 0) then
+    if ("$argv[1]" == "--collector-only") set collector_only = 1
+endif
+
 set python_bin = "$STORAGE_MANAGER_PYTHON_BIN"
 set data_dir = "$STORAGE_MANAGER_DATA_DIR"
 mkdir -p "$data_dir/logs"
@@ -40,16 +53,35 @@ mkdir -p "$data_dir/logs"
 set collector_line = "*/15 * * * * $python_bin $app_dir/smvwp_cli.py collect --data-dir $data_dir >> $data_dir/logs/collector_cron.log 2>&1"
 set collector_marker = "# storage_manager_vwp_v2_collector"
 
-set nightly_line = "0 22 * * * $python_bin $app_dir/smvwp_cli.py scan --data-dir $data_dir >> $data_dir/logs/nightly_scan_cron.log 2>&1"
+# `nice`/`ionice` 를 여기에 붙인다. 예전에는 `du` 를 띄울 때 붙였는데, 엔진이
+# 파이썬 순회로 바뀌면서 별도 프로세스가 사라져 그 접두사가 듣지 않는다.
+# 둘 다 없는 장비면 cron 줄이 통째로 실패하므로, 있을 때만 붙인다.
+set prefix = ""
+which nice >& /dev/null
+if ($status == 0) set prefix = "nice -n 10 "
+which ionice >& /dev/null
+if ($status == 0) set prefix = "${prefix}ionice -c2 -n7 "
+
+set nightly_line = "0 22 * * * ${prefix}$python_bin $app_dir/smvwp_cli.py scan --data-dir $data_dir >> $data_dir/logs/nightly_scan_cron.log 2>&1"
 set nightly_marker = "# storage_manager_vwp_v2_nightly_scan"
 
 echo "다음 crontab 항목을 추가합니다:"
 echo "$collector_line $collector_marker"
-echo "$nightly_line $nightly_marker"
+if ($collector_only) then
+    echo "(야간 스캔 줄은 등록하지 않습니다 - 있으면 지웁니다. GUI 가 밤을 지키는 설정입니다.)"
+else
+    echo "$nightly_line $nightly_marker"
+endif
 
-(crontab -l | grep -v "$collector_marker" | grep -v "$nightly_marker" ; \
-    echo "$collector_line $collector_marker" ; \
-    echo "$nightly_line $nightly_marker") | crontab -
+# 기존 줄은 표식으로 먼저 지운다. 그래야 여러 번 돌려도 중복되지 않는다.
+if ($collector_only) then
+    (crontab -l | grep -v "$collector_marker" | grep -v "$nightly_marker" ; \
+        echo "$collector_line $collector_marker") | crontab -
+else
+    (crontab -l | grep -v "$collector_marker" | grep -v "$nightly_marker" ; \
+        echo "$collector_line $collector_marker" ; \
+        echo "$nightly_line $nightly_marker") | crontab -
+endif
 if ($status != 0) then
     echo "ERROR: crontab 등록에 실패했습니다."
     exit 1

@@ -41,8 +41,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from datetime import datetime
+
 from .. import config as config_module
 from .. import (
+    auto_scan,
     diagnostics,
     forecast_notify,
     freshness,
@@ -154,6 +157,9 @@ SCAN_ACCOUNT_COLUMN_KEYS = [
 
 # 스캔이 도는 동안 진행 상황을 다시 읽는 간격.
 SCAN_STATUS_REFRESH_MS = 5000
+# 시간창에 들어왔는지 확인하는 주기. 1분이면 22:00 시작이 최대 1분 늦을 뿐이라
+# 밤 단위 작업에는 충분하고, 더 자주 볼 이유가 없다.
+AUTO_SCAN_CHECK_MS = 60_000
 
 # 스캔이 안 돌 때의 간격. 5초로 계속 두면 아무 일도 없는 시간에도 DB를 계속
 # 두들긴다 - 데이터 디렉터리가 NFS 위면 그 자체가 부담이고, 정작 바뀌는 것도
@@ -202,8 +208,15 @@ class MainWindow(QMainWindow):
         )
         self._scheduler.start(run_immediately=True)
 
-        # 야간 상세 스캔 - GUI에서 수동 실행/중지할 수 있게만 하고, 정규 실행은
-        # cron(`setup_cron.csh`)이 22:00에 띄운다.
+        # 야간 상세 스캔.
+        #
+        # 두 갈래로 돌 수 있다. cron(`setup_cron.csh`)이 22:00에 띄우거나,
+        # 이 창이 시간창을 지켜 스스로 시작하거나(`gui_auto_nightly_scan`).
+        # 둘 다 켜 두어도 안전하다 - `scan_lock`이 프로세스를 가로질러 하나만
+        # 돌게 막는다.
+        #
+        # 창이 시작한 스캔은 **창을 닫으면 함께 멈춘다**(`closeEvent`). 그것이
+        # 이 경로를 쓰는 이유이자 대가다 - 아무도 창을 안 켜 둔 밤은 통째로 빈다.
         self._scan_worker = NightlyScanWorker(data_dir, get_config=lambda: self._config)
         self._scan_worker.finished.connect(self._on_scan_finished)
         self._scan_worker.failed.connect(self._on_scan_failed)
@@ -217,6 +230,15 @@ class MainWindow(QMainWindow):
         self._scan_status_timer = QTimer(self)
         self._scan_status_timer.timeout.connect(self._refresh_scan_section)
         self._scan_status_timer.start(SCAN_STATUS_IDLE_REFRESH_MS)
+
+        # 어느 밤에 이미 시작했는지. 이것이 없으면 스캔이 01시에 끝난 뒤 곧바로
+        # 또 시작해 밤새 같은 계정을 반복해서 훑는다.
+        self._auto_scan_started_key = None
+        self._auto_scan_timer = QTimer(self)
+        self._auto_scan_timer.timeout.connect(self._maybe_start_nightly_scan)
+        self._auto_scan_timer.start(AUTO_SCAN_CHECK_MS)
+        self._maybe_start_nightly_scan()
+
         self._refresh_scan_section()
 
     def show_first_run_if_needed(self) -> None:
@@ -1592,8 +1614,49 @@ class MainWindow(QMainWindow):
         if not self._scan_worker.run_async(bypass_window=True):
             self.status_bar_label.setText(i18n.t("scan.already_running"))
             return
+        # 22시에 손으로 돌렸으면 그 밤은 처리된 것이다 - 표시해 두지 않으면
+        # 자동 쪽이 같은 밤을 한 번 더 시작한다.
+        self._remember_scan_window()
         self.status_bar_label.setText(i18n.t("scan.started"))
         self._refresh_scan_section()
+
+    def _maybe_start_nightly_scan(self) -> None:
+        """시간창에 들어왔으면 스스로 시작한다 (밤마다 한 번).
+
+        판단은 `auto_scan.should_start`에 있다 - Qt 없이 시험할 수 있어야
+        하기 때문이다. 여기서는 그 답에 따라 실행만 한다.
+        """
+
+        now = datetime.now()
+        if not auto_scan.should_start(
+            now,
+            self._config.settings,
+            self._scan_worker.is_running(),
+            self._auto_scan_started_key,
+        ):
+            return
+        # 시작을 **먼저** 기록한다. 아래 호출이 잠금 때문에 실패하더라도(cron이
+        # 이미 돌고 있는 경우) 이 밤은 이미 처리된 것으로 봐야 한다 - 안 그러면
+        # 1분마다 다시 시도한다.
+        self._remember_scan_window(now)
+        if self._scan_worker.run_async(bypass_window=False):
+            self.status_bar_label.setText(i18n.t("scan.auto_started"))
+            self._refresh_scan_section()
+
+    def _remember_scan_window(self, now=None) -> None:
+        """이 밤에 스캔을 시작했다고 표시한다.
+
+        수동 실행에서도 부른다 - 22시에 손으로 돌린 뒤 자동이 또 시작하면
+        같은 밤을 두 번 훑게 된다."""
+
+        settings = self._config.settings
+        key = auto_scan.window_key(
+            now or datetime.now(),
+            settings.detail_scan_window_start_hour,
+            settings.detail_scan_window_end_hour,
+        )
+        if key is not None:
+            self._auto_scan_started_key = key
 
     def _request_scan_stop(self) -> None:
         if self._scan_worker.request_stop():
@@ -1637,6 +1700,7 @@ class MainWindow(QMainWindow):
 
         self._scheduler.stop()
         self._scan_status_timer.stop()
+        self._auto_scan_timer.stop()
         if self._scan_worker.is_running():
             self._stop_scan_for_shutdown()
         super().closeEvent(event)

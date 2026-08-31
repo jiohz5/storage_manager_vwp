@@ -311,6 +311,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.already_running": "상세 스캔이 이미 실행 중입니다.",
         "scan.started": "상세 스캔 실행 중...",
+        "scan.auto_started": "야간 시간창에 들어와 상세 스캔을 시작했습니다.",
         "scan.stop_requested": "중지를 요청했습니다. 다음 체크포인트에서 안전하게 멈춥니다.",
         "scan.nothing_running": "실행 중인 상세 스캔이 없습니다.",
         "scan.not_started": "상세 스캔 미실행: {reason}",
@@ -339,6 +340,15 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "일요일 밤은 평일입니다 (월요일 아침에 전원이 출근하므로)."
         ),
         "accounts.suffix.accounts": "개",
+        "accounts.auto_scan": "야간 자동 스캔 (이 창이 켜져 있을 때)",
+        "accounts.auto_scan_hint": (
+            "이 창이 켜져 있으면 야간 시간창(기본 22시)에 상세 스캔을 스스로 "
+            "시작합니다. 밤마다 한 번만 시작하고, **창을 닫으면 함께 멈춥니다**.\n\n"
+            "대신 그날 아무도 창을 켜 두지 않으면 그 밤은 통째로 빕니다. "
+            "사람이 없어도 도는 쪽을 원하시면 이 항목을 끄고 cron에 "
+            "등록하세요 (setup_cron.csh).\n\n"
+            "둘 다 켜 두어도 안전합니다 - 한 번에 하나만 돌도록 잠금이 막습니다."
+        ),
         "accounts.engine": "측정 방법",
         "accounts.engine.python": "파이썬 순회 (빠름)",
         "accounts.engine.du": "du 실행 (예전 방식)",
@@ -794,6 +804,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.already_running": "A detail scan is already running.",
         "scan.started": "Detail scan running...",
+        "scan.auto_started": "Entered the night window - detail scan started.",
         "scan.stop_requested": "Stop requested. The scan will stop safely at its next checkpoint.",
         "scan.nothing_running": "No detail scan is running.",
         "scan.not_started": "Detail scan not started: {reason}",
@@ -823,6 +834,16 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "morning)."
         ),
         "accounts.suffix.accounts": "",
+        "accounts.auto_scan": "Nightly auto scan (while this window is open)",
+        "accounts.auto_scan_hint": (
+            "While this window is open, the detail scan starts by itself once "
+            "the night window opens (22:00 by default). It starts once per "
+            "night and **stops when you close the window**.\n\n"
+            "The cost: if nobody leaves the window open, that night is skipped "
+            "entirely. For scans that run with nobody logged in, turn this off "
+            "and register cron instead (setup_cron.csh).\n\n"
+            "Leaving both on is safe - a lock keeps only one running."
+        ),
         "accounts.engine": "Measured by",
         "accounts.engine.python": "Python walk (faster)",
         "accounts.engine.du": "Run du (the old way)",
