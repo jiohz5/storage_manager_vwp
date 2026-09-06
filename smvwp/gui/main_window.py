@@ -20,12 +20,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
-    QComboBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -41,35 +40,23 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-import threading
-from datetime import datetime
-
 from .. import config as config_module
 from .. import formatting
 from .. import (
-    auto_scan,
-    cron_status,
     diagnostics,
     forecast_notify,
     freshness,
     i18n,
-    nightly_scan,
-    procio,
     quota,
     store,
     tiers,
 )
-from ..scheduler import (
-    CollectorScheduler,
-    DashboardWorker,
-    NightlyScanWorker,
-    ScanStatusWorker,
-)
+from ..scheduler import CollectorScheduler, DashboardWorker
 from . import theme, widgets
+from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
 from .reports_dialog import ReportsDialog
-from .scan_progress_dialog import ScanProgressDialog
 from .search_dialog import SearchDialog
 
 COLUMN_KEYS = [
@@ -113,61 +100,6 @@ COLUMN_KEYS = [
 PATH_MIN_WIDTH = 240
 
 
-def _format_duration(seconds: float) -> str:
-    """남은 시간을 사람이 읽는 단위로. 항상 **두 자리 이내**로 줄인다.
-
-    `1시간 23분 45초`처럼 정밀하게 적지 않는 이유: 이 값은 관측한 속도에
-    남은 개수를 곱한 어림이라 초 단위는 있지도 않은 정확도를 흉내 내는 것이다.
-    실제로 쓸모 있는 판단은 "지금 기다릴까, 자고 올까" 수준이므로 그 정도만
-    구분되면 된다."""
-
-    seconds = max(0.0, float(seconds))
-    if seconds < 60:
-        return i18n.t("duration.under_minute")
-    minutes = int(seconds // 60)
-    if minutes < 60:
-        return i18n.t("duration.minutes", minutes=minutes)
-    hours, minutes = divmod(minutes, 60)
-    if hours < 24:
-        if minutes:
-            return i18n.t("duration.hours_minutes", hours=hours, minutes=minutes)
-        return i18n.t("duration.hours", hours=hours)
-    days, hours = divmod(hours, 24)
-    return i18n.t("duration.days_hours", days=days, hours=hours)
-
-GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
-
-# 상세 스캔 탭 위쪽의 계정별 현황 표.
-#
-# 예전에는 이 탭이 "고른 계정 하나의 증가 경로"만 보여 줘서, 밤새 무슨 일이
-# 있었는지 알려면 계정을 하나씩 눌러 봐야 했다. 아침에 이 화면을 여는 이유는
-# 대개 "전체가 어디까지 갔나"이므로 그 답이 먼저 보여야 한다.
-SCAN_ACCOUNT_COLUMN_KEYS = [
-    "scan.acct.name",
-    "scan.acct.kind",
-    "scan.acct.progress",
-    "scan.acct.pending",
-    "scan.acct.measured",
-    "scan.acct.eta",
-    "scan.acct.last_scan",
-    "scan.acct.note",
-]
-(
-    SCAN_ACCT_NAME,
-    SCAN_ACCT_KIND,
-    SCAN_ACCT_PROGRESS,
-    SCAN_ACCT_PENDING,
-    SCAN_ACCT_MEASURED,
-    SCAN_ACCT_ETA,
-    SCAN_ACCT_LAST,
-    SCAN_ACCT_NOTE,
-) = range(8)
-
-# 스캔이 도는 동안 진행 상황을 다시 읽는 간격.
-SCAN_STATUS_REFRESH_MS = 5000
-# 시간창에 들어왔는지 확인하는 주기. 1분이면 22:00 시작이 최대 1분 늦을 뿐이라
-# 밤 단위 작업에는 충분하고, 더 자주 볼 이유가 없다.
-AUTO_SCAN_CHECK_MS = 60_000
 
 # 스캔이 안 돌 때의 간격. 5초로 계속 두면 아무 일도 없는 시간에도 DB를 계속
 # 두들긴다 - 데이터 디렉터리가 NFS 위면 그 자체가 부담이고, 정작 바뀌는 것도
@@ -233,36 +165,12 @@ class MainWindow(QMainWindow):
         #
         # 창이 시작한 스캔은 **창을 닫으면 함께 멈춘다**(`closeEvent`). 그것이
         # 이 경로를 쓰는 이유이자 대가다 - 아무도 창을 안 켜 둔 밤은 통째로 빈다.
-        self._scan_worker = NightlyScanWorker(data_dir, get_config=lambda: self._config)
-        self._scan_worker.finished.connect(self._on_scan_finished)
-        self._scan_worker.failed.connect(self._on_scan_failed)
+        # 스캔 화면은 통째로 `ScanTab` 이 맡는다. 창은 신호만 듣는다.
+        self._scan_tab = ScanTab(data_dir, lambda: self._config, self)
+        self._scan_tab.status_message.connect(self.status_bar_label.setText)
+        self._scan_tab.banner_changed.connect(self._update_home_scan_banner)
 
-        # 스캔 상태 조회는 계정마다 십여 개의 쿼리를 던진다. NFS 위에서는
-        # 그것만으로 창이 멈추므로 **GUI 스레드에서 하지 않는다.**
-        self._status_worker = ScanStatusWorker(self._data_dir, lambda: self._config, self)
-        self._status_worker.finished.connect(self._on_scan_status_ready)
-        self._status_worker.failed.connect(self._on_scan_status_failed)
 
-        self._scan_status_timer = QTimer(self)
-        self._scan_status_timer.timeout.connect(self._refresh_scan_section)
-        self._scan_status_timer.start(SCAN_STATUS_IDLE_REFRESH_MS)
-
-        # 어느 밤에 이미 시작했는지. 이것이 없으면 스캔이 01시에 끝난 뒤 곧바로
-        # 또 시작해 밤새 같은 계정을 반복해서 훑는다.
-        self._auto_scan_started_key = None
-        # `crontab -l` 은 로컬 명령이라 빠르지만, 이 창은 외부 명령 하나에
-        # 멈춘 전적이 있다. GUI 스레드에서 부르지 않는다.
-        self._cron_status = None
-        threading.Thread(
-            target=self._load_cron_status, name="smvwp-cron-check", daemon=True
-        ).start()
-
-        self._auto_scan_timer = QTimer(self)
-        self._auto_scan_timer.timeout.connect(self._maybe_start_nightly_scan)
-        self._auto_scan_timer.start(AUTO_SCAN_CHECK_MS)
-        self._maybe_start_nightly_scan()
-
-        self._refresh_scan_section()
 
     def show_first_run_if_needed(self) -> None:
         """계정이 하나도 없으면 시작 안내를 띄운다.
@@ -375,7 +283,7 @@ class MainWindow(QMainWindow):
             theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD
         )
         scan_layout.setSpacing(theme.GAP_SECTION)
-        scan_layout.addWidget(self._build_scan_section(), 1)
+        scan_layout.addWidget(self._scan_tab, 1)
         self.tabs.addTab(scan_tab, "")
 
         self.status_bar_label = QLabel("")
@@ -591,142 +499,6 @@ class MainWindow(QMainWindow):
             self.language_menu.addAction(action)
             self._language_actions[code] = action
 
-    def _build_scan_section(self) -> QWidget:
-        """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
-        붙인다 (DESIGN.md 2부 6절 "대시보드 단일 화면" 결정 유지)."""
-
-        section = QFrame()
-        section.setFrameShape(QFrame.StyledPanel)
-        section.setObjectName("card")
-        box = QVBoxLayout(section)
-        box.setContentsMargins(16, 14, 16, 14)
-        box.setSpacing(9)
-
-        self.scan_title_label = QLabel()
-        self.scan_title_label.setObjectName("sectionTitle")
-        box.addWidget(self.scan_title_label)
-
-        # 계정 선택은 이 탭 안에 둔다. 홈 표에서 고른 것과 서로 따라간다.
-        account_row = QHBoxLayout()
-        account_row.setSpacing(8)
-        self.scan_account_label = QLabel()
-        self.scan_account_label.setObjectName("muted")
-        self.scan_account_combo = QComboBox()
-        self.scan_account_combo.setMinimumWidth(200)
-        self.scan_account_combo.currentIndexChanged.connect(self._on_scan_account_chosen)
-        account_row.addWidget(self.scan_account_label)
-        account_row.addWidget(self.scan_account_combo)
-        account_row.addStretch(1)
-        box.addLayout(account_row)
-
-        self.scan_status_label = QLabel()
-        self.scan_status_label.setWordWrap(True)
-        box.addWidget(self.scan_status_label)
-
-        # cron 등록 여부. 야간 스캔이 안 도는 가장 흔한 이유가 "등록이 안 된
-        # 것"인데, 그 사실은 아무 데도 드러나지 않아 사람은 프로그램이 고장 난
-        # 줄 안다. 다음 날 아침 보고서가 비어 있어야 알아채고, 그때는 이미
-        # 하룻밤을 버린 뒤다.
-        self.cron_status_label = QLabel()
-        self.cron_status_label.setObjectName("caption")
-        self.cron_status_label.setWordWrap(True)
-        box.addWidget(self.cron_status_label)
-
-        # 스캔이 도는 동안 좌우로 오가는 막대.
-        #
-        # 일부러 **불확정(indeterminate)** 막대를 쓴다. 남은 체크포인트 수는
-        # 알지만 전체 분모는 모른다 - 디렉터리를 분할하면 작업이 늘어나서
-        # 진행률이 뒤로 갈 수도 있다. 그럴 바에는 퍼센트를 지어내지 않고
-        # "지금 일하는 중"만 정직하게 보여준다 (DESIGN.md 1부 "과장하지 않는
-        # UI"). 남은 작업 수는 옆 상태 줄에 숫자 그대로 나온다.
-        self.scan_current_label = QLabel()
-        self.scan_current_label.setObjectName("caption")
-        self.scan_current_label.setWordWrap(True)
-        self.scan_current_label.setVisible(False)
-        box.addWidget(self.scan_current_label)
-
-        self.scan_progress = QProgressBar()
-        self.scan_progress.setRange(0, 0)
-        self.scan_progress.setTextVisible(False)
-        self.scan_progress.setFixedHeight(6)
-        self.scan_progress.setVisible(False)
-        box.addWidget(self.scan_progress)
-
-        scan_buttons = QHBoxLayout()
-        scan_buttons.setSpacing(8)
-        self.scan_run_btn = QPushButton()
-        self.scan_run_btn.clicked.connect(self._trigger_scan_now)
-        self.scan_stop_btn = QPushButton()
-        # 중지는 되돌릴 수 없는 성격의 동작이라 색으로 구분해 둔다 (강제 종료는
-        # 아니지만, 실수로 누르면 진행 중인 밤을 날린다).
-        self.scan_stop_btn.setObjectName("danger")
-        self.scan_stop_btn.clicked.connect(self._request_scan_stop)
-        self.scan_detail_btn = QPushButton()
-        self.scan_detail_btn.clicked.connect(self._open_scan_progress)
-        scan_buttons.addWidget(self.scan_run_btn)
-        scan_buttons.addWidget(self.scan_stop_btn)
-        scan_buttons.addWidget(self.scan_detail_btn)
-        scan_buttons.addStretch(1)
-        box.addLayout(scan_buttons)
-
-        # -- 계정별 현황 ------------------------------------------------
-        self.scan_accounts_caption = QLabel()
-        self.scan_accounts_caption.setObjectName("sectionTitle")
-        box.addWidget(self.scan_accounts_caption)
-
-        self.scan_accounts_table = QTableWidget(0, len(SCAN_ACCOUNT_COLUMN_KEYS))
-        accounts_header = self.scan_accounts_table.horizontalHeader()
-        accounts_header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        accounts_header.setSectionResizeMode(SCAN_ACCT_NOTE, QHeaderView.Stretch)
-        accounts_header.setHighlightSections(False)
-        # 격자선을 끈 표라, 열이 내용 폭에 딱 붙으면 옆 칸 값과 한 덩어리로
-        # 읽힌다 ("약 21분 아직 없음"). 최소 폭으로 숨 쉴 자리를 만든다.
-        accounts_header.setMinimumSectionSize(96)
-        self.scan_accounts_table.verticalHeader().setVisible(False)
-        self.scan_accounts_table.setShowGrid(False)
-        self.scan_accounts_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.scan_accounts_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.scan_accounts_table.verticalHeader().setDefaultSectionSize(30)
-        # 이 표에서 행을 고르면 아래 증가 경로도 그 계정으로 바뀐다. 표를 보고
-        # "이 계정이 이상한데" 싶을 때 곧바로 파고들 수 있어야 한다.
-        self.scan_accounts_table.itemSelectionChanged.connect(
-            self._on_scan_account_row_selected
-        )
-        self.scan_accounts_table.setMinimumHeight(140)
-        box.addWidget(self.scan_accounts_table)
-
-        self.growth_caption = QLabel()
-        self.growth_caption.setObjectName("muted")
-        self.growth_caption.setWordWrap(True)
-        box.addWidget(self.growth_caption)
-
-        self.growth_table = QTableWidget(0, len(GROWTH_COLUMN_KEYS))
-        growth_header = self.growth_table.horizontalHeader()
-        growth_header.setSectionResizeMode(0, QHeaderView.Stretch)
-        growth_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        growth_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        growth_header.setHighlightSections(False)
-        self.growth_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.growth_table.verticalHeader().setVisible(False)
-        self.growth_table.verticalHeader().setDefaultSectionSize(34)
-        self.growth_table.setShowGrid(False)
-        # 이 표에는 칸 위젯이 없어 Qt 내장 정렬을 그대로 쓸 수 있다.
-        # (계정 표는 막대·배지가 칸 위젯이라 Qt 정렬을 켜면 위젯이 행을 따라
-        #  움직이지 않아 어긋난다 - 그쪽은 직접 정렬해 다시 그린다.)
-        self.growth_table.setSortingEnabled(True)
-        self.growth_table.horizontalHeader().setSortIndicatorShown(True)
-        # 사용자가 한 번이라도 헤더를 누르면 그 정렬을 존중한다 - 갱신할
-        # 때마다 기본값으로 되돌리면 정렬을 바꾼 의미가 없다.
-        self._growth_sort_touched = False
-        self.growth_table.horizontalHeader().sectionClicked.connect(
-            lambda _index: setattr(self, '_growth_sort_touched', True)
-        )
-        # 이 표는 보조 정보다. 최소 높이를 낮게 잡아 두지 않으면 계정 표(이
-        # 화면의 주인공)를 아래에서 밀어 올려 행이 잘린다.
-        self.growth_table.setMinimumHeight(80)
-        box.addWidget(self.growth_table)
-
-        return section
 
     # -- 다국어 ------------------------------------------------------
     def retranslate(self) -> None:
@@ -746,17 +518,8 @@ class MainWindow(QMainWindow):
         self.diagnose_btn.setText(i18n.t("dashboard.btn.diagnose"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
 
-        self.scan_title_label.setText(i18n.t("scan.section_title"))
-        self.scan_account_label.setText(i18n.t("scan.account_label"))
-        self._sync_scan_account_combo()
-        self.scan_run_btn.setText(i18n.t("scan.btn.run_now"))
-        self.scan_run_btn.setToolTip(i18n.t("scan.btn.run_now_tooltip"))
-        self.scan_stop_btn.setText(i18n.t("scan.btn.stop"))
-        self.scan_stop_btn.setToolTip(i18n.t("scan.btn.stop_tooltip"))
         self.home_scan_link.setText(i18n.t("tab.scan"))
-        self.scan_detail_btn.setText(i18n.t("scan.btn.progress"))
-        self.scan_detail_btn.setToolTip(i18n.t("scan.btn.progress_tooltip"))
-        self.growth_table.setHorizontalHeaderLabels([i18n.t(key) for key in GROWTH_COLUMN_KEYS])
+        self._scan_tab.retranslate()
 
     def _change_language(self, language: str) -> None:
         if language == i18n.get_language():
@@ -773,7 +536,7 @@ class MainWindow(QMainWindow):
             action.setChecked(code == language)
         self.retranslate()
         self._render_table(self._latest_samples)
-        self._refresh_scan_section()
+        self._scan_tab.refresh()
 
     # -- 데이터 갱신 ----------------------------------------------------
     def _refresh_table_from_store(self) -> None:
@@ -997,55 +760,8 @@ class MainWindow(QMainWindow):
         if self._is_placeholder(item.text()):
             item.setForeground(QColor(theme.TEXT_FAINT))
 
-    def _current_target_text(self, latest_run) -> str:
-        """지금 훑고 있는 경로 한 줄."""
 
-        if not latest_run:
-            return ""
-        try:
-            path = latest_run["current_path"]
-            kind = latest_run["current_kind"]
-            account_id = latest_run["current_account_id"]
-        except (KeyError, IndexError):
-            return ""
-        if not path:
-            return ""
-        account = config_module.find_account(self._config, account_id) if account_id else None
-        kind_text = i18n.t(
-            "progress.kind.activity" if kind == "activity" else "progress.kind.baseline"
-        )
-        return i18n.t(
-            "scan.current_target",
-            account=account.name if account else i18n.t("common.none"),
-            kind=kind_text,
-            path=path,
-        )
 
-    def _open_scan_progress(self) -> None:
-        account = self._selected_account()
-        dialog = ScanProgressDialog(
-            self._data_dir,
-            self._config,
-            account_id=account.account_id if account else None,
-            parent=self,
-        )
-        dialog.exec_()
-
-    @staticmethod
-    def _scan_failure_text(entry, account_name: str) -> str:
-        """스캔에서 재지 못한 경로를 사유와 함께 몇 개 보여 준다.
-
-        개수만 알려 주면 "왜?"에 답하지 못해 사용자가 할 수 있는 일이 없다.
-        경로와 사유를 함께 보여 주면 권한 요청이든 대상 제외든 바로 판단할 수
-        있다."""
-
-        lines = [i18n.t("scan.failed_warning", count=entry.failed_count)]
-        for path, message in entry.failed_paths[:3]:
-            first_line = (message or "").strip().splitlines()[0] if message else ""
-            lines.append(f"  · {path} — {first_line}" if first_line else f"  · {path}")
-        if entry.failed_count > 3:
-            lines.append(i18n.t("scan.failed_more", count=entry.failed_count - 3))
-        return "\n".join(lines)
 
     def _tint_row(self, row: int, tier: str) -> None:
         """행 배경 색을 기록한다 (실제로 칠하는 것은 델리게이트).
@@ -1148,7 +864,7 @@ class MainWindow(QMainWindow):
                 action.setChecked(code == i18n.get_language())
             self.retranslate()
             self._refresh_table_from_store()
-            self._refresh_scan_section()
+            self._scan_tab.refresh()
             self._scheduler.restart_with_current_interval()
 
     def _open_reports_dialog(self) -> None:
@@ -1166,29 +882,7 @@ class MainWindow(QMainWindow):
         box.setText(report)
         box.exec_()
 
-    # -- 상세 스캔 영역 --------------------------------------------------
-    def _selected_account(self) -> Optional[config_module.Account]:
-        """증가 경로를 보여줄 계정.
 
-        탭을 나누면서 선택 수단이 두 개가 됐다: 홈 탭의 표와 상세 스캔 탭의
-        콤보. **콤보를 진실의 원천으로 삼고** 표에서 고르면 콤보를 따라오게
-        한다 - 상세 스캔 탭만 열어 놓고도 계정을 바꿀 수 있어야 하기 때문이다
-        (탭을 나눠 놓고 "선택은 저쪽 탭에서 하세요"는 말이 안 된다)."""
-
-        account_id = self.scan_account_combo.currentData()
-        return config_module.find_account(self._config, account_id) if account_id else None
-
-    def _sync_scan_account_combo(self) -> None:
-        """계정 목록이 바뀌면 콤보를 다시 채운다 (현재 선택은 유지)."""
-
-        current = self.scan_account_combo.currentData()
-        self.scan_account_combo.blockSignals(True)
-        self.scan_account_combo.clear()
-        for account in self._config.accounts:
-            self.scan_account_combo.addItem(account.name, account.account_id)
-        index = self.scan_account_combo.findData(current)
-        self.scan_account_combo.setCurrentIndex(index if index >= 0 else 0)
-        self.scan_account_combo.blockSignals(False)
 
     def _account_id_at_row(self, row: int):
         """표의 행 번호로 계정 id를 찾는다 (정렬돼 있어도 안전)."""
@@ -1203,472 +897,43 @@ class MainWindow(QMainWindow):
 
         account_id = self._account_id_at_row(self.table.currentRow())
         if account_id:
-            index = self.scan_account_combo.findData(account_id)
-            if index >= 0 and index != self.scan_account_combo.currentIndex():
-                self.scan_account_combo.setCurrentIndex(index)
-                return  # currentIndexChanged가 갱신을 이어서 한다
-        self._refresh_growth_table()
+            # 콤보를 맞추는 것도, 증감 표를 다시 그리는 것도 탭이 알아서 한다.
+            self._scan_tab.select_account(account_id)
 
-    def _refresh_scan_section(self) -> None:
-        """스캔 상태 조회를 **요청만** 한다. 실제 읽기는 백그라운드에서 돈다.
 
-        예전에는 여기서 바로 DB를 읽었는데, 계정마다 십여 개의 쿼리라 데이터
-        디렉터리가 NFS 위면 그동안 창이 통째로 멈췄다. 결과는
-        `_on_scan_status_ready`가 받는다."""
 
-        self._render_cron_status()
-        self._status_worker.refresh_async()
 
-    def _on_scan_status_failed(self, message: str) -> None:
-        self.scan_status_label.setText(i18n.t("scan.status_error", message=message))
 
-    def _on_scan_status_ready(self, snapshot) -> None:
-        """백그라운드가 읽어 온 스냅샷을 화면에 그린다 (GUI 스레드)."""
 
-        self._scan_snapshot = snapshot
-        running = snapshot.is_running or self._scan_worker.is_running()
 
-        parts = [snapshot.window_description]
-        parts.append(i18n.t("scan.running") if running else i18n.t("scan.not_running"))
-        latest = snapshot.latest_run
-        if latest:
-            parts.append(
-                i18n.t("scan.latest_run", status=latest["status"], started_at=latest["started_at"][:19])
-            )
-        pending_total = sum(
-            item.pending_baseline_count + item.pending_activity_count for item in snapshot.accounts
+
+
+
+
+
+
+
+
+
+    def _update_home_scan_banner(self, state) -> None:
+        """홈 탭 위쪽의 "지금 스캔 중" 배너.
+
+        스캔 탭이 위젯을 직접 만지지 않고 값만 보내 온다 - 그래야 두 화면을
+        따로 옮길 수 있다."""
+
+        self.home_scan_banner.setVisible(state.running)
+        if not state.running:
+            return
+        self.home_scan_label.setText(
+            i18n.t("scan.scanning_now", path=state.path)
+            if state.path
+            else i18n.t("scan.started")
         )
-        done_total = sum(item.baseline_done for item in snapshot.accounts)
-        total_total = sum(item.baseline_total for item in snapshot.accounts)
-        if pending_total:
-            parts.append(i18n.t("scan.pending_tasks", count=pending_total))
-
-        # 진행률을 숫자와 막대로 함께 보여준다.
-        #
-        # 예전에는 남은 개수만 적고 막대는 불확정으로 뒀는데, 그러면 "얼마나
-        # 남았나"에 답이 안 된다. 분모(total)는 진행 중 늘어날 수 있지만
-        # (시간 초과로 디렉터리를 쪼개면 작업이 추가된다) 그 사실을 **문구에
-        # 적어 두면** 숫자를 지어내는 것이 아니다. 아무것도 안 보여 주는 것보다
-        # 낫다.
-        if total_total:
-            self.scan_progress.setRange(0, total_total)
-            self.scan_progress.setValue(done_total)
-            parts.append(
-                i18n.t(
-                    "scan.progress_counts",
-                    done=done_total,
-                    total=total_total,
-                    percent=int(done_total * 100 / total_total),
-                )
-            )
+        if state.total:
+            self.home_scan_progress.setRange(0, state.total)
+            self.home_scan_progress.setValue(state.done)
         else:
-            self.scan_progress.setRange(0, 0)
-        cpu_text = formatting.scan_cpu_text(latest)
-        if cpu_text:
-            parts.append(cpu_text)
-        self.scan_status_label.setText("  |  ".join(parts))
-
-        # 지금 어느 경로를 훑고 있는지. `du` 하나가 몇 분씩 걸릴 수 있어서,
-        # "실행 중"만 떠 있으면 멈춘 것인지 진행 중인지 구분되지 않는다.
-        current = self._current_target_text(latest) if running else ""
-        self.scan_current_label.setText(current)
-        self.scan_current_label.setVisible(bool(current))
-
-        self.home_scan_banner.setVisible(running)
-        if running:
-            path = ""
-            try:
-                path = latest["current_path"] if latest else ""
-            except (KeyError, IndexError):
-                path = ""
-            self.home_scan_label.setText(
-                i18n.t("scan.scanning_now", path=path) if path else i18n.t("scan.started")
-            )
-            if total_total:
-                self.home_scan_progress.setRange(0, total_total)
-                self.home_scan_progress.setValue(done_total)
-            else:
-                self.home_scan_progress.setRange(0, 0)
-
-        # 막대는 도는 동안에만 보인다. 멈춰 있는데도 계속 떠 있으면 "뭔가
-        # 돌고 있나?"라는 오해를 만든다.
-        self.scan_progress.setVisible(running)
-
-        # 도는 동안만 촘촘히 본다. 멈춰 있으면 30초로 늦춰 NFS 부담을 줄인다.
-        wanted = SCAN_STATUS_REFRESH_MS if running else SCAN_STATUS_IDLE_REFRESH_MS
-        if self._scan_status_timer.interval() != wanted:
-            self._scan_status_timer.start(wanted)
-
-        self.scan_run_btn.setEnabled(not running)
-        self.scan_stop_btn.setEnabled(running)
-        self._refresh_scan_accounts_table(snapshot, running)
-        self._refresh_growth_table()
-
-    def _refresh_scan_accounts_table(self, snapshot, running: bool) -> None:
-        """계정별 진행·측정량·예상 남은 시간을 한 표로 보여준다."""
-
-        entries = {item.account_id: item for item in snapshot.accounts}
-        accounts = self._config.accounts
-        dash = i18n.t("common.none")
-        self.scan_accounts_caption.setText(i18n.t("scan.acct.heading"))
-
-        table = self.scan_accounts_table
-        # 칸 위젯은 안 쓰지만, 행 수가 줄어든 경우 이전 내용이 남지 않도록
-        # 매번 비우고 다시 채운다.
-        table.setRowCount(0)
-        table.setRowCount(len(accounts))
-        table.setHorizontalHeaderLabels(
-            [i18n.t(key) for key in SCAN_ACCOUNT_COLUMN_KEYS]
-        )
-
-        for row, account in enumerate(accounts):
-            entry = entries.get(account.account_id)
-            name_item = QTableWidgetItem(account.name)
-            name_item.setData(Qt.UserRole, account.account_id)
-            name_item.setToolTip(account.path)
-            table.setItem(row, SCAN_ACCT_NAME, name_item)
-            table.setItem(
-                row, SCAN_ACCT_KIND, QTableWidgetItem(i18n.t(f"account.kind.{account.kind}"))
-            )
-
-            if entry is None:
-                for column in (
-                    SCAN_ACCT_PROGRESS,
-                    SCAN_ACCT_PENDING,
-                    SCAN_ACCT_MEASURED,
-                    SCAN_ACCT_ETA,
-                    SCAN_ACCT_LAST,
-                    SCAN_ACCT_NOTE,
-                ):
-                    table.setItem(row, column, QTableWidgetItem(dash))
-                continue
-
-            if entry.baseline_total:
-                percent = int(entry.baseline_done * 100 / entry.baseline_total)
-                progress = f"{entry.baseline_done:,}/{entry.baseline_total:,}  ({percent}%)"
-            else:
-                progress = dash
-            progress_item = QTableWidgetItem(progress)
-            # 분모가 도중에 늘어날 수 있다는 사실은 숨기지 않는다 - 모르면
-            # 진행률이 뒤로 가는 것을 고장으로 읽는다.
-            progress_item.setToolTip(i18n.t("scan.acct.progress_tip"))
-            progress_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            table.setItem(row, SCAN_ACCT_PROGRESS, progress_item)
-
-            pending = entry.pending_baseline_count + entry.pending_activity_count
-            pending_item = QTableWidgetItem(f"{pending:,}" if pending else dash)
-            pending_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            table.setItem(row, SCAN_ACCT_PENDING, pending_item)
-
-            measured_item = QTableWidgetItem(
-                widgets.format_kb(entry.measured_kb) if entry.measured_kb else dash
-            )
-            measured_item.setToolTip(i18n.t("scan.acct.measured_tip"))
-            measured_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            table.setItem(row, SCAN_ACCT_MEASURED, measured_item)
-
-            # 남은 시간은 **도는 중일 때만** 뜻이 있다. 멈춰 있는데 "약 2시간"이
-            # 떠 있으면 지금도 돌고 있다는 오해를 만든다.
-            eta_text = dash
-            if running and entry.eta_seconds:
-                eta_text = i18n.t(
-                    "scan.acct.eta_value", duration=_format_duration(entry.eta_seconds)
-                )
-            elif running and pending:
-                # 표본이 모자라 아직 못 재는 상태. 빈칸으로 두면 "안 나온다"와
-                # "0이다"가 구분되지 않는다.
-                eta_text = i18n.t("scan.acct.eta_unknown")
-            eta_item = QTableWidgetItem(eta_text)
-            eta_item.setToolTip(i18n.t("scan.acct.eta_tip"))
-            eta_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            table.setItem(row, SCAN_ACCT_ETA, eta_item)
-
-            last_item = QTableWidgetItem(
-                widgets.scan_label(entry.current_scan_at, entry.last_completed_generation)
-                if entry.last_completed_generation
-                else i18n.t("scan.acct.never")
-            )
-            # 가운데 정렬로 왼쪽 숫자 열과 떼어 놓는다. 왼쪽 붙임으로 두면
-            # 오른쪽 정렬된 '예상 남은 시간'과 붙어 한 덩어리로 읽힌다.
-            last_item.setTextAlignment(Qt.AlignCenter)
-            table.setItem(row, SCAN_ACCT_LAST, last_item)
-
-            notes = []
-            if entry.failed_count:
-                notes.append(i18n.t("scan.acct.note_failed", count=entry.failed_count))
-            if entry.partial_paths:
-                notes.append(
-                    i18n.t("scan.acct.note_partial", count=len(entry.partial_paths))
-                )
-            if entry.last_activity_total_changed is not None:
-                notes.append(
-                    i18n.t("scan.acct.note_changed", count=entry.last_activity_total_changed)
-                )
-            note_item = QTableWidgetItem("  ·  ".join(notes) if notes else "")
-            if entry.failed_count or entry.partial_paths:
-                note_item.setForeground(QColor(tiers.color(tiers.WARN)))
-            table.setItem(row, SCAN_ACCT_NOTE, note_item)
-
-    def _on_scan_account_chosen(self) -> None:
-        """콤보에서 계정을 고르면 현황 표의 해당 행도 함께 짚어 준다.
-
-        예전에는 표 -> 콤보 방향만 맞췄다. 그러면 콤보로 계정을 바꿔도 표는
-        엉뚱한 행이 선택된 채 남아, **두 조작이 서로 다른 것을 가리키는 것처럼**
-        보였다. 표를 눌러서 바꿀 수 있다는 것도 그래서 눈에 안 들어왔다.
-        """
-
-        self._refresh_growth_table()
-
-        account_id = self.scan_account_combo.currentData()
-        table = self.scan_accounts_table
-        for row in range(table.rowCount()):
-            item = table.item(row, SCAN_ACCT_NAME)
-            if item is not None and item.data(Qt.UserRole) == account_id:
-                if table.currentRow() != row:
-                    # 표 선택이 다시 콤보를 건드리지 않게 막는다 (무한 왕복).
-                    table.blockSignals(True)
-                    table.selectRow(row)
-                    table.blockSignals(False)
-                return
-
-    def _on_scan_account_row_selected(self) -> None:
-        """현황 표에서 고른 계정을 아래 증가 경로 콤보에도 맞춘다."""
-
-        row = self.scan_accounts_table.currentRow()
-        if row < 0:
-            return
-        item = self.scan_accounts_table.item(row, SCAN_ACCT_NAME)
-        if item is None:
-            return
-        account_id = item.data(Qt.UserRole)
-        index = self.scan_account_combo.findData(account_id)
-        if index >= 0 and index != self.scan_account_combo.currentIndex():
-            self.scan_account_combo.setCurrentIndex(index)
-
-    def _refresh_growth_table(self) -> None:
-        snapshot = self._scan_snapshot
-        account = self._selected_account()
-        if snapshot is None or account is None:
-            self.growth_table.setRowCount(0)
-            self.growth_caption.setText(i18n.t("scan.select_account"))
-            return
-
-        entry = next(
-            (item for item in snapshot.accounts if item.account_id == account.account_id), None
-        )
-        if entry is None or entry.last_completed_generation is None:
-            self.growth_table.setRowCount(0)
-            # 기준선이 없는 이유가 "아직 안 돌았다"가 아니라 "돌았는데 전부
-            # 실패했다"일 수 있다. 그 경우 실패 사유를 보여 주지 않으면 스캔이
-            # 즉시 끝나 버린 것처럼만 보인다.
-            if entry is not None and entry.failed_count:
-                self.growth_caption.setText(self._scan_failure_text(entry, account.name))
-            else:
-                self.growth_caption.setText(i18n.t("scan.no_baseline", account=account.name))
-            return
-
-        activity_note = ""
-        if entry.last_activity_total_changed is not None:
-            activity_note = i18n.t("scan.activity_note", count=entry.last_activity_total_changed)
-        # 권한 부족으로 축소 측정된 경로가 있으면 반드시 알린다 - 모르고 보면
-        # "안 늘었네"로 잘못 읽는다.
-        if entry.partial_paths:
-            activity_note += "\n" + i18n.t(
-                "scan.partial_warning", count=len(entry.partial_paths)
-            )
-        if entry.failed_count:
-            activity_note += "\n" + self._scan_failure_text(entry, account.name)
-
-        if entry.growth:
-            self.growth_caption.setText(
-                i18n.t(
-                    "scan.growth_caption",
-                    account=account.name,
-                    current=widgets.scan_label(
-                        entry.current_scan_at, entry.last_completed_generation
-                    ),
-                    previous=widgets.scan_label(
-                        entry.previous_scan_at,
-                        (entry.last_completed_generation or 1) - 1,
-                    ),
-                    activity=activity_note,
-                )
-            )
-            self.growth_table.setSortingEnabled(False)
-            # 열 제목에 비교 대상 날짜를 박는다 - "이전 스캔 대비"보다
-            # "260819 대비"가 무엇과 비교한 값인지 스스로 설명한다.
-            self.growth_table.setHorizontalHeaderItem(
-                2,
-                QTableWidgetItem(
-                    i18n.t(
-                        "scan.col.delta_dated",
-                        previous=widgets.scan_label(
-                            entry.previous_scan_at,
-                            (entry.last_completed_generation or 1) - 1,
-                        ),
-                    )
-                    if entry.previous_scan_at
-                    else i18n.t("scan.col.delta")
-                ),
-            )
-            self.growth_table.setRowCount(len(entry.growth))
-            for index, row in enumerate(entry.growth):
-                current_kb = row["current_kb"]
-                previous_kb = row["previous_kb"]
-                self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
-                self.growth_table.setItem(
-                    index, 1, widgets.NumericItem(widgets.format_kb(current_kb), current_kb)
-                )
-                if previous_kb is None:
-                    delta_text = i18n.t("scan.new_path")
-                else:
-                    delta_text = widgets.format_kb_delta(current_kb - previous_kb)
-                delta_value = (
-                    current_kb - previous_kb if previous_kb is not None else current_kb
-                )
-                self.growth_table.setItem(
-                    index, 2, widgets.NumericItem(delta_text, delta_value)
-                )
-            return
-
-        self.growth_caption.setText(
-            i18n.t(
-                "scan.baseline_only_caption",
-                account=account.name,
-                current=widgets.scan_label(
-                    entry.current_scan_at, entry.last_completed_generation
-                ),
-                activity=activity_note,
-            )
-        )
-        self.growth_table.setSortingEnabled(False)
-        self.growth_table.setRowCount(len(entry.top_paths))
-        dash = i18n.t("common.none")
-        for index, row in enumerate(entry.top_paths):
-            self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
-            self.growth_table.setItem(
-                index, 1, widgets.NumericItem(widgets.format_kb(row["size_kb"]), row["size_kb"])
-            )
-            self.growth_table.setItem(index, 2, widgets.NumericItem(dash, None))
-
-        # 채우기가 끝난 뒤 정렬을 되살린다. 기본은 **크기 내림차순** -
-        # 상세 스캔을 보는 이유가 '무엇이 제일 큰가'이기 때문이다.
-        # 사용자가 헤더를 눌러 바꾼 정렬은 Qt가 유지해 준다.
-        if not self._growth_sort_touched:
-            self.growth_table.sortItems(1, Qt.DescendingOrder)
-        self.growth_table.setSortingEnabled(True)
-
-    def _trigger_scan_now(self) -> None:
-        if not self._config.accounts:
-            QMessageBox.information(
-                self,
-                i18n.t("accounts.none_selected_title"),
-                i18n.t("accounts.none_selected_body"),
-            )
-            return
-        reply = QMessageBox.question(
-            self,
-            i18n.t("scan.confirm_title"),
-            i18n.t("scan.confirm_body"),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
-            return
-        if not self._scan_worker.run_async(bypass_window=True):
-            self.status_bar_label.setText(i18n.t("scan.already_running"))
-            return
-        # 22시에 손으로 돌렸으면 그 밤은 처리된 것이다 - 표시해 두지 않으면
-        # 자동 쪽이 같은 밤을 한 번 더 시작한다.
-        self._remember_scan_window()
-        self.status_bar_label.setText(i18n.t("scan.started"))
-        self._refresh_scan_section()
-
-    def _load_cron_status(self) -> None:
-        """cron 상태를 읽어 둔다 (작업 스레드).
-
-        위젯은 여기서 건드리지 않는다 - Qt 위젯은 GUI 스레드에서만 만져야
-        한다. 값만 담아 두고 그리기는 다음 새로고침이 한다."""
-
-        try:
-            self._cron_status = cron_status.read_status()
-        except Exception:  # pragma: no cover - 진단 표시가 창을 죽이면 안 된다
-            self._cron_status = None
-
-    def _render_cron_status(self) -> None:
-        status = self._cron_status
-        if status is None:
-            self.cron_status_label.setVisible(False)
-            return
-        auto = bool(getattr(self._config.settings, "gui_auto_nightly_scan", False))
-        key = cron_status.summary_key(status)
-        # 창이 밤을 지키는 설정이면 야간 줄이 없는 것이 정상이다 - 그때까지
-        # 경고하면 "고치라"는 잘못된 신호가 된다.
-        if auto and key == "cron.nightly_missing":
-            key = "cron.nightly_by_gui"
-        self.cron_status_label.setText(i18n.t(key))
-        # `setProperty` 로 상태를 주려면 스타일시트를 다시 적용해야 듣는다.
-        # objectName 은 그런 단계 없이 바로 먹으므로 이쪽을 쓴다.
-        warn = key in ("cron.none", "cron.nightly_missing")
-        self.cron_status_label.setObjectName("captionWarn" if warn else "caption")
-        self.cron_status_label.setStyleSheet("")  # 이름이 바뀌면 다시 물리게 한다
-        self.cron_status_label.setVisible(True)
-
-    def _maybe_start_nightly_scan(self) -> None:
-        """시간창에 들어왔으면 스스로 시작한다 (밤마다 한 번).
-
-        판단은 `auto_scan.should_start`에 있다 - Qt 없이 시험할 수 있어야
-        하기 때문이다. 여기서는 그 답에 따라 실행만 한다.
-        """
-
-        now = datetime.now()
-        if not auto_scan.should_start(
-            now,
-            self._config.settings,
-            self._scan_worker.is_running(),
-            self._auto_scan_started_key,
-        ):
-            return
-        # 시작을 **먼저** 기록한다. 아래 호출이 잠금 때문에 실패하더라도(cron이
-        # 이미 돌고 있는 경우) 이 밤은 이미 처리된 것으로 봐야 한다 - 안 그러면
-        # 1분마다 다시 시도한다.
-        self._remember_scan_window(now)
-        if self._scan_worker.run_async(bypass_window=False):
-            self.status_bar_label.setText(i18n.t("scan.auto_started"))
-            self._refresh_scan_section()
-
-    def _remember_scan_window(self, now=None) -> None:
-        """이 밤에 스캔을 시작했다고 표시한다.
-
-        수동 실행에서도 부른다 - 22시에 손으로 돌린 뒤 자동이 또 시작하면
-        같은 밤을 두 번 훑게 된다."""
-
-        settings = self._config.settings
-        key = auto_scan.window_key(
-            now or datetime.now(),
-            settings.detail_scan_window_start_hour,
-            settings.detail_scan_window_end_hour,
-        )
-        if key is not None:
-            self._auto_scan_started_key = key
-
-    def _request_scan_stop(self) -> None:
-        if self._scan_worker.request_stop():
-            self.status_bar_label.setText(i18n.t("scan.stop_requested"))
-        else:
-            self.status_bar_label.setText(i18n.t("scan.nothing_running"))
-        self._refresh_scan_section()
-
-    def _on_scan_finished(self, summary) -> None:
-        if not summary.started:
-            self.status_bar_label.setText(i18n.t("scan.not_started", reason=summary.reason))
-        else:
-            self.status_bar_label.setText(i18n.t("scan.finished", status=summary.status))
-        self._refresh_scan_section()
-
-    def _on_scan_failed(self, message: str) -> None:
-        self.status_bar_label.setText(i18n.t("scan.failed", message=message))
-        self._refresh_scan_section()
+            self.home_scan_progress.setRange(0, 0)
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt 콜백 이름 규칙)
         """창을 닫을 때 우리가 띄운 작업을 확실히 정리한다.
@@ -1680,7 +945,7 @@ class MainWindow(QMainWindow):
         파일서버가 계속 느린" 상태로 나타난다.
         """
 
-        if self._scan_worker.is_running():
+        if self._scan_tab.is_scan_running():
             answer = QMessageBox.question(
                 self,
                 i18n.t("scan.close_while_running_title"),
@@ -1693,25 +958,6 @@ class MainWindow(QMainWindow):
                 return
 
         self._scheduler.stop()
-        self._scan_status_timer.stop()
-        self._auto_scan_timer.stop()
-        if self._scan_worker.is_running():
-            self._stop_scan_for_shutdown()
+        self._scan_tab.shutdown()
         super().closeEvent(event)
 
-    def _stop_scan_for_shutdown(self) -> None:
-        """스캔을 멈추고 흔적을 정리한다 (창을 닫는 경로 전용).
-
-        순서가 중요하다. 먼저 중지 요청을 써 둬야, 자식을 죽인 뒤 스캐너가
-        잠깐 더 진행하더라도 다음 체크포인트에서 확실히 멈춘다."""
-
-        self._scan_worker.request_stop()
-        # 진행 중이던 디렉터리 하나의 결과는 잃지만, 그 체크포인트는 pending으로
-        # 남아 다음 스캔이 거기서 이어받는다. 창을 닫는 사람의 의도는 "그만"이다.
-        terminated = procio.terminate_children()
-        try:
-            nightly_scan.mark_interrupted_run(self._data_dir)
-        except Exception:  # pragma: no cover - 종료 경로에서 예외로 막히면 안 된다
-            pass
-        if terminated:
-            self.status_bar_label.setText(i18n.t("scan.stopped_on_close", count=terminated))
