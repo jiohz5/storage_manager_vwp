@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from . import nightly_scan
+from . import dashboard, nightly_scan
 from .cycle import run_collection_cycle
 
 
@@ -107,6 +107,64 @@ class ScanStatusWorker(QObject):
         finally:
             with self._lock:
                 self._running = False
+
+
+class DashboardWorker(QObject):
+    """대시보드 데이터를 **백그라운드 스레드에서** 읽는다.
+
+    ## 왜 스레드로 빼는가
+
+    `ScanStatusWorker` 와 같은 이유인데, 이쪽이 더 무겁다. 표본을 읽는 것은
+    쿼리 하나지만 그 뒤의 FULL 예측은 **계정마다 이력을 다시 훑어** 추세를
+    맞춘다. 데이터 디렉터리가 NFS 위면 그 시간 동안 창이 통째로 멈춘다.
+
+    수집이 끝날 때마다(15분) 불리므로, 사용자는 15분마다 한 번씩 멈추는 창을
+    보게 된다. 스캔 상태 쪽은 이미 스레드로 뺐는데 여기만 남아 있었다.
+
+    ## 겹쳐 돌리지 않는다
+
+    이전 계산이 안 끝났으면 이번 차례는 건너뛴다 - 쌓아 봐야 더 느려질 뿐이고,
+    어차피 다음 갱신이 최신값을 다시 읽는다.
+    """
+
+    finished = pyqtSignal(object)  # DashboardData
+    failed = pyqtSignal(str)
+
+    def __init__(self, data_dir: Path, get_config, parent: QObject = None):
+        super().__init__(parent)
+        self._data_dir = data_dir
+        self._get_config = get_config
+        self._lock = threading.Lock()
+        self._running = False
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._running
+
+    def refresh_async(self) -> bool:
+        """읽기를 시작한다. 이미 돌고 있으면 False (건너뜀)."""
+
+        with self._lock:
+            if self._running:
+                return False
+            self._running = True
+        threading.Thread(target=self._run, name="smvwp-dashboard", daemon=True).start()
+        return True
+
+    def _run(self) -> None:
+        try:
+            self.finished.emit(self._read())
+        except Exception as exc:  # pragma: no cover - 방어적 처리
+            self.failed.emit(str(exc))
+        finally:
+            with self._lock:
+                self._running = False
+
+    def _read(self) -> dashboard.DashboardData:
+        # 읽는 방법 자체는 `dashboard` 에 있다 - 개발 PC 에 PyQt5 가 없어
+        # 이 파일은 임포트조차 안 되므로, 로직이 여기 있으면 영원히 시험
+        # 밖에 남는다.
+        return dashboard.read_dashboard(self._data_dir, self._get_config())
 
 
 class CollectorScheduler:

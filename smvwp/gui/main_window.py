@@ -58,7 +58,12 @@ from .. import (
     store,
     tiers,
 )
-from ..scheduler import CollectorScheduler, NightlyScanWorker, ScanStatusWorker
+from ..scheduler import (
+    CollectorScheduler,
+    DashboardWorker,
+    NightlyScanWorker,
+    ScanStatusWorker,
+)
 from . import theme, widgets
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
@@ -200,6 +205,14 @@ class MainWindow(QMainWindow):
         # 스케줄러가 곧바로 한 번 수집하므로, 그 뒤에 보면 늘 "방금 수집됨"이
         # 되어 "그동안 cron이 안 돌았다"는 사실이 가려진다.
         self._freshness = self._evaluate_freshness()
+        # 표본 읽기와 FULL 예측은 **GUI 스레드에서 하지 않는다.** 예측은
+        # 계정마다 이력을 다시 훑으므로, 데이터 디렉터리가 NFS 위면 그동안
+        # 창이 멈춘다 (스캔 상태 쪽은 이미 같은 이유로 스레드에 있다).
+        self._dashboard_worker = DashboardWorker(
+            data_dir, get_config=lambda: self._config, parent=self
+        )
+        self._dashboard_worker.finished.connect(self._on_dashboard_ready)
+        self._dashboard_worker.failed.connect(self._on_dashboard_failed)
         self._refresh_table_from_store()
 
         self._scheduler = CollectorScheduler(
@@ -763,14 +776,29 @@ class MainWindow(QMainWindow):
 
     # -- 데이터 갱신 ----------------------------------------------------
     def _refresh_table_from_store(self) -> None:
-        conn = store.connect(self._data_dir)
-        try:
-            latest = store.latest_samples(conn)
-        finally:
-            conn.close()
-        self._latest_samples = latest
-        self._refresh_forecasts()
-        self._render_table(latest)
+        """대시보드 데이터를 **요청만** 한다. 실제 읽기는 백그라운드에서 돈다.
+
+        예전에는 여기서 DB를 열고 FULL 예측까지 계산했다. 15분마다 수집이
+        끝날 때 불리므로, 데이터 디렉터리가 NFS 위면 사용자는 15분마다 한 번씩
+        멈추는 창을 보게 됐다. 결과는 `_on_dashboard_ready` 가 받는다."""
+
+        self._dashboard_worker.refresh_async()
+
+    def _on_dashboard_ready(self, data) -> None:
+        self._latest_samples = data.samples
+        self._forecasts = data.forecasts
+        self._render_table(data.samples)
+        if data.forecast_failed:
+            # 예측 칸이 비는 이유가 "표본이 모자라서"인지 "계산이 터져서"인지
+            # 화면만 봐서는 구분이 안 된다. 후자면 말해 준다.
+            self.status_bar_label.setText(i18n.t("dashboard.forecast_failed"))
+
+    def _on_dashboard_failed(self, message: str) -> None:
+        # 읽기에 실패해도 이미 그려진 화면은 그대로 둔다 - 지우면 사용자는
+        # 데이터가 사라진 줄 안다.
+        self.status_bar_label.setText(
+            i18n.t("dashboard.collect_error", message=message)
+        )
 
     def _evaluate_freshness(self) -> Dict[str, object]:
         """수집 상태를 판정한다 (읽기 전용).
@@ -817,18 +845,6 @@ class MainWindow(QMainWindow):
             coverage=int(worst.coverage_pct or 0),
             hours=self._config.settings.freshness_window_hours,
         )
-
-    def _refresh_forecasts(self) -> None:
-        """FULL 예측을 다시 계산한다 (읽기 전용).
-
-        예측 실패가 대시보드 자체를 못 뜨게 만들면 안 되므로 예외를 삼키고
-        빈 결과로 둔다 - 그러면 해당 칸만 '-'로 표시된다."""
-
-        try:
-            forecasts = forecast_notify.build_forecasts(self._data_dir, self._config)
-            self._forecasts = {f.account_id: f for f in forecasts}
-        except Exception:  # pragma: no cover - 방어적 처리
-            self._forecasts = {}
 
     def _render_table(self, latest: Dict[str, store.SampleRecord]) -> None:
         accounts = self._sorted_accounts(latest)

@@ -313,6 +313,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.started": "상세 스캔 실행 중...",
         "scan.auto_started": "야간 시간창에 들어와 상세 스캔을 시작했습니다.",
         "cron.ok": "cron: 수집·야간 스캔 모두 등록되어 있습니다.",
+        "dashboard.forecast_failed": "FULL 예측을 계산하지 못했습니다 (표본은 정상입니다).",
         "cron.none": (
             "cron에 등록된 항목이 없습니다 - 이 창을 닫으면 수집도 야간 스캔도 "
             "돌지 않습니다. setup_cron.csh 를 한 번 실행하세요."
@@ -825,6 +826,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.started": "Detail scan running...",
         "scan.auto_started": "Entered the night window - detail scan started.",
         "cron.ok": "cron: both the collector and the nightly scan are registered.",
+        "dashboard.forecast_failed": "Could not compute the FULL forecast (samples are fine).",
         "cron.none": (
             "Nothing is registered in cron - close this window and neither "
             "collection nor the nightly scan will run. Run setup_cron.csh once."
