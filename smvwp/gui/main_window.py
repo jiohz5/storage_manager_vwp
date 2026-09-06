@@ -45,6 +45,7 @@ import threading
 from datetime import datetime
 
 from .. import config as config_module
+from .. import formatting
 from .. import (
     auto_scan,
     cron_status,
@@ -870,7 +871,7 @@ class MainWindow(QMainWindow):
             path_item = QTableWidgetItem(account.path)
             # 폭이 모자라 잘리더라도 전체 경로는 확인할 수 있어야 한다.
             # 파일시스템/마운트 지점도 여기 붙인다 (열을 없앤 대신).
-            path_item.setToolTip(self._path_tooltip(account, sample))
+            path_item.setToolTip(formatting.path_tooltip(account, sample))
             self.table.setItem(row, COL_PATH, path_item)
             # 성격은 수집 결과와 무관하므로 표본이 없어도 항상 채운다.
             kind_item = QTableWidgetItem(i18n.t(f"account.kind.{account.kind}"))
@@ -892,7 +893,7 @@ class MainWindow(QMainWindow):
             size_item = QTableWidgetItem(
                 widgets.format_size_pair(sample.used_kb, sample.total_kb)
             )
-            size_item.setToolTip(self._size_tooltip(sample))
+            size_item.setToolTip(formatting.size_tooltip(sample))
             self._style_value_item(size_item, COL_SIZE)
             self.table.setItem(row, COL_SIZE, size_item)
 
@@ -902,7 +903,7 @@ class MainWindow(QMainWindow):
                 else i18n.t("common.unknown_value")
             )
             usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier)
-            usage_bar.setToolTip(self._size_tooltip(sample))
+            usage_bar.setToolTip(formatting.size_tooltip(sample))
             self.table.setCellWidget(row, COL_BYTE, usage_bar)
             inode_item = QTableWidgetItem(inode_text)
             self._style_value_item(inode_item, COL_INODE)
@@ -1029,78 +1030,6 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dialog.exec_()
-
-    @staticmethod
-    def _path_tooltip(account, sample) -> str:
-        """경로 칸 툴팁: 전체 경로 + 파일시스템/마운트 지점.
-
-        `파일시스템` 열을 없앤 대신이다. 계정 대부분이 같은 파일시스템에 있어
-        열로 두면 같은 값이 반복되며 자리만 차지했는데, 정작 확인하고 싶은
-        순간(이 계정이 어느 볼륨인가)에는 여기 있으면 충분하다."""
-
-        lines = [account.path]
-        if sample is not None:
-            if sample.filesystem:
-                lines.append(i18n.t("dashboard.tip.filesystem", value=sample.filesystem))
-            if sample.mount_point:
-                lines.append(i18n.t("dashboard.tip.mount", value=sample.mount_point))
-        return "\n".join(lines)
-
-    @staticmethod
-    def _size_tooltip(sample) -> str:
-        """사용량/총량/남은 용량. 막대와 크기 칸 양쪽에 붙인다."""
-
-        avail = sample.avail_kb
-        return "\n".join(
-            [
-                i18n.t("dashboard.tip.used", value=widgets.format_kb(sample.used_kb)),
-                i18n.t("dashboard.tip.total", value=widgets.format_kb(sample.total_kb)),
-                i18n.t("dashboard.tip.free", value=widgets.format_kb(avail)),
-            ]
-        )
-
-    @staticmethod
-    def _scan_cpu_text(latest_run) -> str:
-        """직전 스캔이 이 장비 CPU를 얼마나 썼는지.
-
-        상세 스캔이 얼마나 무거운지는 계정 크기·파일 수·파일시스템에 따라
-        달라서 **미리 예측할 수 없다.** 대신 실제로 돈 결과를 남겨 두면 다음
-        실행 전에 "지난번엔 이 정도였다"로 판단할 수 있다.
-
-        `top` 기준(코어 1개 = 100%)을 함께 적는 이유: 사용자가 top을 띄워 놓고
-        대조할 때 숫자가 맞아야 하기 때문."""
-
-        if not latest_run:
-            return ""
-        try:
-            avg = latest_run["cpu_top_percent_avg"]
-            peak = latest_run["cpu_top_percent_peak"]
-            system_avg = latest_run["cpu_system_percent_avg"]
-        except (KeyError, IndexError):
-            return ""
-        if avg is None or peak is None:
-            return ""
-        text = i18n.t(
-            "scan.cpu_usage",
-            avg=f"{avg:.0f}",
-            peak=f"{peak:.0f}",
-            system=f"{system_avg:.1f}" if system_avg is not None else "-",
-        )
-
-        # 메모리는 최고치만 붙인다. "스캔이 메모리를 위협했나"에 답하는 것은
-        # 평균이 아니라 순간 최대다.
-        try:
-            rss_kb = latest_run["rss_peak_kb"]
-            mem_pct = latest_run["memory_peak_percent"]
-        except (KeyError, IndexError):
-            return text
-        if rss_kb:
-            text += "  |  " + i18n.t(
-                "scan.memory_usage",
-                peak=widgets.format_kb(rss_kb),
-                percent=f"{mem_pct:.1f}" if mem_pct is not None else "-",
-            )
-        return text
 
     @staticmethod
     def _scan_failure_text(entry, account_name: str) -> str:
@@ -1334,7 +1263,7 @@ class MainWindow(QMainWindow):
             )
         else:
             self.scan_progress.setRange(0, 0)
-        cpu_text = self._scan_cpu_text(latest)
+        cpu_text = formatting.scan_cpu_text(latest)
         if cpu_text:
             parts.append(cpu_text)
         self.scan_status_label.setText("  |  ".join(parts))
