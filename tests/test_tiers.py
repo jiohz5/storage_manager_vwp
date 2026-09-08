@@ -126,14 +126,14 @@ class FormatSizePairTests(unittest.TestCase):
     """
 
     def test_uses_one_shared_unit(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         # 950GB / 1TB - 예전이라면 단위가 갈렸을 조합
         text = widgets.format_size_pair(950 * 1024 ** 2, 1024 ** 3)
         self.assertEqual(text, "0.9 / 1.0 TB")
 
     def test_unit_follows_the_total_not_the_used(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         # 사용량이 아주 작아도 총량 단위를 따라간다 (열 안에서 자릿수가 맞도록)
         self.assertEqual(widgets.format_size_pair(1024, 40 * 1024 ** 3), "0.0 / 40.0 TB")
@@ -142,7 +142,7 @@ class FormatSizePairTests(unittest.TestCase):
         """실제 계정은 많아야 수십 TB다. PB로 올라가면 `0.0 / 0.0 PB`처럼
         뭉개져 아무것도 못 읽는다."""
 
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         # 100TB 중 99.1% - 예전 표기라면 `1.5 / 1.5 PB`가 아니라 여기서도
         # TB로 남아야 남은 용량 차이가 보인다.
@@ -152,7 +152,7 @@ class FormatSizePairTests(unittest.TestCase):
     def test_small_volumes_still_use_a_smaller_unit(self):
         """TB 상한이 작은 볼륨까지 TB로 끌어올리면 안 된다."""
 
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         self.assertEqual(
             widgets.format_size_pair(int(1024 ** 2 * 500 * 0.6), 1024 ** 2 * 500),
@@ -160,19 +160,19 @@ class FormatSizePairTests(unittest.TestCase):
         )
 
     def test_unknown_total_falls_back_to_used_only(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         self.assertEqual(widgets.format_size_pair(5000, None), "4.9 MB")
 
     def test_unknown_used_is_marked_not_guessed(self):
         """모르는 값을 0으로 채우면 '안 쓰고 있다'로 잘못 읽힌다."""
 
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         self.assertEqual(widgets.format_size_pair(None, 1024 ** 3), "? / 1.0 TB")
 
     def test_both_unknown(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         self.assertEqual(widgets.format_size_pair(None, None), "-")
 
@@ -185,13 +185,13 @@ class ScanLabelTests(unittest.TestCase):
     """
 
     def test_korean_uses_yymmdd(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         i18n.set_language(i18n.KOREAN)
         self.assertEqual(widgets.scan_label("2026-08-19T22:31:05+00:00"), "260819")
 
     def test_english_uses_iso_date(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         i18n.set_language(i18n.ENGLISH)
         try:
@@ -202,12 +202,12 @@ class ScanLabelTests(unittest.TestCase):
     def test_falls_back_to_ordinal_while_still_running(self):
         """진행 중인 스캔은 완료 날짜가 없다 - 날짜를 지어내면 안 된다."""
 
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         i18n.set_language(i18n.KOREAN)
         self.assertEqual(widgets.scan_label(None, 3), "3번째 스캔")
 
     def test_no_date_and_no_number_is_a_dash(self):
-        from smvwp.gui import widgets
+        from smvwp import formatting as widgets
 
         self.assertEqual(widgets.scan_label(None, None), i18n.t("common.none"))

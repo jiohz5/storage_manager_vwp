@@ -31,8 +31,8 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import admin_auth, config as config_module
+from .. import formatting
 from .. import i18n, search_index, tiers
-from . import widgets
 from .pin_dialog import PinChangeDialog
 
 
@@ -229,7 +229,7 @@ class SearchDialog(QDialog):
             conn.close()
 
         size_text = i18n.t(
-            "search.db_size", size=widgets.format_bytes(search_index.db_size_bytes(self._data_dir))
+            "search.db_size", size=formatting.format_bytes(search_index.db_size_bytes(self._data_dir))
         )
         if account.search_indexing:
             self.status_label.setText(f"{size_text}  |  {count:,}")

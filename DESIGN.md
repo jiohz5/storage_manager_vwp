@@ -323,6 +323,8 @@ storage_manager_vwp/
     scan_store.py                            # 스캔 체크포인트/기준선 SQLite
     detail_scan.py                            # 기준선 스캔 (분할/우선순위, 엔진 선택)
     walker.py                                 # 파이썬 병렬 순회 엔진 (기본)
+    formatting.py                             # 숫자/상태 -> 문자열 (Qt 없음, 시험 가능)
+    dashboard.py                              # 대시보드 데이터 읽기 (Qt 없음, 작업 스레드용)
     activity_scan.py                           # find -newermt 기반 변경 파일 스캔
     nightly_scan.py                             # 야간 스캔 오케스트레이터
     search_index.py                              # 이름 검색 인덱스 (별도 DB)
@@ -332,7 +334,8 @@ storage_manager_vwp/
     gui/                                            # PyQt5 화면 (Qt 의존)
       fonts/                                         # 번들 폰트 (Pretendard, OFL 1.1)
       theme.py                                        # 폰트·팔레트·타이포·QSS
-      main_window.py                                  # 대시보드 단일 화면
+      main_window.py                                  # 창 - 홈 탭, 메뉴, 신호 배선
+      scan_tab.py                                     # 야간 상세 스캔 탭 (창과는 신호로만)
       account_dialog.py                                # 계정 등록/설정
       reports_dialog.py                                 # 보고서 보기/생성
       search_dialog.py                                   # 관리자 검색

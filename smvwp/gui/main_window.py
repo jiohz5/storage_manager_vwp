@@ -221,7 +221,10 @@ class MainWindow(QMainWindow):
         self.home_scan_progress.setTextVisible(False)
         self.home_scan_progress.setFixedSize(120, 6)
         self.home_scan_link = QPushButton()
-        self.home_scan_link.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        # 인덱스를 박아 두면 탭이 하나 더 생기는 순간 엉뚱한 탭으로 간다.
+        self.home_scan_link.clicked.connect(
+            lambda: self.tabs.setCurrentIndex(self.tabs.indexOf(self._scan_page))
+        )
         banner_box.addWidget(self.home_scan_progress)
         banner_box.addWidget(self.home_scan_label, 1)
         banner_box.addWidget(self.home_scan_link)
@@ -280,6 +283,9 @@ class MainWindow(QMainWindow):
         )
         scan_layout.setSpacing(theme.GAP_SECTION)
         scan_layout.addWidget(self._scan_tab, 1)
+        # 탭 띠에 붙는 것은 이 여백용 컨테이너다 - `indexOf` 는 이것으로 해야
+        # 한다. `self._scan_tab` 으로 물으면 -1 이 나온다 (실제로 그랬다).
+        self._scan_page = scan_tab
         self.tabs.addTab(scan_tab, "")
 
         self.status_bar_label = QLabel("")
@@ -650,7 +656,7 @@ class MainWindow(QMainWindow):
             # 퍼센트 왼쪽에 실제 크기를 둔다. "95%"만으로는 남은 것이 5GB인지
             # 5TB인지 알 수 없어 급한 정도를 판단할 수 없다.
             size_item = QTableWidgetItem(
-                widgets.format_size_pair(sample.used_kb, sample.total_kb)
+                formatting.format_size_pair(sample.used_kb, sample.total_kb)
             )
             size_item.setToolTip(formatting.size_tooltip(sample))
             self._style_value_item(size_item, COL_SIZE)
@@ -683,9 +689,9 @@ class MainWindow(QMainWindow):
                 self._worst_account_name = account.name
 
             forecast = self._forecasts.get(account.account_id)
-            forecast_item = QTableWidgetItem(widgets.format_forecast_cell(forecast))
+            forecast_item = QTableWidgetItem(formatting.format_forecast_cell(forecast))
             forecast_item.setToolTip(
-                widgets.format_forecast_tooltip(
+                formatting.format_forecast_tooltip(
                     forecast, self._config.settings.full_prediction_window_hours
                 )
             )

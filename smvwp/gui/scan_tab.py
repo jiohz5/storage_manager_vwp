@@ -572,7 +572,7 @@ class ScanTab(QFrame):
             table.setItem(row, SCAN_ACCT_PENDING, pending_item)
 
             measured_item = QTableWidgetItem(
-                widgets.format_kb(entry.measured_kb) if entry.measured_kb else dash
+                formatting.format_kb(entry.measured_kb) if entry.measured_kb else dash
             )
             measured_item.setToolTip(i18n.t("scan.acct.measured_tip"))
             measured_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -595,7 +595,7 @@ class ScanTab(QFrame):
             table.setItem(row, SCAN_ACCT_ETA, eta_item)
 
             last_item = QTableWidgetItem(
-                widgets.scan_label(entry.current_scan_at, entry.last_completed_generation)
+                formatting.scan_label(entry.current_scan_at, entry.last_completed_generation)
                 if entry.last_completed_generation
                 else i18n.t("scan.acct.never")
             )
@@ -695,10 +695,10 @@ class ScanTab(QFrame):
                 i18n.t(
                     "scan.growth_caption",
                     account=account.name,
-                    current=widgets.scan_label(
+                    current=formatting.scan_label(
                         entry.current_scan_at, entry.last_completed_generation
                     ),
-                    previous=widgets.scan_label(
+                    previous=formatting.scan_label(
                         entry.previous_scan_at,
                         (entry.last_completed_generation or 1) - 1,
                     ),
@@ -713,7 +713,7 @@ class ScanTab(QFrame):
                 QTableWidgetItem(
                     i18n.t(
                         "scan.col.delta_dated",
-                        previous=widgets.scan_label(
+                        previous=formatting.scan_label(
                             entry.previous_scan_at,
                             (entry.last_completed_generation or 1) - 1,
                         ),
@@ -728,12 +728,12 @@ class ScanTab(QFrame):
                 previous_kb = row["previous_kb"]
                 self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
                 self.growth_table.setItem(
-                    index, 1, widgets.NumericItem(widgets.format_kb(current_kb), current_kb)
+                    index, 1, widgets.NumericItem(formatting.format_kb(current_kb), current_kb)
                 )
                 if previous_kb is None:
                     delta_text = i18n.t("scan.new_path")
                 else:
-                    delta_text = widgets.format_kb_delta(current_kb - previous_kb)
+                    delta_text = formatting.format_kb_delta(current_kb - previous_kb)
                 delta_value = (
                     current_kb - previous_kb if previous_kb is not None else current_kb
                 )
@@ -746,7 +746,7 @@ class ScanTab(QFrame):
             i18n.t(
                 "scan.baseline_only_caption",
                 account=account.name,
-                current=widgets.scan_label(
+                current=formatting.scan_label(
                     entry.current_scan_at, entry.last_completed_generation
                 ),
                 activity=activity_note,
@@ -758,7 +758,7 @@ class ScanTab(QFrame):
         for index, row in enumerate(entry.top_paths):
             self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
             self.growth_table.setItem(
-                index, 1, widgets.NumericItem(widgets.format_kb(row["size_kb"]), row["size_kb"])
+                index, 1, widgets.NumericItem(formatting.format_kb(row["size_kb"]), row["size_kb"])
             )
             self.growth_table.setItem(index, 2, widgets.NumericItem(dash, None))
 

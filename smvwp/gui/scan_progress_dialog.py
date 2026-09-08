@@ -24,8 +24,9 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import config as config_module
+from .. import formatting
 from .. import i18n, scan_store
-from . import theme, widgets
+from . import theme
 
 COLUMN_KEYS = [
     "progress.col.path",
@@ -134,7 +135,7 @@ class ScanProgressDialog(QDialog):
         self.summary_label.setText(
             i18n.t(
                 "progress.summary",
-                generation=widgets.scan_label(scan_at, generation),
+                generation=formatting.scan_label(scan_at, generation),
                 done=counts["done"],
                 pending=counts["pending"],
                 split=counts["split"],
@@ -162,7 +163,7 @@ class ScanProgressDialog(QDialog):
 
             # 기준선은 크기, 활동 스캔은 변경 파일 수가 결과다.
             if row["size_kb"] is not None:
-                result = widgets.format_kb(row["size_kb"])
+                result = formatting.format_kb(row["size_kb"])
             elif row["changed_count"] is not None:
                 result = i18n.t("progress.changed", count=row["changed_count"])
             else:

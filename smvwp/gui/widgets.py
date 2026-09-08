@@ -20,24 +20,8 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import i18n, tiers
+from ..formatting import tier_badge_text
 from . import theme
-
-
-# 서식은 `smvwp.formatting` 으로 옮겼다 - Qt 를 쓰지 않는 코드가 Qt 파일 안에
-# 있으면 시험할 수 없기 때문이다(개발 PC 에 PyQt5 가 없다). 부르는 자리를 한꺼번에
-# 고치면 GUI 시험이 없는 상태에서 위험이 커지므로, 여기서 이름을 그대로 이어
-# 준다. 새로 쓰는 코드는 `smvwp.formatting` 을 직접 부르는 편이 낫다.
-from ..formatting import (  # noqa: F401
-    format_bytes,
-    format_forecast_cell,
-    format_forecast_tooltip,
-    format_kb,
-    format_kb_delta,
-    format_prediction,
-    format_size_pair,
-    scan_label,
-    tier_badge_text,
-)
 
 
 class TierBadge(QLabel):
