@@ -32,6 +32,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -125,8 +126,13 @@ class BannerState:
     total: int = 0
 
 
-class ScanTab(QWidget):
-    """야간 상세 스캔 화면 하나. 창은 이것을 탭에 붙이고 신호만 듣는다."""
+class ScanTab(QFrame):
+    """야간 상세 스캔 화면 하나. 창은 이것을 탭에 붙이고 신호만 듣는다.
+
+    `QWidget` 이 아니라 `QFrame` 인 이유: 테마의 카드 스타일(`QFrame#card`)이
+    QFrame 에만 붙는다. 떼어 낼 때 QWidget 으로 두었더니 테두리와 배경이
+    조용히 사라졌다 - 화면은 뜨고 동작도 하니 시험은 아무것도 못 잡는다.
+    """
 
     status_message = pyqtSignal(str)
     banner_changed = pyqtSignal(object)   # BannerState
@@ -211,6 +217,10 @@ class ScanTab(QWidget):
     def _build(self) -> None:
         """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
         붙인다 (DESIGN.md 2부 6절 "대시보드 단일 화면" 결정 유지)."""
+
+        # 예전 `_build_scan_section` 이 만들던 QFrame 과 같은 모양.
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setObjectName("card")
 
         box = QVBoxLayout(self)
         box.setContentsMargins(16, 14, 16, 14)
@@ -808,12 +818,18 @@ class ScanTab(QWidget):
         if auto and key == "cron.nightly_missing":
             key = "cron.nightly_by_gui"
         self.cron_status_label.setText(i18n.t(key))
-        # `setProperty` 로 상태를 주려면 스타일시트를 다시 적용해야 듣는다.
-        # objectName 은 그런 단계 없이 바로 먹으므로 이쪽을 쓴다.
         warn = key in ("cron.none", "cron.nightly_missing")
-        self.cron_status_label.setObjectName("captionWarn" if warn else "caption")
-        self.cron_status_label.setStyleSheet("")  # 이름이 바뀌면 다시 물리게 한다
-        self.cron_status_label.setVisible(True)
+        label = self.cron_status_label
+        label.setObjectName("captionWarn" if warn else "caption")
+        # objectName 을 바꿔도 **이미 그려진 위젯**은 스타일을 다시 안 고른다.
+        # 이 라벨이 그렇다 - 첫 렌더 때는 cron 상태가 아직 안 와서 이름을 안
+        # 바꾸고, 이름은 30초 뒤 타이머에서 바뀐다. `setStyleSheet("")` 로
+        # 되물리려 했었는데 빈 스타일시트가 그대로 빈 것이면 Qt 는 아무것도
+        # 하지 않는다. unpolish/polish 가 정식 방법이다.
+        style = label.style()
+        style.unpolish(label)
+        style.polish(label)
+        label.setVisible(True)
 
     def _maybe_start_nightly_scan(self) -> None:
         """시간창에 들어왔으면 스스로 시작한다 (밤마다 한 번).

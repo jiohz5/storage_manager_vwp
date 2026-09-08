@@ -30,6 +30,8 @@ QT_INHERITED = {
     "setFocus", "raise_", "activateWindow", "setWindowState", "windowState",
     # QDialog 쪽
     "accept", "reject", "done", "exec_", "setModal", "result",
+    # QFrame 쪽
+    "setFrameShape", "setFrameShadow", "setLineWidth",
 }
 
 
@@ -400,6 +402,54 @@ class ComboColumnWidthTests(unittest.TestCase):
             min(calls), max(widget_calls),
             "행을 채우기 전에 열 폭을 재고 있습니다",
         )
+
+
+class CardStyleTests(unittest.TestCase):
+    """테마의 카드 스타일(`QFrame#card`)은 QFrame 에만 붙는다.
+
+    스캔 탭을 떼어 낼 때 QWidget 으로 두었더니 테두리와 배경이 조용히 사라졌다.
+    화면은 뜨고 동작도 하니 다른 검사는 아무것도 못 잡는다 - 그래서 실제로 걸린
+    곳 하나를 못박아 둔다.
+    """
+
+    def test_scan_tab_is_a_frame(self):
+        tree = ast.parse((GUI / "scan_tab.py").read_text(encoding="utf-8"))
+        cls = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.ClassDef) and n.name == "ScanTab")
+        bases = {b.id for b in cls.bases if isinstance(b, ast.Name)}
+        self.assertIn("QFrame", bases, "ScanTab 이 QFrame 이 아니면 카드 스타일이 안 붙습니다")
+
+    def test_scan_tab_asks_for_the_card_style(self):
+        text = (GUI / "scan_tab.py").read_text(encoding="utf-8")
+        self.assertIn('self.setObjectName("card")', text)
+
+    def test_card_style_targets_qframe_only(self):
+        """전제 확인 - 테마가 바뀌어 QWidget 에도 붙게 되면 위 검사는 뜻을 잃는다."""
+
+        theme = (GUI / "theme.py").read_text(encoding="utf-8")
+        self.assertIn("QFrame#card", theme)
+
+
+class RepolishTests(unittest.TestCase):
+    """objectName 을 바꾼 뒤에는 unpolish/polish 로 되물려야 한다.
+
+    `setStyleSheet("")` 는 빈 스타일시트가 그대로 빈 것이면 Qt 가 아무것도
+    하지 않아, cron 경고가 빨간색으로 안 켜졌다."""
+
+    def test_cron_label_is_repolished_after_renaming(self):
+        text = (GUI / "scan_tab.py").read_text(encoding="utf-8")
+        self.assertIn("style.unpolish(label)", text)
+        self.assertIn("style.polish(label)", text)
+        # 주석이 아니라 **코드**에서 빈 스타일시트 호출이 없어야 한다.
+        tree = ast.parse(text)
+        empty_calls = [
+            n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "setStyleSheet"
+            and n.args and isinstance(n.args[0], ast.Constant)
+            and n.args[0].value == ""
+        ]
+        self.assertEqual(empty_calls, [], f"빈 setStyleSheet 호출: 줄 {empty_calls}")
 
 
 if __name__ == "__main__":  # pragma: no cover

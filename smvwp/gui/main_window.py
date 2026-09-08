@@ -99,13 +99,6 @@ COLUMN_KEYS = [
 # 것보다는 낫다.
 PATH_MIN_WIDTH = 240
 
-
-
-# 스캔이 안 돌 때의 간격. 5초로 계속 두면 아무 일도 없는 시간에도 DB를 계속
-# 두들긴다 - 데이터 디렉터리가 NFS 위면 그 자체가 부담이고, 정작 바뀌는 것도
-# 없다. 스캔이 시작되면 위 간격으로 다시 좁힌다.
-SCAN_STATUS_IDLE_REFRESH_MS = 30000
-
 # 히어로 - 창을 열자마자 시선이 먼저 닿는 자리. "지금 가장 급한 것 하나"를
 # 큰 숫자로 못박고, 나머지는 그 아래 작은 글씨로 둔다. 표를 훑기 전에 판단이
 # 끝나는 것이 목표다.
@@ -123,7 +116,6 @@ class MainWindow(QMainWindow):
         self._latest_samples: Dict[str, store.SampleRecord] = {}
         self._forecasts: Dict[str, object] = {}
         self._freshness: Dict[str, object] = {}
-        self._scan_snapshot = None
         i18n.set_language(config.settings.language)
 
         # 열이 10개인 표 + 히어로 + 스캔 섹션이 한 화면에 들어가려면 이 정도는
