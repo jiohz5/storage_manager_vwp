@@ -84,6 +84,11 @@ WEIGHT_HEAVY = "900"  # -> ExtraBold
 RADIUS = "10px"      # 버튼·입력칸
 RADIUS_CARD = "16px"  # 카드
 
+# 칸에 위젯(콤보, 배지, 막대)을 넣는 표의 objectName. 이 이름을 단 표는 아래
+# `::item` 세로 패딩에서 빠진다 - 그 패딩이 글자뿐 아니라 **칸 위젯의 기하까지**
+# 밀어 넣기 때문이다. 테마와 화면이 같은 문자열을 봐야 하므로 여기 한 곳에 둔다.
+TABLE_WITH_WIDGETS = "cellWidgetTable"
+
 # 카드 안쪽 여백과 카드 사이 간격. 레이아웃 코드가 같은 값을 쓰도록 여기 둔다.
 PAD_CARD = 20
 GAP_SECTION = 14
@@ -233,6 +238,16 @@ QTableWidget, QListWidget {{
     outline: none;
 }}
 QTableWidget::item, QListWidget::item {{ padding: 9px 8px; border: none; }}
+/* 칸에 위젯을 넣는 표는 세로 패딩을 뺀다.
+ *
+ * `::item` 의 패딩은 글자만 밀어 넣는 것이 아니라 **칸 위젯의 기하까지** 밀어
+ * 넣는다. 9px 짜리 위아래 패딩이면 41px 칸에 위젯이 23px 만 남고, 콤보는 자기
+ * 안쪽 여백에 밀려 글자가 몇 픽셀만 보인다. 행 높이를 아무리 올려도 패딩이
+ * 같은 비율로 먹으므로 해결되지 않는다 - 빼는 것이 답이다.
+ *
+ * 가로 패딩은 남긴다. 글자 칸이 격자에 딱 붙는 것을 막아 준다.
+ * 글자는 어차피 세로 가운데 정렬이라 세로 패딩이 없어도 자리가 같다. */
+QTableWidget#{TABLE_WITH_WIDGETS}::item {{ padding: 0px 8px; }}
 QTableWidget::item:selected, QListWidget::item:selected {{
     background: {ACCENT_SOFT};
     color: {TEXT};

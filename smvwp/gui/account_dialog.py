@@ -38,6 +38,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import i18n, readability, scan_store
+from . import theme
 
 # 계정 경로의 관례 접두사. 이름을 입력하면 `<접두사><이름>`으로 경로를 채워
 # 준다. 사내 관례가 다른 곳에 반입한다면 이 한 줄만 고치면 된다 (설정 항목으로
@@ -150,6 +151,9 @@ class AccountDialog(QDialog):
         # 형태라 "누가 언제 넣었고 마지막으로 언제 스캔됐나"가 이 화면에서 바로
         # 보여야 한다 - 안 그러면 남이 등록한 계정을 볼 때마다 물어봐야 한다.
         self.account_table = QTableWidget(0, len(ACCOUNT_COLUMN_KEYS))
+        # 이 표는 칸에 콤보를 넣는다. `::item` 의 세로 패딩이 위젯 기하까지
+        # 밀어 넣어 글자를 잘라먹으므로, 그 규칙에서 빠지는 이름을 단다.
+        self.account_table.setObjectName(theme.TABLE_WITH_WIDGETS)
         self.account_table.setHorizontalHeaderLabels(
             [i18n.t(key) for key in ACCOUNT_COLUMN_KEYS]
         )

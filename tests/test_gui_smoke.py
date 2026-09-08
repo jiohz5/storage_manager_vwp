@@ -40,11 +40,19 @@ _APP = None
 
 
 def _app():
-    """QApplication 은 프로세스에 하나뿐이어야 한다."""
+    """QApplication 은 프로세스에 하나뿐이어야 한다.
+
+    **테마를 반드시 입힌다.** 처음에는 안 입히고 재다가 크기 문제를 통째로
+    놓쳤다 - 스타일시트가 없으면 콤보에 안쪽 여백이 붙지 않아 아무 데도 안
+    끼이고, 시험은 통과하는데 실제 화면만 잘렸다. 실기와 같은 조건이 아니면
+    재는 의미가 없다."""
 
     global _APP
     if _APP is None:
         _APP = QApplication.instance() or QApplication([])
+        from smvwp.gui import theme
+
+        theme.apply(_APP)
     return _APP
 
 
@@ -193,26 +201,36 @@ class AccountDialogComboTests(_GuiCase):
     def test_there_are_combos_to_measure(self):
         self.assertGreaterEqual(len(list(self._combos())), 2)
 
-    def test_columns_are_at_least_as_wide_as_their_combos(self):
-        """`ResizeToContents` 가 칸 위젯을 안 봐서 60px 로 눌리던 사건."""
+    def test_combos_actually_receive_the_size_they_need(self):
+        """**칸이 아니라 위젯이 실제로 받은 크기**를 잰다.
 
-        table = self.dialog.account_table
+        칸만 재면 놓친다. 행을 42px 로 키워 놓고도 콤보는 23px 만 받고 있었다 -
+        `QTableWidget::item` 의 세로 패딩이 글자뿐 아니라 칸 위젯의 기하까지
+        밀어 넣기 때문이다. 칸 높이만 보는 시험은 그때도 통과했다."""
+
         for row, column, combo in self._combos():
             with self.subTest(row=row, column=column):
                 self.assertGreaterEqual(
-                    table.columnWidth(column), combo.sizeHint().width(),
-                    f"열 {column} 이 콤보보다 좁습니다",
+                    combo.height(), combo.sizeHint().height(),
+                    f"콤보가 필요한 높이({combo.sizeHint().height()})보다 "
+                    f"작게({combo.height()}) 놓였습니다",
+                )
+                self.assertGreaterEqual(
+                    combo.width(), combo.sizeHint().width(),
+                    f"콤보가 필요한 폭보다 좁게 놓였습니다",
                 )
 
-    def test_rows_are_at_least_as_tall_as_their_combos(self):
-        """행 34px 에 콤보 37px 가 들어가 글자가 세로로 잘리던 사건."""
+    def test_the_text_has_room_left_after_padding(self):
+        """마지막으로 남는 것이 글자 자리다 - 여기가 음수면 글자가 잘린다."""
 
-        table = self.dialog.account_table
         for row, column, combo in self._combos():
+            # 테마의 콤보 여백: 위아래 8px, 테두리 1px.
+            room = combo.height() - (8 + 8) - (1 + 1)
             with self.subTest(row=row, column=column):
                 self.assertGreaterEqual(
-                    table.rowHeight(row), combo.sizeHint().height(),
-                    f"행 {row} 이 콤보보다 낮습니다",
+                    room, combo.fontMetrics().height(),
+                    f"글자 자리가 {room}px 뿐입니다 "
+                    f"(글자 높이 {combo.fontMetrics().height()}px)",
                 )
 
     def test_every_option_fits_in_the_column(self):
