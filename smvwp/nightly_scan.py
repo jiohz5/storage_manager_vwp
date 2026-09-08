@@ -105,6 +105,21 @@ class RunSummary:
 # 부른다 (모듈 상수로 둔 것은 그래서다).
 BASELINE_WARMUP_SECONDS = 1.0
 
+# 잠금이 이미 잡혀 있을 때 얼마나 기다렸다 포기하는가.
+#
+# **기다리는 것은 cron 경로뿐이다** (`run_nightly_scan` 의 기본값은 0). GUI 에서
+# 버튼을 누른 사람은 20분을 기다리는 것이 아니라 "이미 실행 중"이라는 답을
+# 즉시 들어야 한다. 기다림이 필요한 쪽은 밤을 놓치면 안 되는 cron 뿐이다.
+#
+# 낮에 사람이 눌러 둔 스캔이 22:00 에 아직 돌고 있을 수 있다. 그것은 야간 창이
+# 열린 것을 보고 스스로 물러나지만, 즉시는 아니다 - 재고 있던 디렉터리 하나를
+# 마저 끝내고 멈추므로 최대 `detail_task_timeout_seconds`(기본 15분)가 걸린다.
+# 그보다 넉넉히 기다려야 그날 밤을 잃지 않는다.
+#
+# 기다리는 동안 하는 일은 없다. 잠금 파일을 몇 번 들여다보는 것이 전부다.
+DEFAULT_LOCK_WAIT_SECONDS = 20 * 60
+LOCK_POLL_SECONDS = 20.0
+
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
@@ -698,6 +713,44 @@ def _run_accounts_parallel(
     return STATUS_COMPLETED
 
 
+def _acquire_with_wait(
+    data_dir: Path, triggered_by: str, wait_seconds: float, clock
+) -> Optional[str]:
+    """잠금을 잡는다. 이미 잡혀 있으면 `wait_seconds` 동안 기다려 본다.
+
+    ## 왜 기다리는가
+
+    낮에 사람이 GUI 에서 눌러 둔 스캔이 22:00 에도 돌고 있을 수 있다. 예전에는
+    그때 cron 이 조용히 물러나고 **그날 밤이 통째로 날아갔다** - 로그에 한 줄
+    남을 뿐이라 아무도 몰랐다.
+
+    이제 낮 실행이 야간 창을 보고 스스로 물러나므로, 잠깐만 기다리면 자리가
+    난다. 다만 즉시는 아니다 - 재고 있던 디렉터리를 마저 끝내고 멈추기
+    때문이다. 그래서 기다린다.
+
+    기다리는 동안 아무 일도 하지 않는다. 잠금 파일을 20초에 한 번 들여다보는
+    것이 전부라 그 자체가 부담이 되지는 않는다.
+    """
+
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    first = True
+    while True:
+        try:
+            return scan_lock.acquire_lock(data_dir, triggered_by)
+        except scan_lock.LockBusyError:
+            if time.monotonic() >= deadline:
+                return None
+            if first:
+                holder = scan_lock.read_lock(data_dir)
+                logger.info(
+                    "잠금을 쥔 실행이 있어 최대 %.0f분 기다립니다 (%s)",
+                    wait_seconds / 60,
+                    holder.triggered_by if holder else "알 수 없음",
+                )
+                first = False
+            time.sleep(min(LOCK_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+
+
 def run_nightly_scan(
     data_dir: Path,
     config: config_module.AppConfig,
@@ -707,6 +760,7 @@ def run_nightly_scan(
     top_level_lister: Optional[Callable[[str], List[str]]] = None,
     parallel_accounts: Optional[int] = None,
     baseline_warmup_seconds: float = BASELINE_WARMUP_SECONDS,
+    lock_wait_seconds: float = 0.0,
 ) -> RunSummary:
     """야간 상세 스캔 한 번(하룻밤 분량)을 실행한다.
 
@@ -740,10 +794,15 @@ def run_nightly_scan(
         parallel_accounts = resolved
     parallel_accounts = max(1, min(16, int(parallel_accounts)))
 
-    try:
-        run_id = scan_lock.acquire_lock(data_dir, triggered_by)
-    except scan_lock.LockBusyError as exc:
-        return RunSummary(started=False, status=STATUS_NOT_STARTED, reason=str(exc))
+    run_id = _acquire_with_wait(data_dir, triggered_by, lock_wait_seconds, clock)
+    if run_id is None:
+        existing = scan_lock.read_lock(data_dir)
+        holder = f" (run_id={existing.run_id}, {existing.triggered_by})" if existing else ""
+        return RunSummary(
+            started=False,
+            status=STATUS_NOT_STARTED,
+            reason=f"이미 실행 중인 스캔이 있어 시작하지 못했습니다{holder}",
+        )
 
     scan_lock.clear_stop_request(data_dir)
 
@@ -793,7 +852,24 @@ def run_nightly_scan(
         recorder.start()
 
         if bypass_window:
-            deadline_reached = lambda: False
+            # 낮에 손으로 시작한 스캔은 시간창을 무시하고 돈다. 그런데
+            # **야간 창이 열리면 물러나야 한다** - 안 그러면 22:00 에 뜬 cron 이
+            # 잠금을 못 잡고 그날 밤이 통째로 날아간다. 사람이 낮에 눌러 둔 것
+            # 하나가 밤 전체를 먹는 셈이다.
+            #
+            # 물러나도 잃는 것은 없다. 진행한 체크포인트는 이미 저장돼 있고,
+            # 곧이어 뜨는 야간 실행이 거기서 이어받는다.
+            night_start = settings.detail_scan_window_start_hour
+            night_end = settings.detail_scan_window_end_hour
+            if scan_window.is_within_window(local_now, night_start, night_end):
+                # 야간 창 **안에서** 시작한 수동 실행은 양보할 상대가 없다 -
+                # 이것이 곧 그날 밤의 실행이다. 여기서 물러나면 눌러도 아무
+                # 일이 일어나지 않는 것처럼 보인다.
+                deadline_reached = lambda: False
+            else:
+                deadline_reached = lambda: scan_window.is_within_window(
+                    clock(), night_start, night_end
+                )
         else:
             window_end = scan_window.next_window_end(local_now, settings.detail_scan_window_end_hour)
             deadline_reached = lambda: clock() >= window_end

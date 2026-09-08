@@ -970,6 +970,19 @@ def record_parallelism(
     conn.commit()
 
 
+def last_runs(conn: sqlite3.Connection, limit: int = 5) -> List[sqlite3.Row]:
+    """가장 최근 실행 몇 개 (최신순).
+
+    `recent_runs` 와 달리 **시각으로 거르지 않는다.** 보고서는 `now` 를 인자로
+    받아 과거 날짜로도 다시 만들 수 있는데, 벽시계로 거르면 그때 아무것도 안
+    잡힌다. "며칠 안"이 아니라 "몇 개"가 필요한 자리에 쓴다.
+    """
+
+    return conn.execute(
+        "SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+
+
 def recent_runs(conn: sqlite3.Connection, days: int = 30) -> List[sqlite3.Row]:
     """최근 N일 안에 시작한 실행들 (최신순).
 

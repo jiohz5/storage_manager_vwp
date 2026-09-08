@@ -213,6 +213,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.new_tasks_truncated": "  … 계정당 {shown}건까지만 표시했습니다",
         # -- 스캔 중 리소스 변화 ------------------------------------
         "reports.resource_heading": "[스캔 중 리소스 변화]",
+        "reports.resource_run": "{started} · {trigger} · {duration} · {status}",
+        "reports.resource_other_runs": "같은 기간의 다른 실행 (이것도 부하를 만들었습니다):",
+        "reports.trigger.cron": "자동(cron)",
+        "reports.trigger.gui": "화면에서 수동 실행",
+        "reports.trigger.terminal": "터미널에서 수동 실행",
+        "reports.duration_minutes": "{minutes}분",
+        "reports.duration_hours": "{hours}시간 {minutes}분",
         # -- 평일 밤 vs 주말 밤 부하 비교 ---------------------------
         "reports.night_heading": "[야간 부하 비교 - 평일 밤 vs 주말 밤]",
         "reports.night_intro": (
@@ -724,6 +731,13 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.new_tasks_truncated": "  ... showing at most {shown} per account",
         # -- Resource change during the scan ------------------------
         "reports.resource_heading": "[Resource change during scan]",
+        "reports.resource_run": "{started} · {trigger} · {duration} · {status}",
+        "reports.resource_other_runs": "Other runs in the same period (they added load too):",
+        "reports.trigger.cron": "automatic (cron)",
+        "reports.trigger.gui": "started by hand from the window",
+        "reports.trigger.terminal": "started by hand from a terminal",
+        "reports.duration_minutes": "{minutes} min",
+        "reports.duration_hours": "{hours}h {minutes}m",
         # -- Weekday vs weekend night load comparison ---------------
         "reports.night_heading": "[Night load - weekday vs weekend]",
         "reports.night_intro": (

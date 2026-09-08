@@ -783,6 +783,85 @@ def _pick_evenly(rows: List, count: int) -> List:
     return result
 
 
+def _has_samples(conn, run_id) -> bool:
+    return bool(scan_store.load_samples(conn, run_id))
+
+
+def _pick_scan_run(runs):
+    """부하를 보여 줄 실행 하나를 고른다.
+
+    **가장 최근이 아니라 가장 오래 돈 것**을 고른다. 아침 보고서를 여는 사람이
+    알고 싶은 것은 "어젯밤이 서버에 얼마나 부담이었나"인데, 낮에 손으로 한 번
+    돌려 본 5분짜리가 그것을 덮어 버리면 안 된다. 밤 실행은 몇 시간짜리라
+    길이로 고르면 대개 그것이 잡힌다.
+
+    길이를 모르는 행(아직 안 끝났거나 옛 데이터)은 뒤로 민다.
+    """
+
+    best = None
+    best_seconds = -1.0
+    for run in runs:
+        seconds = _run_seconds(run)
+        if seconds is None:
+            seconds = 0.0
+        if seconds > best_seconds:
+            best, best_seconds = run, seconds
+    return best
+
+
+def _run_seconds(run):
+    """이 실행이 몇 초 돌았나. 알 수 없으면 None."""
+
+    try:
+        started = run["started_at"]
+        ended = run["ended_at"]
+    except (KeyError, IndexError):
+        return None
+    if not started or not ended:
+        return None
+    try:
+        return (
+            datetime.fromisoformat(ended) - datetime.fromisoformat(started)
+        ).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_headline(run) -> str:
+    """`22:00 시작 · cron · 7시간 12분 · completed` 한 줄."""
+
+    started = (run["started_at"] or "")[:19].replace("T", " ")
+    seconds = _run_seconds(run)
+    return i18n.t(
+        "reports.resource_run",
+        started=started,
+        trigger=_trigger_text(run["triggered_by"]),
+        duration=_duration_text(seconds),
+        status=run["status"],
+    )
+
+
+def _trigger_text(value: str) -> str:
+    """`cron` -> `자동(cron)`. 모르는 값이면 그대로 보여 준다.
+
+    `i18n.t` 는 없는 키를 키 자체로 돌려주므로, 그 경우를 여기서 가려낸다 -
+    화면에 `reports.trigger.xyz` 가 뜨면 읽는 사람이 당황한다."""
+
+    key = f"reports.trigger.{value}"
+    label = i18n.t(key)
+    return value if label == key else label
+
+
+def _duration_text(seconds) -> str:
+    if seconds is None:
+        return i18n.t("common.unknown_value")
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return i18n.t("reports.duration_minutes", minutes=minutes)
+    hours, minutes = divmod(minutes, 60)
+    return i18n.t("reports.duration_hours", hours=hours, minutes=minutes)
+
+
 def _append_resource_section(lines: List[str], data_dir: Path) -> None:
     try:
         conn = scan_store.connect(data_dir)
@@ -790,10 +869,16 @@ def _append_resource_section(lines: List[str], data_dir: Path) -> None:
         return
 
     try:
-        run = scan_store.latest_run(conn)
+        runs = scan_store.last_runs(conn, limit=5)
+        run = _pick_scan_run(runs)
         if run is None:
             return
         rows = scan_store.load_samples(conn, run["run_id"])
+        # 같은 기간에 사람이 손으로 돌린 것이 또 있으면 그것도 부하를 만들었다.
+        others = [
+            other for other in runs
+            if other["run_id"] != run["run_id"] and _has_samples(conn, other["run_id"])
+        ][:3]
     finally:
         conn.close()
 
@@ -825,6 +910,10 @@ def _append_resource_section(lines: List[str], data_dir: Path) -> None:
     lines.append("-" * 72)
 
     parallel = run["parallel_accounts"] if "parallel_accounts" in run.keys() else None
+    # **어느 실행의 숫자인지 먼저 밝힌다.** 예전에는 그냥 "가장 최근 실행"을
+    # 실었는데, 낮에 사람이 손으로 한 번 돌리면 아침 보고서에 밤 부하 대신
+    # 그 낮 실행이 실렸다. 읽는 사람은 그것이 밤 것인 줄 안다.
+    lines.append(_run_headline(run))
     lines.append(
         i18n.t(
             "reports.resource_context",
@@ -832,6 +921,11 @@ def _append_resource_section(lines: List[str], data_dir: Path) -> None:
             parallel=parallel or 1,
         )
     )
+    if others:
+        lines.append("")
+        lines.append(i18n.t("reports.resource_other_runs"))
+        for other in others:
+            lines.append("  " + _run_headline(other))
     lines.append("")
 
     header = (

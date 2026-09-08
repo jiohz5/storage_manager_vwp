@@ -228,6 +228,10 @@ def command_scan(args) -> int:
         triggered_by="terminal" if args.now else "cron",
         bypass_window=args.now,
         parallel_accounts=args.parallel,
+        # cron 으로 뜬 야간 실행만 기다린다. 낮에 사람이 눌러 둔 스캔이 아직
+        # 돌고 있으면 그것이 야간 창을 보고 물러나는데, 재던 디렉터리를 마저
+        # 끝내느라 시간이 걸린다. 여기서 안 기다리면 그날 밤을 통째로 잃는다.
+        lock_wait_seconds=0.0 if args.now else nightly_scan.DEFAULT_LOCK_WAIT_SECONDS,
     )
 
     if not summary.started:
