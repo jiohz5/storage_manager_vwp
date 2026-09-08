@@ -84,6 +84,17 @@ def kind_label(kind: str) -> str:
 
 # 행에 account_id를 숨겨 두는 Qt 데이터 롤. 이름은 겹칠 수 있어 식별자가 될 수
 # 없으므로 표시값이 아니라 id로 계정을 찾는다.
+# 콤보가 든 열들. 여기에 열을 더하면서 `_fit_combo_columns` 를 잊으면 그 열은
+# 다시 잘린다 - 그래서 목록을 한 곳에만 둔다.
+COMBO_COLUMNS = (ACCOUNT_COL_KIND, ACCOUNT_COL_BACKUP)
+
+# 콤보 한 개가 글자 말고 더 먹는 폭. 테마에서 온 값이다 -
+# 좌우 padding 12px씩 + 테두리 1px씩 + 화살표 칸 24px = 50px. 2px 는 여유.
+COMBO_CHROME_PX = 52
+
+# 머리글 글자 좌우 여백. 정렬 표시가 들어갈 자리까지 본다.
+HEADER_PADDING_PX = 28
+
 ACCOUNT_ID_ROLE = Qt.UserRole
 
 
@@ -135,11 +146,19 @@ class AccountDialog(QDialog):
         header = self.account_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(ACCOUNT_COL_PATH, QHeaderView.Stretch)
-        # 콤보가 든 두 열은 `ResizeToContents`만으로는 좁게 잡힌다. 칸 위젯의
-        # sizeHint는 "지금 선택된 항목"만 보기 때문에, 짧은 값이 선택된 행이
-        # 있으면 그 폭에 맞춰 눌리고 긴 값('데이터 백업', 긴 계정 이름)이
-        # 잘린다. 아래 `_combo_width`로 **선택지 전체 중 가장 긴 것** 기준의
-        # 최소 폭을 계산해 바닥을 깔아 준다.
+        # 콤보가 든 두 열은 **`ResizeToContents` 에서 빼야 한다.**
+        #
+        # 그 모드는 칸 위젯(`setCellWidget`)을 보지 않는다. 열 폭을 정할 때
+        # 항목 대리자에게 각 행의 크기를 묻는데, 콤보를 넣은 칸의 항목은 비어
+        # 있어 "아주 좁아도 된다"는 답이 돌아온다. 콤보는 그 좁은 칸에 맞춰
+        # 잘릴 뿐이다.
+        #
+        # 위젯을 넓히는 것으로는 해결되지 않는다 - 위젯이 칸보다 커도 칸이
+        # 잘라 낸다. 행을 다 채운 뒤 `_fit_combo_columns` 가 실제 콤보를 재서
+        # **열** 폭을 직접 지정한다. 사람이 손으로도 조절할 수 있게
+        # `Interactive` 로 둔다.
+        for column in COMBO_COLUMNS:
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
         header.setMinimumSectionSize(60)
         header.setHighlightSections(False)
         self.account_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -354,21 +373,42 @@ class AccountDialog(QDialog):
                 )
         finally:
             self._loading = False
+        # 열 폭은 콤보를 다 만든 **뒤에** 맞춘다.
+        self._fit_combo_columns()
+
+    def _fit_combo_columns(self) -> None:
+        """콤보가 든 열의 폭을 실제 콤보에 맞춘다.
+
+        행을 다 채운 **뒤에** 불러야 한다 - 그전에는 잴 콤보가 없다.
+        머리글 글자도 함께 재는 이유: 계정이 하나도 없을 때 열이 머리글보다
+        좁아지면 열 이름부터 잘린다.
+        """
+
+        table = self.account_table
+        metrics = table.horizontalHeader().fontMetrics()
+        for column in COMBO_COLUMNS:
+            item = table.horizontalHeaderItem(column)
+            header_text = item.text() if item is not None else ""
+            widest = metrics.horizontalAdvance(header_text) + HEADER_PADDING_PX
+            for row in range(table.rowCount()):
+                widget = table.cellWidget(row, column)
+                if isinstance(widget, QComboBox):
+                    widest = max(widest, self._combo_width(widget))
+            table.setColumnWidth(column, widest)
 
     def _combo_width(self, combo: QComboBox) -> int:
         """선택지 **전부**가 잘리지 않는 폭.
 
         `AdjustToContents`만 쓰면 항목이 많을 때 콤보가 과하게 넓어지고,
         기본값(`AdjustToContentsOnFirstShow`)은 현재 선택값만 본다. 둘 다
-        원하는 동작이 아니라 직접 잰다. 화살표와 좌우 여백으로 44px를 더한다
-        (스타일마다 다르지만 잘리는 것보다 조금 남는 편이 낫다)."""
+        원하는 동작이 아니라 직접 잰다."""
 
         metrics = combo.fontMetrics()
         widest = max(
             (metrics.horizontalAdvance(combo.itemText(index)) for index in range(combo.count())),
             default=0,
         )
-        return widest + 44
+        return widest + COMBO_CHROME_PX
 
     def _make_kind_combo(self, account: config_module.Account) -> QComboBox:
         combo = QComboBox()

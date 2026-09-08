@@ -291,5 +291,90 @@ class InitOrderTests(unittest.TestCase):
         self._check("account_dialog.py", "AccountDialog")
 
 
+class ComboColumnWidthTests(unittest.TestCase):
+    """콤보가 든 열이 잘리지 않는가 - 여러 번 되살아난 문제다.
+
+    ## 왜 자꾸 되살아났나
+
+    `QHeaderView.ResizeToContents` 는 **칸 위젯(`setCellWidget`)을 보지
+    않는다.** 열 폭을 정할 때 항목 대리자에게 각 행의 크기를 묻는데, 콤보를
+    넣은 칸의 항목은 비어 있어 "아주 좁아도 된다"는 답이 돌아온다.
+
+    그래서 `combo.setMinimumWidth(...)` 로는 안 고쳐진다 - **위젯**은 넓어지고
+    **열**은 그대로라, 칸이 위젯을 잘라 낸다. 고치는 방법은 그 열을
+    `ResizeToContents` 에서 빼고 폭을 직접 지정하는 것뿐이다.
+
+    소스만 읽는 검사라 픽셀까지 보증하지는 못한다. 다만 **잘리게 만드는 그
+    조합**이 다시 들어오는 것은 잡는다.
+    """
+
+    def _source(self):
+        return (GUI / "account_dialog.py").read_text(encoding="utf-8")
+
+    def test_combo_columns_are_not_resize_to_contents(self):
+        """이 한 줄이 잘림의 원인이었다."""
+
+        text = self._source()
+        self.assertIn("for column in COMBO_COLUMNS:", text)
+        self.assertIn("QHeaderView.Interactive", text)
+
+    def test_the_width_is_set_on_the_column_not_only_the_widget(self):
+        """위젯만 넓히면 칸이 잘라 낸다."""
+
+        text = self._source()
+        self.assertIn("setColumnWidth(column, widest)", text)
+
+    def test_every_combo_column_is_measured(self):
+        """열을 더하면서 `COMBO_COLUMNS` 를 잊으면 그 열만 다시 잘린다."""
+
+        tree = ast.parse(self._source())
+        combo_columns = None
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign)
+                    and any(isinstance(x, ast.Name) and x.id == "COMBO_COLUMNS"
+                            for x in node.targets)):
+                combo_columns = {
+                    e.id for e in ast.walk(node.value) if isinstance(e, ast.Name)
+                }
+        self.assertIsNotNone(combo_columns, "COMBO_COLUMNS 가 없습니다")
+
+        # `setCellWidget(row, X, ...)` 로 위젯을 넣는 열은 전부 목록에 있어야 한다.
+        placed = set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "setCellWidget" and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Name)):
+                placed.add(node.args[1].id)
+        self.assertEqual(
+            placed - combo_columns, set(),
+            f"칸 위젯을 넣는데 COMBO_COLUMNS 에 없는 열: {placed - combo_columns}",
+        )
+
+    def test_the_measurement_runs_after_the_rows_are_filled(self):
+        """행을 채우기 전에 재면 잴 콤보가 없어 머리글 폭만 나온다."""
+
+        tree = ast.parse(self._source())
+        reload_fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_reload_list"
+        )
+        calls = [
+            n.lineno for n in ast.walk(reload_fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "_fit_combo_columns"
+        ]
+        self.assertTrue(calls, "_reload_list 가 _fit_combo_columns 를 부르지 않습니다")
+        widget_calls = [
+            n.lineno for n in ast.walk(reload_fn)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "setCellWidget"
+        ]
+        self.assertTrue(widget_calls)
+        self.assertGreater(
+            min(calls), max(widget_calls),
+            "행을 채우기 전에 열 폭을 재고 있습니다",
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
