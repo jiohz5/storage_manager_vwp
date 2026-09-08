@@ -324,6 +324,32 @@ class ComboColumnWidthTests(unittest.TestCase):
         text = self._source()
         self.assertIn("setColumnWidth(column, widest)", text)
 
+    def test_the_row_is_tall_enough_for_the_combo(self):
+        """행이 콤보보다 낮으면 **글자가 세로로 잘린다.**
+
+        가로 잘림보다 알아채기 어렵다 - 뒷글자가 사라지는 것이 아니라 위아래
+        획이 깎여 "글자가 조금만 보인다"가 된다. 실기에서 행 34px 에 콤보가
+        37px 를 요구하고 있었다."""
+
+        text = self._source()
+        self.assertIn("sizeHint().height()", text)
+        self.assertIn("setRowHeight(row, height)", text)
+
+    def test_the_height_is_measured_not_hardcoded(self):
+        """상수로 박아 두면 글꼴이나 테마 여백이 바뀔 때 또 잘린다."""
+
+        tree = ast.parse(self._source())
+        fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_fit_combo_cells"
+        )
+        measured = any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "height"
+            for n in ast.walk(fn)
+        )
+        self.assertTrue(measured, "높이를 위젯에게 묻지 않고 있습니다")
+
     def test_every_combo_column_is_measured(self):
         """열을 더하면서 `COMBO_COLUMNS` 를 잊으면 그 열만 다시 잘린다."""
 
@@ -361,9 +387,9 @@ class ComboColumnWidthTests(unittest.TestCase):
         calls = [
             n.lineno for n in ast.walk(reload_fn)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-            and n.func.attr == "_fit_combo_columns"
+            and n.func.attr == "_fit_combo_cells"
         ]
-        self.assertTrue(calls, "_reload_list 가 _fit_combo_columns 를 부르지 않습니다")
+        self.assertTrue(calls, "_reload_list 가 _fit_combo_cells 를 부르지 않습니다")
         widget_calls = [
             n.lineno for n in ast.walk(reload_fn)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
