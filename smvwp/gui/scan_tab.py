@@ -60,6 +60,14 @@ SCAN_STATUS_IDLE_REFRESH_MS = 30000
 # 밤 단위 작업에는 충분하고, 더 자주 볼 이유가 없다.
 AUTO_SCAN_CHECK_MS = 60_000
 
+# cron 등록 여부를 다시 확인하는 주기.
+#
+# `crontab -l` 은 로컬 명령이라 몇 밀리초면 끝나지만, 5초마다 프로세스를 띄울
+# 이유는 없다. 사람이 터미널에서 등록하고 창으로 돌아오는 데 걸리는 시간을
+# 생각하면 몇 분이면 충분하다. 스캔 버튼을 누를 때도 한 번 더 본다 - 방금
+# 고치고 눌렀을 가능성이 가장 높은 순간이라서다.
+CRON_RECHECK_MS = 3 * 60_000
+
 
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
 
@@ -162,11 +170,15 @@ class ScanTab(QFrame):
         self._scan_status_timer.timeout.connect(self.refresh)
         self._scan_status_timer.start(SCAN_STATUS_IDLE_REFRESH_MS)
 
-        # `crontab -l` 은 로컬 명령이라 빠르지만, 이 창은 외부 명령 하나에
-        # 멈춘 전적이 있다. GUI 스레드에서 부르지 않는다.
-        threading.Thread(
-            target=self._load_cron_status, name="smvwp-cron-check", daemon=True
-        ).start()
+        self._cron_checking = False
+        self._check_cron_async()
+
+        # cron 은 이 창 **밖에서** 바뀐다. 사람이 안내를 보고 터미널에서
+        # `setup_cron.csh` 를 돌리면, 창은 그 사실을 스스로 알아채야 한다.
+        # 한 번만 읽고 끝내면 빨간 글씨가 사실과 어긋난 채 남는다.
+        self._cron_timer = QTimer(self)
+        self._cron_timer.timeout.connect(self._check_cron_async)
+        self._cron_timer.start(CRON_RECHECK_MS)
 
         self._auto_scan_timer = QTimer(self)
         self._auto_scan_timer.timeout.connect(self._maybe_start_nightly_scan)
@@ -197,6 +209,7 @@ class ScanTab(QFrame):
 
         self._scan_status_timer.stop()
         self._auto_scan_timer.stop()
+        self._cron_timer.stop()
         if self._scan_worker.is_running():
             self._stop_scan_for_shutdown()
 
@@ -770,6 +783,9 @@ class ScanTab(QFrame):
         self.growth_table.setSortingEnabled(True)
 
     def _trigger_scan_now(self) -> None:
+        # 안내를 보고 방금 cron 을 등록한 뒤 누르는 경우가 많다. 그때 빨간
+        # 글씨가 그대로 남아 있으면 등록이 안 된 줄 알고 또 돌리게 된다.
+        self._check_cron_async()
         if not self._get_config().accounts:
             QMessageBox.information(
                 self,
@@ -795,6 +811,19 @@ class ScanTab(QFrame):
         self.status_message.emit(i18n.t("scan.started"))
         self.refresh()
 
+    def _check_cron_async(self) -> None:
+        """cron 상태를 백그라운드에서 다시 읽는다.
+
+        겹쳐 돌리지 않는다. `crontab` 이 느린 장비에서 요청이 쌓이면 그때부터
+        더 나빠질 뿐이고, 어차피 다음 주기에 최신값을 읽는다."""
+
+        if self._cron_checking:
+            return
+        self._cron_checking = True
+        threading.Thread(
+            target=self._load_cron_status, name="smvwp-cron-check", daemon=True
+        ).start()
+
     def _load_cron_status(self) -> None:
         """cron 상태를 읽어 둔다 (작업 스레드).
 
@@ -805,6 +834,8 @@ class ScanTab(QFrame):
             self._cron_status = cron_status.read_status()
         except Exception:  # pragma: no cover - 진단 표시가 창을 죽이면 안 된다
             self._cron_status = None
+        finally:
+            self._cron_checking = False
 
     def _render_cron_status(self) -> None:
         status = self._cron_status

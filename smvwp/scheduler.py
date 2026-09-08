@@ -21,6 +21,23 @@ from . import dashboard, nightly_scan
 from .cycle import run_collection_cycle
 
 
+def _emit(signal, payload) -> None:
+    """작업 스레드에서 신호를 보낸다. 받을 쪽이 이미 사라졌으면 조용히 만다.
+
+    창을 닫는 순간 흔히 일어난다 - 위젯(과 그 자식인 워커)의 C++ 쪽은 이미
+    지워졌는데 daemon 스레드는 아직 돌고 있다. 그때 `emit` 이 RuntimeError 를
+    던지고, 그것이 스레드 밖으로 나가면 종료 중에 스택트레이스가 찍힌다.
+    사용자에게는 "닫았더니 뭔가 터졌다"로 보인다.
+
+    할 일이 없어진 것뿐이므로 삼키는 것이 맞다.
+    """
+
+    try:
+        signal.emit(payload)
+    except RuntimeError:
+        pass
+
+
 class CollectorWorker(QObject):
     """한 번의 수집 사이클을 백그라운드 스레드에서 실행한다."""
 
@@ -49,9 +66,9 @@ class CollectorWorker(QObject):
     def _run(self) -> None:
         try:
             records = run_collection_cycle(self._data_dir, self._get_config())
-            self.finished.emit(records)
+            _emit(self.finished, records)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            _emit(self.failed, str(exc))
         finally:
             with self._lock:
                 self._running = False
@@ -101,9 +118,9 @@ class ScanStatusWorker(QObject):
     def _run(self) -> None:
         try:
             snapshot = nightly_scan.get_status_snapshot(self._data_dir, self._get_config())
-            self.finished.emit(snapshot)
+            _emit(self.finished, snapshot)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            _emit(self.failed, str(exc))
         finally:
             with self._lock:
                 self._running = False
@@ -153,9 +170,9 @@ class DashboardWorker(QObject):
 
     def _run(self) -> None:
         try:
-            self.finished.emit(self._read())
+            _emit(self.finished, self._read())
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            _emit(self.failed, str(exc))
         finally:
             with self._lock:
                 self._running = False
@@ -244,9 +261,9 @@ class NightlyScanWorker(QObject):
                 triggered_by="gui",
                 bypass_window=bypass_window,
             )
-            self.finished.emit(summary)
+            _emit(self.finished, summary)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            _emit(self.failed, str(exc))
         finally:
             with self._lock:
                 self._running = False

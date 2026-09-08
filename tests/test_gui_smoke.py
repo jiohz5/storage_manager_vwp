@@ -25,6 +25,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -245,6 +246,104 @@ class AccountDialogComboTests(_GuiCase):
             )
             with self.subTest(row=row, column=column):
                 self.assertGreater(table.columnWidth(column), longest)
+
+
+class CronStatusRefreshTests(_GuiCase):
+    """cron 안내가 사실과 어긋난 채 남지 않는가.
+
+    실제로 걸린 일이다. 안내를 보고 터미널에서 `setup_cron.csh` 를 돌리고 창으로
+    돌아왔는데 빨간 글씨가 그대로였다 - 창이 cron 을 **열 때 한 번만** 읽고
+    캐시했기 때문이다. 사람은 등록이 안 된 줄 알고 또 돌리게 된다.
+
+    안내가 틀린 채 남는 것은 안내가 없는 것보다 나쁘다.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.scan_tab import ScanTab
+
+        self.tab = ScanTab(self.data_dir, lambda: self.config)
+        self._settle()
+
+    def tearDown(self):
+        self.tab.close()
+        super().tearDown()
+
+    def _settle(self, timeout=2.0):
+        """백그라운드 확인이 끝날 때까지 기다린다."""
+
+        import time
+
+        deadline = time.time() + timeout
+        while self.tab._cron_checking and time.time() < deadline:
+            _app().processEvents()
+            time.sleep(0.01)
+        _app().processEvents()
+
+    def _status(self, nightly):
+        from smvwp import cron_status
+
+        return cron_status.CronStatus(available=True, collector=True, nightly=nightly)
+
+    def test_the_warning_clears_once_cron_is_registered(self):
+        """등록 전 -> 등록 후. 이것이 사용자가 겪은 그 흐름이다."""
+
+        from smvwp import cron_status
+
+        with patch.object(cron_status, "read_status", return_value=self._status(False)):
+            self.tab._check_cron_async()
+            self._settle()
+        self.tab._render_cron_status()
+        self.assertEqual(self.tab.cron_status_label.objectName(), "captionWarn")
+
+        with patch.object(cron_status, "read_status", return_value=self._status(True)):
+            self.tab._check_cron_async()
+            self._settle()
+        self.tab._render_cron_status()
+        self.assertEqual(self.tab.cron_status_label.objectName(), "caption")
+
+    def test_pressing_scan_rechecks_cron(self):
+        """방금 등록하고 누르는 경우가 가장 흔하다 - 그 순간 다시 봐야 한다."""
+
+        from smvwp import cron_status
+
+        calls = []
+
+        def counted():
+            calls.append(1)
+            return self._status(True)
+
+        with patch.object(cron_status, "read_status", side_effect=counted):
+            # 계정이 없으면 안내만 띄우고 끝나지만, cron 확인은 그 전에 돈다.
+            with patch.object(self.tab, "_get_config", return_value=_EmptyConfig()):
+                with patch("smvwp.gui.scan_tab.QMessageBox.information"):
+                    self.tab._trigger_scan_now()
+            self._settle()
+        self.assertTrue(calls, "스캔 버튼이 cron 을 다시 확인하지 않습니다")
+
+    def test_checks_do_not_pile_up(self):
+        """`crontab` 이 느린 장비에서 요청이 쌓이면 그때부터 더 나빠진다."""
+
+        self.tab._cron_checking = True
+        from smvwp import cron_status
+
+        with patch.object(cron_status, "read_status") as read:
+            self.tab._check_cron_async()
+            self.assertEqual(read.call_count, 0)
+        self.tab._cron_checking = False
+
+    def test_a_timer_keeps_it_fresh(self):
+        """cron 은 이 창 밖에서 바뀐다 - 스스로 알아채야 한다."""
+
+        self.assertTrue(self.tab._cron_timer.isActive())
+        self.assertLessEqual(
+            self.tab._cron_timer.interval(), 10 * 60_000,
+            "너무 뜸하면 안내가 한참 틀린 채 남는다",
+        )
+
+
+class _EmptyConfig:
+    accounts = []
 
 
 if __name__ == "__main__":  # pragma: no cover
