@@ -10,7 +10,8 @@ PyQt5 데스크톱 애플리케이션입니다. 사용자가 명시적으로 지
 - 폐쇄망 안에서 동작하는 로컬 팝업 알림
 - 일간·주간 보고서와 정리 후보 목록 (**자동 삭제는 하지 않습니다**)
 
-설계 배경과 구현 이력은 [DESIGN.md](DESIGN.md)에 있습니다.
+**언제 무엇이 도는지**는 [OPERATIONS.md](OPERATIONS.md)를 보세요 (cron, 야간 스캔, 보고서, 멈추는 방법).
+설계 배경과 구현 이력은 [DESIGN.md](DESIGN.md), 진단 코드표는 [PROBE_CODES.md](PROBE_CODES.md)에 있습니다.
 
 ---
 
