@@ -139,6 +139,38 @@ crontab -l | grep storage_manager_vwp
 
 ---
 
+## 업데이트할 때 - cron 을 잠시 내린다
+
+파일을 갈아끼우는 도중 cron 이 뜨면 **반쯤 쓰인 코드를 읽는다.** 돌고 있는
+프로세스 밑에서 `.py` 를 바꾸면 나중에 읽어들이는 모듈만 새것이 되어 옛 코드와
+섞이기도 한다. 교체 전에 내려 두는 편이 안전하다.
+
+```bash
+./setup_cron.csh --remove          # 이 도구가 등록한 두 줄만 지운다
+pgrep -af smvwp_cli.py             # 돌던 것이 남았는지
+smvwp_cli.py scan --stop           # 스캔이 돌고 있으면 (낮이면 pkill 도 무방)
+```
+
+`crontab -l` 로 두 줄이 사라진 것을 확인한 뒤 파일을 교체한다. **다른 사람이
+넣은 cron 항목은 건드리지 않는다** - 명령줄이 아니라 줄 끝의 표식으로 우리
+것만 찾는다.
+
+교체가 끝나면 실행 권한을 되살리고(ZIP 은 실행 비트를 잃는다) 다시 올린다.
+
+```bash
+chmod +x run.csh setup_cron.csh check_env.sh
+./run.csh --diagnose               # 잘 붙었는지 확인
+./setup_cron.csh                   # 다시 등록
+crontab -l | grep storage_manager_vwp
+```
+
+`--remove` 는 환경변수가 없어도 돈다 - 지우는 데는 파이썬 경로도 데이터
+디렉터리도 필요 없다.
+
+**21:5x 에는 하지 않는다.** 압축을 푸는 중에 22시가 되면 그 밤을 잃는다.
+
+---
+
 ## 멈추는 방법 - `kill` 을 쓰지 않는다
 
 ```bash

@@ -25,11 +25,53 @@
 #
 # 15분 수집만 등록하고 야간 줄은 (있으면) 지운다. 수집까지 GUI 에 맡기면 창을
 # 닫은 동안 사용량 이력이 끊겨 예측이 무너지므로, 수집은 cron 에 두는 편이 낫다.
+#
+# 업데이트 전에 잠시 내려 두려면:
+#
+#   ./setup_cron.csh --remove
+#
+# 이 도구가 등록한 두 줄만 지운다 - 다른 사람이 넣은 항목은 건드리지 않는다.
+# 파일을 갈아끼우는 동안 cron 이 뜨면 반쯤 쓰인 코드를 읽게 되므로, 교체 전에
+# 내려 두고 끝난 뒤 `./setup_cron.csh` 로 다시 올리는 편이 안전하다.
+# 환경변수 없이도 돈다 (지우는 데는 파이썬 경로도 데이터 디렉터리도 필요 없다).
 
 set app_dir = "$0:h"
 if ("$app_dir" == "$0") set app_dir = "."
 cd "$app_dir"
 set app_dir = "$cwd"
+
+set collector_only = 0
+set remove_only = 0
+if ($#argv > 0) then
+    if ("$argv[1]" == "--collector-only") set collector_only = 1
+    if ("$argv[1]" == "--remove") set remove_only = 1
+endif
+
+# 표식은 어느 경로에서도 필요하다. 명령줄 전체가 아니라 이 주석으로 우리 줄을
+# 찾기 때문에, 파이썬 경로나 데이터 디렉터리가 바뀌어도 계속 인식된다.
+set collector_marker = "# storage_manager_vwp_v2_collector"
+set nightly_marker = "# storage_manager_vwp_v2_nightly_scan"
+
+if ($remove_only) then
+    # 몇 줄이 우리 것인지 먼저 센다. crontab 자체가 없으면 오류 문구가 나오는데
+    # 거기에는 표식이 없으므로 0 이 된다.
+    set found = `crontab -l |& grep -c storage_manager_vwp_v2_`
+    if ("$found" == "0") then
+        echo "이 도구가 등록한 cron 항목이 없습니다. 지울 것이 없습니다."
+        exit 0
+    endif
+    # 여기서는 표준출력만 통과시킨다. 오류 문구가 파이프에 섞이면 그것이
+    # crontab 줄로 들어간다.
+    crontab -l | grep -v "$collector_marker" | grep -v "$nightly_marker" | crontab -
+    if ($status != 0) then
+        echo "ERROR: crontab 수정에 실패했습니다."
+        exit 1
+    endif
+    echo "cron 항목 ${found}개를 지웠습니다 (다른 항목은 그대로입니다)."
+    echo "업데이트가 끝나면 다시 등록하세요:"
+    echo "  ./setup_cron.csh"
+    exit 0
+endif
 
 if (! $?STORAGE_MANAGER_PYTHON_BIN) then
     echo "ERROR: STORAGE_MANAGER_PYTHON_BIN이 설정되지 않았습니다."
@@ -41,17 +83,11 @@ if (! $?STORAGE_MANAGER_DATA_DIR) then
     exit 2
 endif
 
-set collector_only = 0
-if ($#argv > 0) then
-    if ("$argv[1]" == "--collector-only") set collector_only = 1
-endif
-
 set python_bin = "$STORAGE_MANAGER_PYTHON_BIN"
 set data_dir = "$STORAGE_MANAGER_DATA_DIR"
 mkdir -p "$data_dir/logs"
 
 set collector_line = "*/15 * * * * $python_bin $app_dir/smvwp_cli.py collect --data-dir $data_dir >> $data_dir/logs/collector_cron.log 2>&1"
-set collector_marker = "# storage_manager_vwp_v2_collector"
 
 # `nice`/`ionice` 를 여기에 붙인다. 예전에는 `du` 를 띄울 때 붙였는데, 엔진이
 # 파이썬 순회로 바뀌면서 별도 프로세스가 사라져 그 접두사가 듣지 않는다.
@@ -63,7 +99,6 @@ which ionice >& /dev/null
 if ($status == 0) set prefix = "${prefix}ionice -c2 -n7 "
 
 set nightly_line = "0 22 * * * ${prefix}$python_bin $app_dir/smvwp_cli.py scan --data-dir $data_dir >> $data_dir/logs/nightly_scan_cron.log 2>&1"
-set nightly_marker = "# storage_manager_vwp_v2_nightly_scan"
 
 echo "다음 crontab 항목을 추가합니다:"
 echo "$collector_line $collector_marker"
