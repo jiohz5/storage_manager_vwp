@@ -131,7 +131,26 @@ class MainWindow(QMainWindow):
         # 보이는 상태로 무너지지 않게 한다.
         self.resize(1200, 820)
         self.setMinimumSize(960, 700)
+        # 야간 상세 스캔.
+        #
+        # 두 갈래로 돌 수 있다. cron(`setup_cron.csh`)이 22:00에 띄우거나,
+        # 이 창이 시간창을 지켜 스스로 시작하거나(`gui_auto_nightly_scan`).
+        # 둘 다 켜 두어도 안전하다 - `scan_lock`이 프로세스를 가로질러 하나만
+        # 돌게 막는다.
+        #
+        # 창이 시작한 스캔은 **창을 닫으면 함께 멈춘다**(`closeEvent`).
+        #
+        # **`_build_ui` 보다 먼저 만든다.** 화면을 짜는 쪽이 이 탭을 탭 띠에
+        # 붙이고, `retranslate` 도 곧바로 이 탭에게 자기 문구를 채우라고 한다.
+        self._scan_tab = ScanTab(data_dir, lambda: self._config, self)
+
         self._build_ui()
+
+        # 신호는 화면을 짠 **뒤에** 잇는다 - 상태 줄 위젯이 `_build_ui` 안에서
+        # 만들어지기 때문이다.
+        self._scan_tab.status_message.connect(self.status_bar_label.setText)
+        self._scan_tab.banner_changed.connect(self._update_home_scan_banner)
+
         self.retranslate()
 
         # 수집 신선도는 **첫 수집을 돌리기 전에** 판정해야 한다. GUI를 열면
@@ -155,21 +174,6 @@ class MainWindow(QMainWindow):
             on_failed=self._on_collection_failed,
         )
         self._scheduler.start(run_immediately=True)
-
-        # 야간 상세 스캔.
-        #
-        # 두 갈래로 돌 수 있다. cron(`setup_cron.csh`)이 22:00에 띄우거나,
-        # 이 창이 시간창을 지켜 스스로 시작하거나(`gui_auto_nightly_scan`).
-        # 둘 다 켜 두어도 안전하다 - `scan_lock`이 프로세스를 가로질러 하나만
-        # 돌게 막는다.
-        #
-        # 창이 시작한 스캔은 **창을 닫으면 함께 멈춘다**(`closeEvent`). 그것이
-        # 이 경로를 쓰는 이유이자 대가다 - 아무도 창을 안 켜 둔 밤은 통째로 빈다.
-        # 스캔 화면은 통째로 `ScanTab` 이 맡는다. 창은 신호만 듣는다.
-        self._scan_tab = ScanTab(data_dir, lambda: self._config, self)
-        self._scan_tab.status_message.connect(self.status_bar_label.setText)
-        self._scan_tab.banner_changed.connect(self._update_home_scan_banner)
-
 
 
     def show_first_run_if_needed(self) -> None:

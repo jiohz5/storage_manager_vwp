@@ -210,5 +210,86 @@ class TranslationKeyTests(unittest.TestCase):
         self.assertEqual(missing, [], "없는 번역 키: " + ", ".join(missing[:10]))
 
 
+class InitOrderTests(unittest.TestCase):
+    """`__init__` 에서 만들기 전에 쓰지 않는가.
+
+    실제로 반입 장비에서 터진 실수다 - `_build_ui()` 가 탭 띠에 스캔 탭을
+    붙이는데, 그 탭을 그보다 **뒤에서** 만들고 있었다. 속성이 어딘가에
+    대입되기만 하면 통과하는 검사로는 안 잡히고, 창을 띄우는 순간
+    `AttributeError` 로 죽는다.
+
+    `__init__` 이 부르는 자기 메서드까지 한 단계 따라 들어가 본다 - 위의
+    경우가 정확히 그 모양이었다(직접 쓴 것이 아니라 `_build_ui` 안에서 썼다).
+    """
+
+    def _check(self, filename, class_name):
+        path = GUI / filename
+        cls = next(c for c in _classes(path) if c.name == class_name)
+        methods = {n.name: n for n in cls.body if isinstance(n, ast.FunctionDef)}
+        init = methods.get("__init__")
+        if init is None:
+            return
+
+        # 메서드마다 "이 안에서 읽는 self 속성"을 미리 모아 둔다.
+        reads = {}
+        for name, node in methods.items():
+            reads[name] = {
+                a.attr for a in ast.walk(node)
+                if isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
+                and a.value.id == "self" and isinstance(a.ctx, ast.Load)
+            }
+
+        assigned = set()
+        problems = []
+        for stmt in init.body:
+            # 이 문장이 읽는 것들 - 자기 메서드를 부르면 그 안에서 읽는 것까지.
+            used = set()
+            for node in ast.walk(stmt):
+                if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                        and node.value.id == "self" and isinstance(node.ctx, ast.Load)):
+                    used.add(node.attr)
+                # **부를 때만** 안으로 따라 들어간다. `connect(self._on_x)` 는
+                # 메서드를 넘기는 것이지 지금 부르는 것이 아니다 - 그때 안에서
+                # 읽는 것까지 "지금 필요하다"고 보면 멀쩡한 코드가 걸린다.
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "self"
+                        and node.func.attr in methods):
+                    used |= reads[node.func.attr] - {node.func.attr}
+            for name in sorted(used):
+                # 메서드와 클래스 변수, Qt 가 물려준 것은 이미 있다.
+                if name in methods or name in QT_INHERITED:
+                    continue
+                if name in assigned:
+                    continue
+                # `__init__` 어딘가에서 대입되는데 아직 안 된 것만 문제다.
+                if any(
+                    isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name)
+                    and a.value.id == "self" and a.attr == name
+                    and isinstance(a.ctx, ast.Store)
+                    for a in ast.walk(init)
+                ):
+                    problems.append(f"{name} (줄 {stmt.lineno})")
+            for node in ast.walk(stmt):
+                if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                        and node.value.id == "self" and isinstance(node.ctx, ast.Store)):
+                    assigned.add(node.attr)
+
+        self.assertEqual(
+            problems, [],
+            f"{class_name}.__init__ 이 만들기 전에 씁니다: {problems}",
+        )
+
+    def test_main_window(self):
+        self._check("main_window.py", "MainWindow")
+
+    def test_scan_tab(self):
+        self._check("scan_tab.py", "ScanTab")
+
+    def test_account_dialog(self):
+        self._check("account_dialog.py", "AccountDialog")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
