@@ -111,7 +111,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "menu.language": "언어",
         "menu.file": "파일",
         # -- 상세 스캔 ---------------------------------------------
-        "scan.section_title": "상세 스캔 (야간 du/find 기반 증가 경로)",
+        "scan.section_title": "상세 스캔 - 밤마다 계정 안 어디가 얼마인지",
         "scan.status_loading": "스캔 상태 확인 중...",
         "scan.btn.run_now": "지금 상세 스캔 실행",
         "scan.btn.run_now_tooltip": (
@@ -195,6 +195,11 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.acct.note_failed": "실패 {count}곳",
         "scan.acct.note_partial": "일부만 읽음 {count}곳",
         "scan.acct.note_changed": "변경 파일 {count:,}개",
+        "scan.acct.changed_tip": (
+            "지난 스캔 이후 수정 시각이 바뀐 파일의 **개수**입니다. 어떤 파일이 "
+            "어떻게 바뀌었는지는 담지 않습니다 - '이 계정이 활발하다'까지만 "
+            "말해 줍니다. 5,000개가 넘으면 그 이상은 세지 않습니다."
+        ),
         # -- 기간 표기 ---------------------------------------------
         "duration.under_minute": "1분 미만",
         "duration.minutes": "{minutes}분",
@@ -290,9 +295,9 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.current_target": "지금: {account} · {kind} · {path}",
         "scan.scanning_now": "상세 스캔 진행 중 · {path}",
         "progress.title": "상세 스캔 진행 상황",
-        "progress.kind_label": "종류",
-        "progress.kind.baseline": "크기 스캔(du)",
-        "progress.kind.activity": "변경 파일(find)",
+        "progress.kind_label": "무엇을",
+        "progress.kind.baseline": "용량 - 디렉터리마다 얼마인지",
+        "progress.kind.activity": "변경 - 지난 스캔 이후 바뀐 파일 수",
         "progress.btn.refresh": "새로고침",
         "progress.summary": (
             "{generation} 스캔 · 완료 {done} / 대기 {pending} / 분할 {split} / "
@@ -453,14 +458,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "notify.mode.disabled": "사용 안 함",
         "notify.message": "[{tier}] {account} ({path}) - 용량 {byte_pct} / inode {inode_pct}",
         "notify.growth_message": (
-            "[급증] {account} - {path} 이(가) {delta} 증가 (현재 {current})"
+            "[경로 급증] {account} - {path} 이(가) 지난 스캔보다 {delta} 늘었습니다 (현재 {current})"
         ),
         "notify.full_forecast_message": (
             "[FULL 임박] {filesystem} - 약 {hours}시간 후 가득 참 예상 "
             "(대상 계정: {accounts})"
         ),
         "notify.surge_message": (
-            "[급증] {filesystem} - 최근 {window}시간 동안 {delta} 증가 "
+            "[계정 급증] {filesystem} - 최근 {window}시간 동안 {delta} 늘었습니다 "
             "(대상 계정: {accounts})"
         ),
         # -- FULL 예측 표시 ----------------------------------------
@@ -626,7 +631,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "menu.language": "Language",
         "menu.file": "File",
         # -- Detail scan -------------------------------------------
-        "scan.section_title": "Detail scan (nightly du/find growth paths)",
+        "scan.section_title": "Detail scan - what is where inside each account, night by night",
         "scan.status_loading": "Checking scan status...",
         "scan.btn.run_now": "Run detail scan now",
         "scan.btn.run_now_tooltip": (
@@ -712,6 +717,11 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.acct.note_failed": "{count} failed",
         "scan.acct.note_partial": "{count} partially read",
         "scan.acct.note_changed": "{count:,} changed files",
+        "scan.acct.changed_tip": (
+            "The **number** of files whose modification time changed since the "
+            "last scan. It does not say which files or how - only that the "
+            "account is active. Counting stops at 5,000."
+        ),
         # -- Durations ---------------------------------------------
         "duration.under_minute": "under a minute",
         "duration.minutes": "{minutes} min",
@@ -810,9 +820,9 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.current_target": "Now: {account} - {kind} - {path}",
         "scan.scanning_now": "Detail scan running - {path}",
         "progress.title": "Detail scan progress",
-        "progress.kind_label": "Kind",
-        "progress.kind.baseline": "Size scan (du)",
-        "progress.kind.activity": "Changed files (find)",
+        "progress.kind_label": "What",
+        "progress.kind.baseline": "Size - how much each directory holds",
+        "progress.kind.activity": "Changes - files touched since the last scan",
         "progress.btn.refresh": "Refresh",
         "progress.summary": (
             "{generation} scan - done {done} / pending {pending} / split {split} / "
@@ -978,14 +988,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "notify.mode.disabled": "Disabled",
         "notify.message": "[{tier}] {account} ({path}) - capacity {byte_pct} / inode {inode_pct}",
         "notify.growth_message": (
-            "[Growth] {account} - {path} grew by {delta} (now {current})"
+            "[Path growth] {account} - {path} grew by {delta} since the last scan (now {current})"
         ),
         "notify.full_forecast_message": (
             "[FULL imminent] {filesystem} - expected to fill in about {hours}h "
             "(accounts: {accounts})"
         ),
         "notify.surge_message": (
-            "[Surge] {filesystem} - grew {delta} in the last {window}h "
+            "[Account surge] {filesystem} - grew {delta} in the last {window}h "
             "(accounts: {accounts})"
         ),
         # -- Forecast display --------------------------------------

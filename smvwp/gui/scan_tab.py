@@ -629,6 +629,10 @@ class ScanTab(QFrame):
                     i18n.t("scan.acct.note_changed", count=entry.last_activity_total_changed)
                 )
             note_item = QTableWidgetItem("  ·  ".join(notes) if notes else "")
+            # '변경 파일 N개'가 무엇을 센 것인지 화면 어디에도 설명이 없었다.
+            # 개수뿐이고 어떤 파일인지는 담지 않는다는 것을 여기서 밝힌다.
+            if entry.last_activity_total_changed is not None:
+                note_item.setToolTip(i18n.t("scan.acct.changed_tip"))
             if entry.failed_count or entry.partial_paths:
                 note_item.setForeground(QColor(tiers.color(tiers.WARN)))
             table.setItem(row, SCAN_ACCT_NOTE, note_item)
