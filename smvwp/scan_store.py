@@ -82,6 +82,22 @@ CREATE TABLE IF NOT EXISTS scan_checkpoints (
 CREATE INDEX IF NOT EXISTS idx_checkpoints_lookup
     ON scan_checkpoints(account_id, kind, generation, status);
 
+-- 계정별 "가장 큰 파일" 상위 몇 개.
+--
+-- 디렉터리 합계만으로는 "파일 하나가 비정상적으로 크다"를 볼 수 없다. 순회가
+-- 어차피 모든 파일을 stat 하므로 지나가는 김에 붙잡아 둔다. 세대별로 남겨야
+-- **지난 밤에 없던 파일**과 **갑자기 커진 파일**을 가릴 수 있다.
+CREATE TABLE IF NOT EXISTS baseline_large_files (
+    account_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    size_kb INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, generation, path)
+);
+CREATE INDEX IF NOT EXISTS idx_large_files_gen
+    ON baseline_large_files(account_id, generation, size_kb DESC);
+
 CREATE TABLE IF NOT EXISTS baseline_results (
     account_id TEXT NOT NULL,
     generation INTEGER NOT NULL,
@@ -907,6 +923,68 @@ def prune_growth_history(
     return cursor.rowcount
 
 
+def save_large_files(
+    conn: sqlite3.Connection, account_id: str, generation: int, entries
+) -> int:
+    """순회가 붙잡은 `(KB, 경로)` 목록을 저장한다.
+
+    체크포인트마다 불리므로 여러 번 들어온다. 같은 경로는 덮어쓴다 - 쪼개기
+    뒤 재측정이 겹칠 수 있고 나중 값이 더 정확하다."""
+
+    if not entries:
+        return 0
+    now = utc_now_iso()
+    rows = [
+        (account_id, generation, str(path), int(size_kb), now)
+        for size_kb, path in entries
+    ]
+    conn.executemany(
+        "INSERT OR REPLACE INTO baseline_large_files "
+        "(account_id, generation, path, size_kb, recorded_at) VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
+
+
+def largest_files(
+    conn: sqlite3.Connection, account_id: str, generation: int, limit: int = 20
+):
+    """이 세대에서 가장 큰 파일들 (큰 것부터)."""
+
+    return conn.execute(
+        "SELECT path, size_kb FROM baseline_large_files "
+        "WHERE account_id = ? AND generation = ? ORDER BY size_kb DESC LIMIT ?",
+        (account_id, generation, limit),
+    ).fetchall()
+
+
+def large_file_changes(
+    conn: sqlite3.Connection, account_id: str, generation: int, previous_generation
+):
+    """이번 세대의 큰 파일들을 이전 세대와 견준다.
+
+    `(경로, 지금 KB, 이전 KB 또는 None)` 을 큰 것부터. 이전 값이 None 이면
+    **지난 밤에는 없던(또는 그때는 크지 않던) 파일**이다.
+
+    두 경우를 굳이 안 가른다 - 상위 목록에 없었다는 것만 알 수 있고, 그것이
+    "새로 생겼다"인지 "그때는 작았다"인지는 이 데이터로 판단할 수 없다.
+    지어내지 않는 편이 맞다.
+    """
+
+    current = largest_files(conn, account_id, generation, limit=1000)
+    if previous_generation is None:
+        return [(row["path"], row["size_kb"], None) for row in current]
+    previous = {
+        row["path"]: row["size_kb"]
+        for row in largest_files(conn, account_id, previous_generation, limit=1000)
+    }
+    return [
+        (row["path"], row["size_kb"], previous.get(row["path"]))
+        for row in current
+    ]
+
+
 def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: int = 2) -> int:
     """오래된 세대의 체크포인트/기준선 결과를 지운다 (DB 크기 예산 유지).
 
@@ -932,6 +1010,12 @@ def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: 
     )
     conn.execute(
         f"DELETE FROM scan_checkpoints WHERE account_id = ? AND kind = 'baseline' AND generation IN ({placeholders})",
+        (account_id, *to_delete),
+    )
+    # 큰 파일 목록도 같은 세대 기준으로 정리한다. 빠뜨리면 계정마다 세대마다
+    # 50행씩 영원히 쌓인다.
+    conn.execute(
+        f"DELETE FROM baseline_large_files WHERE account_id = ? AND generation IN ({placeholders})",
         (account_id, *to_delete),
     )
     conn.commit()

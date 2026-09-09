@@ -346,5 +346,104 @@ class _EmptyConfig:
     accounts = []
 
 
+class LargeFilesTableTests(_GuiCase):
+    """'파일 하나가 유난히 크다' 를 화면이 실제로 보여 주는가."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.scan_tab import ScanTab
+
+        self.tab = ScanTab(self.data_dir, lambda: self.config)
+        # 계정 콤보는 `retranslate` 가 채운다 - 평소에는 창이 불러 준다.
+        # 안 부르면 콤보가 비어 고른 계정이 없고, 표는 그릴 대상을 못 찾는다.
+        self.tab.retranslate()
+        _app().processEvents()
+
+    def tearDown(self):
+        self.tab.close()
+        super().tearDown()
+
+    def _snapshot_with(self, rows, measured_kb):
+        """큰 파일이 들어 있는 스냅샷을 흉내 낸다."""
+
+        account = self.config.accounts[0]
+
+        class FakeEntry:
+            account_id = account.account_id
+            account_name = account.name
+            large_files = rows
+            measured_kb = None
+
+        class FakeSnapshot:
+            accounts = [FakeEntry()]
+
+        FakeEntry.measured_kb = measured_kb
+        self.tab._scan_snapshot = FakeSnapshot()
+        index = self.tab.scan_account_combo.findData(account.account_id)
+        if index >= 0:
+            self.tab.scan_account_combo.setCurrentIndex(index)
+        self.tab._refresh_large_files()
+        _app().processEvents()
+
+    def test_rows_appear_biggest_first(self):
+        self._snapshot_with(
+            [("/a/huge", 900_000, 100_000), ("/a/mid", 400_000, 400_000)],
+            measured_kb=2_000_000,
+        )
+        table = self.tab.large_table
+        self.assertEqual(table.rowCount(), 2)
+        self.assertIn("huge", table.item(0, 0).text())
+
+    def test_a_dominant_file_is_marked(self):
+        """계정의 절반을 차지하는 파일이 눈에 안 띄면 표의 뜻이 없다."""
+
+        from smvwp import tiers
+        from PyQt5.QtGui import QColor
+        from smvwp.gui.scan_tab import LARGE_PATH
+
+        self._snapshot_with([("/a/huge", 500_000, 500_000)], measured_kb=1_000_000)
+        item = self.tab.large_table.item(0, LARGE_PATH)
+        self.assertEqual(
+            item.foreground().color().name(), QColor(tiers.color(tiers.WARN)).name()
+        )
+        self.assertTrue(item.toolTip(), "왜 눈에 띄는지 설명이 있어야 한다")
+
+    def test_an_ordinary_file_is_not_marked(self):
+        """전부 칠하면 아무것도 강조되지 않는다."""
+
+        from smvwp.gui.scan_tab import LARGE_PATH
+
+        self._snapshot_with([("/a/ok", 1_000, 1_000)], measured_kb=10_000_000)
+        item = self.tab.large_table.item(0, LARGE_PATH)
+        self.assertFalse(item.toolTip())
+
+    def test_a_file_missing_from_the_previous_list_says_so(self):
+        from smvwp import i18n
+        from smvwp.gui.scan_tab import LARGE_CHANGE
+
+        i18n.set_language("ko")
+        self._snapshot_with([("/a/new", 500_000, None)], measured_kb=10_000_000)
+        self.assertEqual(
+            self.tab.large_table.item(0, LARGE_CHANGE).text(), i18n.t("large.new")
+        )
+
+    def test_no_files_gives_a_plain_message_not_an_empty_table(self):
+        self._snapshot_with([], measured_kb=1_000_000)
+        self.assertEqual(self.tab.large_table.rowCount(), 0)
+        self.assertTrue(self.tab.large_caption.text())
+
+    def test_unknown_account_total_does_not_show_a_fake_share(self):
+        """총량을 모를 때 0% 로 쓰면 '작다'고 잘못 읽힌다."""
+
+        from smvwp import i18n
+        from smvwp.gui.scan_tab import LARGE_SHARE
+
+        i18n.set_language("ko")
+        self._snapshot_with([("/a/x", 500_000, None)], measured_kb=None)
+        self.assertEqual(
+            self.tab.large_table.item(0, LARGE_SHARE).text(), i18n.t("common.none")
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

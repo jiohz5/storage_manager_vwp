@@ -240,6 +240,9 @@ class DuTreeOutcome:
     """
 
     entries: List["tuple"] = None
+    # 순회 엔진이 곁다리로 모은 `(KB, 경로)` 큰 파일 목록. `du` 엔진은 비운다 -
+    # `du` 는 디렉터리 합계만 주므로 파일 하나하나를 알 방법이 없다.
+    largest_files: List["tuple"] = None
     root_size_kb: Optional[int] = None
     completed: bool = False      # 루트까지 찍혔는가 (=서브트리 전체 완료)
     timed_out: bool = False
@@ -249,6 +252,8 @@ class DuTreeOutcome:
     def __post_init__(self):
         if self.entries is None:
             self.entries = []
+        if self.largest_files is None:
+            self.largest_files = []
 
 
 def du_tree_command(path: str, max_depth: int) -> List[str]:
@@ -402,6 +407,7 @@ def measure_tree(
         )
         return DuTreeOutcome(
             entries=outcome.entries,
+            largest_files=outcome.largest_files,
             root_size_kb=outcome.root_size_kb,
             completed=outcome.completed,
             timed_out=outcome.timed_out,
@@ -477,6 +483,10 @@ def process_one_checkpoint(
 
     if outcome.entries:
         scan_store.save_tree_entries(conn, account_id, generation, outcome.entries, path)
+    # 큰 파일은 시간 초과로 잘렸어도 이미 본 만큼은 쓸모가 있다. 완주 여부와
+    # 무관하게 남긴다 - `entries` 와 같은 이유다.
+    if outcome.largest_files:
+        scan_store.save_large_files(conn, account_id, generation, outcome.largest_files)
 
     if outcome.completed:
         scan_store.mark_done(

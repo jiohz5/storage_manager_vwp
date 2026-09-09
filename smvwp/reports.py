@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import config as config_module
-from . import i18n, loadstat, scan_store, store, tiers, workflow
+from . import formatting, i18n, large_files, loadstat, scan_store, store, tiers, workflow
 
 DAILY = "daily"
 WEEKLY = "weekly"
@@ -177,6 +177,7 @@ def build_daily_report(
     # 스캔 진행 상황 바로 뒤에 둔다. 둘 다 스캔이 남긴 것을 읽기만 하므로
     # 여기서 실패해도 위쪽 내용은 이미 만들어져 있다.
     _append_new_tasks_section(lines, data_dir, config)
+    _append_large_files_section(lines, data_dir, config)
     _append_resource_section(lines, data_dir)
     return "\n".join(lines) + "\n"
 
@@ -860,6 +861,69 @@ def _duration_text(seconds) -> str:
         return i18n.t("reports.duration_minutes", minutes=minutes)
     hours, minutes = divmod(minutes, 60)
     return i18n.t("reports.duration_hours", hours=hours, minutes=minutes)
+
+
+def _append_large_files_section(
+    lines: List[str], data_dir: Path, config: config_module.AppConfig
+) -> None:
+    """눈에 띄는 큰 파일만 싣는다.
+
+    가장 큰 파일 목록을 통째로 실으면 매일 같은 줄이 반복돼 아무도 안 읽는다.
+    **어제와 달라졌거나 계정을 혼자 먹고 있는 것**만 싣는 편이 낫다 - 사람이
+    손댈 값어치가 있는 것이 그쪽이다.
+    """
+
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover - 한 절이 보고서 전체를 막으면 안 된다
+        return
+
+    rows_by_account = []
+    try:
+        for account in config.accounts:
+            state = scan_store.get_account_state(conn, account.account_id)
+            current = state.last_completed_generation
+            if not current:
+                continue
+            previous = current - 1 if current > 1 else None
+            changes = scan_store.large_file_changes(
+                conn, account.account_id, current, previous
+            )
+            if not changes:
+                continue
+            total = scan_store.measured_total_kb(conn, account.account_id, current)
+            notable = [
+                item for item in large_files.build(changes, total) if item.is_notable
+            ]
+            if notable:
+                rows_by_account.append((account.name, notable))
+    finally:
+        conn.close()
+
+    if not rows_by_account:
+        return
+
+    lines.append("")
+    lines.append(i18n.t("reports.large_heading"))
+    lines.append("-" * 72)
+    for account_name, items in rows_by_account:
+        lines.append(account_name)
+        for item in items[:5]:
+            share = f"{item.share_pct:.1f}%" if item.share_pct is not None else "-"
+            if item.previous_kb is None:
+                change = i18n.t("large.new")
+            else:
+                change = formatting.format_kb_delta(item.delta_kb)
+            lines.append(
+                "  "
+                + pad(formatting.format_kb(item.size_kb), 12, ">")
+                + pad(share, 9, ">")
+                + pad(change, 18, ">")
+                + "  "
+                + item.path
+            )
+    lines.append("")
+    lines.append(i18n.t("reports.large_caveat"))
 
 
 def _append_resource_section(lines: List[str], data_dir: Path) -> None:

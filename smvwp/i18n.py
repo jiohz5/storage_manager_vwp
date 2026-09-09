@@ -195,6 +195,29 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.acct.note_failed": "실패 {count}곳",
         "scan.acct.note_partial": "일부만 읽음 {count}곳",
         "scan.acct.note_changed": "변경 파일 {count:,}개",
+        "reports.large_heading": "[눈에 띄는 큰 파일]",
+        "reports.large_caveat": (
+            "파일 하나가 계정의 5% 이상을 차지하거나, 지난 스캔보다 1.5배 이상 "
+            "커졌거나, 지난 스캔 상위 목록에 없던 것만 싣습니다. "
+            "'목록에 없던 파일'은 새로 생겼다는 뜻이 아닙니다 - 그때는 작았을 "
+            "수도 있습니다."
+        ),
+        "large.heading": "가장 큰 파일  ·  파일 하나가 유난히 크면 여기서 보입니다",
+        "large.col.path": "파일",
+        "large.col.size": "크기",
+        "large.col.share": "계정 비중",
+        "large.col.change": "지난 스캔 대비",
+        "large.none": "{account}: 100MB 이상인 파일이 아직 없습니다.",
+        "large.no_scan": "계정을 선택하면 가장 큰 파일이 표시됩니다.",
+        "large.new": "목록에 없던 파일",
+        "large.reason.share": "계정의 {pct}%를 혼자 차지",
+        "large.reason.grew": "지난 스캔보다 {ratio}배",
+        "large.reason.new": "지난 스캔 상위 목록에 없었음",
+        "large.tip": (
+            "순회가 파일을 훑는 김에 100MB 이상인 것 중 큰 순서로 모아 둡니다.\n\n"
+            "'목록에 없던 파일'은 새로 생겼다는 뜻이 아닙니다 - 지난 스캔의 상위 "
+            "목록에 없었다는 것까지만 알 수 있습니다(그때는 작았을 수도 있습니다)."
+        ),
         "scan.acct.changed_tip": (
             "지난 스캔 이후 수정 시각이 바뀐 파일의 **개수**입니다. 어떤 파일이 "
             "어떻게 바뀌었는지는 담지 않습니다 - '이 계정이 활발하다'까지만 "
@@ -717,6 +740,31 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.acct.note_failed": "{count} failed",
         "scan.acct.note_partial": "{count} partially read",
         "scan.acct.note_changed": "{count:,} changed files",
+        "reports.large_heading": "[Files worth a look]",
+        "reports.large_caveat": (
+            "Listed only when a single file takes 5% or more of the account, "
+            "grew 1.5x or more since the last scan, or was absent from the "
+            "previous scan's top list. Absent does not mean new - it may have "
+            "been smaller then."
+        ),
+        "large.heading": "Largest files  ·  a single oversized file shows up here",
+        "large.col.path": "File",
+        "large.col.size": "Size",
+        "large.col.share": "Share of account",
+        "large.col.change": "vs last scan",
+        "large.none": "{account}: no file above 100MB yet.",
+        "large.no_scan": "Pick an account to see its largest files.",
+        "large.new": "not in the previous list",
+        "large.reason.share": "takes {pct}% of the account on its own",
+        "large.reason.grew": "{ratio}x the previous scan",
+        "large.reason.new": "was not in the previous scan's top list",
+        "large.tip": (
+            "Collected while the walk stats files anyway - the biggest ones "
+            "above 100MB.\n\n"
+            "'Not in the previous list' does not mean the file is new. All we "
+            "know is that it was absent from the previous scan's top list; it "
+            "may simply have been smaller then."
+        ),
         "scan.acct.changed_tip": (
             "The **number** of files whose modification time changed since the "
             "last scan. It does not say which files or how - only that the "

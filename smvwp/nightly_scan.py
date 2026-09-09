@@ -1076,6 +1076,9 @@ class AccountScanSnapshot:
     # 사용자에게는 "스캔이 그냥 실패했다"로만 보인다.
     failed_paths: List[tuple] = field(default_factory=list)
     failed_count: int = 0
+    # 이 계정에서 가장 큰 파일들과 지난 세대 대비 변화
+    # (`large_files.build` 에 그대로 넣을 수 있는 모양).
+    large_files: List[tuple] = field(default_factory=list)
     # 지금까지 실제로 잰 용량 (KB). 진행 중인 세대 기준이라 스캔이 도는 동안
     # 계속 커진다 - "얼마나 찾았나"에 답하는 값이다. 아직 하나도 못 쟀으면
     # None (0과 '모름'은 다르다).
@@ -1157,6 +1160,12 @@ def get_status_snapshot(
                     ),
                     top_paths=top,
                     growth=growth,
+                    large_files=(
+                        scan_store.large_file_changes(
+                            conn, account.account_id, current_gen, previous_gen
+                        )
+                        if current_gen else []
+                    ),
                     last_activity_total_changed=state.last_activity_total_changed,
                     last_activity_completed_at=state.last_activity_completed_at,
                     pending_baseline_count=pending_baseline_count,

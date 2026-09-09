@@ -44,6 +44,7 @@ pickle 직렬화와 프로세스 생성 비용만 더하고, 얻는 것이 없�
 from __future__ import annotations
 
 import os
+import heapq
 import threading
 import time
 from collections import deque
@@ -56,6 +57,20 @@ from typing import List, Optional, Set
 # 않으므로 개발 환경 전용이다.
 HAVE_ST_BLOCKS = hasattr(os.stat(os.curdir), "st_blocks")
 FALLBACK_BLOCK_SIZE = 4096
+
+# 순회 하나가 기억할 "가장 큰 파일" 개수.
+#
+# 화면과 보고서가 보여 줄 수 있는 양이 상한이다 - 수천 개를 모아 봐야 아무도
+# 안 읽고 메모리만 쓴다. 힙에 올려 두므로 이 수를 넘으면 가장 작은 것이 밀려
+# 나간다(전체 정렬을 하지 않는다).
+LARGEST_FILES_KEPT = 50
+
+# 이보다 작은 파일은 후보로도 보지 않는다.
+#
+# 작은 파일이 수십만 개인 트리에서 힙을 계속 흔들면 순회 자체가 느려진다.
+# 어차피 "비정상적으로 큰 파일"을 찾는 것이므로 바닥을 깔아 두는 편이 맞다.
+LARGEST_FILE_MIN_KB = 100 * 1024   # 100MB
+_MIN_BLOCKS = LARGEST_FILE_MIN_KB * 1024 // 512
 
 # 알림을 놓쳤을 때를 대비한 안전망. 정상 흐름에서는 알림으로 깨어나므로
 # 이 시간만큼 기다리는 일이 없다.
@@ -101,6 +116,8 @@ class WalkOutcome:
     dir_count: int = 0
     unreadable: int = 0
     # 아래는 진단용 - 스캔 자체는 쓰지 않는다 (`probe` 참고).
+    # 가장 큰 파일 `(KB, 경로)` 목록, 큰 것부터. 순회 중에 곁다리로 모은다.
+    largest_files: List[tuple] = field(default_factory=list)
     hardlink_files: int = 0   # nlink>1 이라 중복 검사를 거친 파일 수
     logical_bytes: int = 0    # st_size 합. 점유 블록과 벌어지면 희소/작은 파일
     max_depth_seen: int = 0   # 루트를 0으로 본 가장 깊은 디렉터리
@@ -150,6 +167,10 @@ class ParallelWalker:
         self.unreadable = 0
         self.hardlink_files = 0
         self.logical_bytes = 0
+        # 가장 큰 파일 후보. **최소 힙**이라 [0]이 가장 작은 것이고, 상한을
+        # 넘으면 그것을 밀어낸다. 전체를 모아 정렬하면 파일 수만큼 메모리를
+        # 쓰는데, 우리가 필요한 것은 상위 몇 개뿐이다.
+        self._largest: List[tuple] = []
 
     # -- 큐 -----------------------------------------------------------
     def _next(self) -> Optional[_Node]:
@@ -227,6 +248,9 @@ class ParallelWalker:
         hardlinks: List[tuple] = []
         unreadable = 0
         logical = 0
+        # 큰 파일 후보는 스레드 지역으로 모았다가 아래에서 한 번에 넘긴다 -
+        # 파일마다 잠금을 잡을 이유가 없다.
+        big: List[tuple] = []
 
         # 디렉터리 **자기 자신**이 차지하는 블록. `du` 는 이것을 센다.
         #
@@ -266,9 +290,12 @@ class ParallelWalker:
                             ((info.st_dev, info.st_ino), disk_blocks(info), info.st_size)
                         )
                         continue
-                    blocks += disk_blocks(info)
+                    file_blocks = disk_blocks(info)
+                    blocks += file_blocks
                     logical += info.st_size
                     files += 1
+                    if file_blocks >= _MIN_BLOCKS:
+                        big.append((file_blocks * 512 // 1024, entry.path))
         except OSError:
             unreadable += 1
 
@@ -284,6 +311,8 @@ class ParallelWalker:
                 files += 1
             self.hardlink_files += len(hardlinks)
             self.logical_bytes += logical
+            for candidate in big:
+                self._offer_large(candidate)
 
             node.blocks += blocks
             node.pending_children += len(children)
@@ -292,6 +321,17 @@ class ParallelWalker:
             self._settle(node)
 
         return files, 1, unreadable, children
+
+    def _offer_large(self, candidate: tuple) -> None:
+        """큰 파일 후보 하나를 넣는다 (`_tree_lock` 안에서 부를 것).
+
+        상한까지는 그냥 넣고, 넘으면 지금 가장 작은 것과만 견준다. 그래서
+        파일이 몇 백만 개여도 비용이 일정하다."""
+
+        if len(self._largest) < LARGEST_FILES_KEPT:
+            heapq.heappush(self._largest, candidate)
+        elif candidate[0] > self._largest[0][0]:
+            heapq.heapreplace(self._largest, candidate)
 
     def _worker(self) -> None:
         files = dirs = unreadable = 0
@@ -375,6 +415,7 @@ class ParallelWalker:
             file_count=self.file_count,
             dir_count=self.dir_count,
             unreadable=self.unreadable,
+            largest_files=sorted(self._largest, reverse=True),
             hardlink_files=self.hardlink_files,
             logical_bytes=self.logical_bytes,
             max_depth_seen=deepest,

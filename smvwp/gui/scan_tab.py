@@ -46,6 +46,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import auto_scan, config as config_module, cron_status, formatting, i18n
+from .. import large_files
 from .. import nightly_scan, procio, tiers
 from ..scheduler import NightlyScanWorker, ScanStatusWorker
 from . import widgets
@@ -70,6 +71,20 @@ CRON_RECHECK_MS = 3 * 60_000
 
 
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
+
+# 가장 큰 파일 표. 디렉터리 합계만 보면 "파일 하나가 유난히 크다"를 놓친다 -
+# 300GB 짜리 디렉터리가 고른 파일 3천 개인지 한 파일이 280GB 인지 구분되지
+# 않기 때문이다.
+LARGE_COLUMN_KEYS = [
+    "large.col.path",
+    "large.col.size",
+    "large.col.share",
+    "large.col.change",
+]
+(LARGE_PATH, LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE) = range(4)
+
+# 화면에 띄우는 줄 수. 표는 훑어보는 것이지 뒤지는 것이 아니다.
+LARGE_ROWS_SHOWN = 12
 
 # 상세 스캔 탭 위쪽의 계정별 현황 표.
 #
@@ -226,6 +241,9 @@ class ScanTab(QFrame):
         self.growth_table.setHorizontalHeaderLabels(
             [i18n.t(key) for key in GROWTH_COLUMN_KEYS]
         )
+        self.large_table.setHorizontalHeaderLabels(
+            [i18n.t(key) for key in LARGE_COLUMN_KEYS]
+        )
 
     def _build(self) -> None:
         """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
@@ -362,6 +380,25 @@ class ScanTab(QFrame):
         # 화면의 주인공)를 아래에서 밀어 올려 행이 잘린다.
         self.growth_table.setMinimumHeight(80)
         box.addWidget(self.growth_table)
+
+        self.large_caption = QLabel()
+        self.large_caption.setObjectName("muted")
+        self.large_caption.setWordWrap(True)
+        self.large_caption.setToolTip(i18n.t("large.tip"))
+        box.addWidget(self.large_caption)
+
+        self.large_table = QTableWidget(0, len(LARGE_COLUMN_KEYS))
+        large_header = self.large_table.horizontalHeader()
+        large_header.setSectionResizeMode(LARGE_PATH, QHeaderView.Stretch)
+        for column in (LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE):
+            large_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        large_header.setHighlightSections(False)
+        self.large_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.large_table.verticalHeader().setVisible(False)
+        self.large_table.verticalHeader().setDefaultSectionSize(30)
+        self.large_table.setShowGrid(False)
+        self.large_table.setMinimumHeight(80)
+        box.addWidget(self.large_table)
 
     def _current_target_text(self, latest_run) -> str:
         """지금 훑고 있는 경로 한 줄."""
@@ -527,6 +564,7 @@ class ScanTab(QFrame):
         self.scan_stop_btn.setEnabled(running)
         self._refresh_scan_accounts_table(snapshot, running)
         self._refresh_growth_table()
+        self._refresh_large_files()
 
     def _refresh_scan_accounts_table(self, snapshot, running: bool) -> None:
         """계정별 진행·측정량·예상 남은 시간을 한 표로 보여준다."""
@@ -637,6 +675,82 @@ class ScanTab(QFrame):
                 note_item.setForeground(QColor(tiers.color(tiers.WARN)))
             table.setItem(row, SCAN_ACCT_NOTE, note_item)
 
+    def _refresh_large_files(self) -> None:
+        """가장 큰 파일 표.
+
+        디렉터리 합계만 보면 300GB 짜리가 고른 파일 3천 개인지 한 파일이
+        280GB 인지 구분되지 않는다. 후자는 사람이 바로 손댈 수 있는 것이라
+        따로 보여 줄 값어치가 있다.
+        """
+
+        table = self.large_table
+        table.setRowCount(0)
+        snapshot = self._scan_snapshot
+        account_id = self.scan_account_combo.currentData()
+        if snapshot is None or not account_id:
+            self.large_caption.setText(i18n.t("large.no_scan"))
+            return
+        entry = next(
+            (item for item in snapshot.accounts if item.account_id == account_id), None
+        )
+        if entry is None:
+            self.large_caption.setText(i18n.t("large.no_scan"))
+            return
+
+        files = large_files.build(entry.large_files, entry.measured_kb)
+        if not files:
+            self.large_caption.setText(
+                i18n.t("large.none", account=entry.account_name)
+            )
+            return
+
+        self.large_caption.setText(i18n.t("large.heading"))
+        shown = files[:LARGE_ROWS_SHOWN]
+        table.setRowCount(len(shown))
+        dash = i18n.t("common.none")
+        for row, item in enumerate(shown):
+            path_item = QTableWidgetItem(item.path)
+            reasons = [
+                i18n.t(
+                    key,
+                    pct=f"{item.share_pct:.0f}" if item.share_pct else "-",
+                    ratio=(
+                        f"{item.size_kb / item.previous_kb:.1f}"
+                        if item.previous_kb else "-"
+                    ),
+                )
+                for key in item.reasons()
+            ]
+            if reasons:
+                path_item.setToolTip("\n".join(reasons))
+            table.setItem(row, LARGE_PATH, path_item)
+
+            table.setItem(
+                row, LARGE_SIZE,
+                widgets.NumericItem(formatting.format_kb(item.size_kb), item.size_kb),
+            )
+
+            share = item.share_pct
+            share_item = widgets.NumericItem(
+                f"{share:.1f}%" if share is not None else dash, share or 0
+            )
+            table.setItem(row, LARGE_SHARE, share_item)
+
+            if item.previous_kb is None:
+                change_item = QTableWidgetItem(i18n.t("large.new"))
+            else:
+                change_item = widgets.NumericItem(
+                    formatting.format_kb_delta(item.delta_kb), item.delta_kb
+                )
+            table.setItem(row, LARGE_CHANGE, change_item)
+
+            # 눈에 띄는 것만 색을 준다. 전부 칠하면 아무것도 강조되지 않는다.
+            if item.is_notable:
+                for column in range(len(LARGE_COLUMN_KEYS)):
+                    cell = table.item(row, column)
+                    if cell is not None:
+                        cell.setForeground(QColor(tiers.color(tiers.WARN)))
+
     def _on_scan_account_chosen(self) -> None:
         """콤보에서 계정을 고르면 현황 표의 해당 행도 함께 짚어 준다.
 
@@ -646,6 +760,7 @@ class ScanTab(QFrame):
         """
 
         self._refresh_growth_table()
+        self._refresh_large_files()
 
         account_id = self.scan_account_combo.currentData()
         table = self.scan_accounts_table

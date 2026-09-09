@@ -34,7 +34,16 @@ def _emit(signal, payload) -> None:
 
     try:
         signal.emit(payload)
-    except RuntimeError:
+    except Exception:
+        # RuntimeError("wrapped C/C++ object has been deleted") 가 대표적이지만,
+        # 종료 중에는 다른 모양으로도 나온다. 어느 쪽이든 **받을 쪽이 사라진
+        # 것**이라 할 일이 없다 - 여기서 예외가 새면 daemon 스레드가 죽으면서
+        # 종료 중에 스택트레이스가 찍히고, 사용자에게는 "닫았더니 터졌다"로
+        # 보인다.
+        #
+        # 슬롯 안의 진짜 오류를 삼키지는 않는다. 이 신호들은 작업 스레드에서
+        # GUI 스레드로 가는 큐 연결이라, 슬롯 예외는 애초에 여기로 돌아오지
+        # 않는다.
         pass
 
 
