@@ -21,7 +21,7 @@ from . import dashboard, nightly_scan
 from .cycle import run_collection_cycle
 
 
-def _emit(signal, payload) -> None:
+def _emit(owner, signal_name: str, payload) -> None:
     """작업 스레드에서 신호를 보낸다. 받을 쪽이 이미 사라졌으면 조용히 만다.
 
     창을 닫는 순간 흔히 일어난다 - 위젯(과 그 자식인 워커)의 C++ 쪽은 이미
@@ -29,11 +29,18 @@ def _emit(signal, payload) -> None:
     던지고, 그것이 스레드 밖으로 나가면 종료 중에 스택트레이스가 찍힌다.
     사용자에게는 "닫았더니 뭔가 터졌다"로 보인다.
 
+    **신호를 객체째 받지 않고 이름으로 받는 이유가 있다.** 예전에는
+    신호 객체를 그대로 넘겼는데, 그 인자를 만들며 속성을 읽는 것 자체가 이미
+    지워진 객체에서는 RuntimeError 를 던진다. 인자를 만드는 동안 터지므로
+    이 함수 안에 들어오지도 못했고, 결국 막으려던 스택트레이스가 그대로
+    찍혔다 - 게다가 except 절의 `self.failed` 에서 한 번 더 터져
+    "During handling of the above exception" 까지 붙었다.
+
     할 일이 없어진 것뿐이므로 삼키는 것이 맞다.
     """
 
     try:
-        signal.emit(payload)
+        getattr(owner, signal_name).emit(payload)
     except Exception:
         # RuntimeError("wrapped C/C++ object has been deleted") 가 대표적이지만,
         # 종료 중에는 다른 모양으로도 나온다. 어느 쪽이든 **받을 쪽이 사라진
@@ -75,9 +82,9 @@ class CollectorWorker(QObject):
     def _run(self) -> None:
         try:
             records = run_collection_cycle(self._data_dir, self._get_config())
-            _emit(self.finished, records)
+            _emit(self, "finished", records)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            _emit(self.failed, str(exc))
+            _emit(self, "failed", str(exc))
         finally:
             with self._lock:
                 self._running = False
@@ -127,9 +134,9 @@ class ScanStatusWorker(QObject):
     def _run(self) -> None:
         try:
             snapshot = nightly_scan.get_status_snapshot(self._data_dir, self._get_config())
-            _emit(self.finished, snapshot)
+            _emit(self, "finished", snapshot)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            _emit(self.failed, str(exc))
+            _emit(self, "failed", str(exc))
         finally:
             with self._lock:
                 self._running = False
@@ -179,9 +186,9 @@ class DashboardWorker(QObject):
 
     def _run(self) -> None:
         try:
-            _emit(self.finished, self._read())
+            _emit(self, "finished", self._read())
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            _emit(self.failed, str(exc))
+            _emit(self, "failed", str(exc))
         finally:
             with self._lock:
                 self._running = False
@@ -270,9 +277,9 @@ class NightlyScanWorker(QObject):
                 triggered_by="gui",
                 bypass_window=bypass_window,
             )
-            _emit(self.finished, summary)
+            _emit(self, "finished", summary)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            _emit(self.failed, str(exc))
+            _emit(self, "failed", str(exc))
         finally:
             with self._lock:
                 self._running = False

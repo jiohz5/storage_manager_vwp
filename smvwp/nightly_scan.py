@@ -1045,6 +1045,9 @@ class AccountScanSnapshot:
     # 계속 커진다 - "얼마나 찾았나"에 답하는 값이다. 아직 하나도 못 쟀으면
     # None (0과 '모름'은 다르다).
     measured_kb: Optional[int] = None
+    # 직전 세대의 같은 값. 계정이 밤새 얼마나 늘었는지는 이 둘의 차이라야
+    # 나온다 - 경로별 증감을 더하면 부모와 자식을 겹쳐 세게 된다.
+    previous_measured_kb: Optional[int] = None
     # 남은 체크포인트를 다 도는 데 걸릴 **대략의** 시간(초). 이 실행이 실제로
     # 낸 속도의 중앙값 x 남은 개수다. 표본이 모자라면 None
     # (`scan_store.estimate_remaining_seconds` 참고).
@@ -1107,6 +1110,12 @@ def get_status_snapshot(
                     account_id=account.account_id,
                     account_name=account.name,
                     last_completed_generation=current_gen,
+                    previous_measured_kb=(
+                        scan_store.measured_total_kb(
+                            conn, account.account_id, previous_gen
+                        )
+                        if previous_gen else None
+                    ),
                     current_scan_at=(
                         scan_store.generation_completed_at(conn, account.account_id, current_gen)
                         if current_gen else None

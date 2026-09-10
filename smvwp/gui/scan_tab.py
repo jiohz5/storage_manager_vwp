@@ -31,6 +31,8 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
+    QListWidget,
+    QListWidgetItem,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -46,10 +48,10 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import auto_scan, config as config_module, cron_status, formatting, i18n
-from .. import large_files, usage_log
+from .. import large_files, scan_digest, usage_log
 from .. import nightly_scan, procio, tiers
 from ..scheduler import NightlyScanWorker, ScanStatusWorker
-from . import widgets
+from . import theme, widgets
 from .scan_progress_dialog import ScanProgressDialog
 
 # 스캔이 도는 동안에는 촘촘히, 멈춰 있으면 느슨하게 본다. 조회 하나가 계정마다
@@ -245,6 +247,7 @@ class ScanTab(QFrame):
             [i18n.t(key) for key in LARGE_COLUMN_KEYS]
         )
         self.tree_btn.setText(i18n.t("tree.btn.open"))
+        self.findings_caption.setText(i18n.t("digest.findings_heading"))
 
     def _build(self) -> None:
         """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
@@ -258,22 +261,33 @@ class ScanTab(QFrame):
         box.setContentsMargins(16, 14, 16, 14)
         box.setSpacing(9)
 
+        # 제목과 동작 버튼을 한 줄에 둔다. 따로 두면 그것만으로 두 줄이
+        # 나가는데, 이 화면은 세로가 모자란 쪽이다.
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
         self.scan_title_label = QLabel()
         self.scan_title_label.setObjectName("sectionTitle")
-        box.addWidget(self.scan_title_label)
+        title_row.addWidget(self.scan_title_label)
+        title_row.addStretch(1)
+        box.addLayout(title_row)
+        self._title_row = title_row
 
-        # 계정 선택은 이 탭 안에 둔다. 홈 표에서 고른 것과 서로 따라간다.
-        account_row = QHBoxLayout()
-        account_row.setSpacing(8)
-        self.scan_account_label = QLabel()
-        self.scan_account_label.setObjectName("muted")
-        self.scan_account_combo = QComboBox()
-        self.scan_account_combo.setMinimumWidth(200)
-        self.scan_account_combo.currentIndexChanged.connect(self._on_scan_account_chosen)
-        account_row.addWidget(self.scan_account_label)
-        account_row.addWidget(self.scan_account_combo)
-        account_row.addStretch(1)
-        box.addLayout(account_row)
+        # -- 요약 카드 --------------------------------------------------
+        #
+        # 표 셋을 읽고 스스로 요약을 만들라고 하면 대부분 안 읽는다. 아침에
+        # 사람이 실제로 묻는 넷을 카드 하나씩으로 세운다: 잘 돌았나, 얼마나
+        # 늘었나, 어느 계정이, 손댈 것이 있나. 근거는 아래 표에 그대로 있다.
+        cards = QHBoxLayout()
+        cards.setSpacing(10)
+        self.card_run = widgets.StatCard()
+        self.card_delta = widgets.StatCard()
+        self.card_biggest = widgets.StatCard()
+        self.card_findings = widgets.StatCard()
+        for card in (
+            self.card_run, self.card_delta, self.card_biggest, self.card_findings
+        ):
+            cards.addWidget(card, 1)
+        box.addLayout(cards)
 
         self.scan_status_label = QLabel()
         self.scan_status_label.setWordWrap(True)
@@ -323,12 +337,30 @@ class ScanTab(QFrame):
         # 묻게 되는데, 지금까지는 답할 자리가 없었다.
         self.tree_btn = QPushButton(i18n.t("tree.btn.open"))
         self.tree_btn.clicked.connect(self._open_tree)
-        scan_buttons.addWidget(self.scan_run_btn)
-        scan_buttons.addWidget(self.scan_stop_btn)
-        scan_buttons.addWidget(self.scan_detail_btn)
-        scan_buttons.addWidget(self.tree_btn)
-        scan_buttons.addStretch(1)
-        box.addLayout(scan_buttons)
+        # 동작 버튼은 제목 줄 오른쪽에 붙인다.
+        for button in (
+            self.scan_run_btn, self.scan_stop_btn,
+            self.scan_detail_btn, self.tree_btn,
+        ):
+            self._title_row.addWidget(button)
+        del scan_buttons
+
+        # -- 살펴볼 것 ---------------------------------------------------
+        #
+        # 실패·권한 부족·튀는 파일·크게 는 계정을 한 목록으로 모은다. 지금까지는
+        # 이것들이 표 셋에 흩어져 있어서, 급한 것이 표 밑으로 밀리면 아무도
+        # 못 봤다.
+        self.findings_caption = QLabel()
+        self.findings_caption.setObjectName("sectionTitle")
+        box.addWidget(self.findings_caption)
+
+        self.findings_list = QListWidget()
+        self.findings_list.setObjectName("findings")
+        self.findings_list.setFrameShape(QListWidget.NoFrame)
+        self.findings_list.setSelectionMode(QListWidget.NoSelection)
+        self.findings_list.setFocusPolicy(Qt.NoFocus)
+        self.findings_list.setMaximumHeight(150)
+        box.addWidget(self.findings_list)
 
         # -- 계정별 현황 ------------------------------------------------
         self.scan_accounts_caption = QLabel()
@@ -353,13 +385,39 @@ class ScanTab(QFrame):
         self.scan_accounts_table.itemSelectionChanged.connect(
             self._on_scan_account_row_selected
         )
-        self.scan_accounts_table.setMinimumHeight(140)
+        self.scan_accounts_table.setMinimumHeight(120)
         box.addWidget(self.scan_accounts_table)
+
+        # -- 세부 (한 계정) ----------------------------------------------
+        #
+        # 증가 경로와 큰 파일은 **같은 계정에 대한 두 관점**이라 나란히 두는
+        # 편이 읽힌다. 세로로 쌓으면 둘을 견주려고 스크롤을 오가야 한다.
+        detail_head = QHBoxLayout()
+        detail_head.setSpacing(8)
+        self.scan_account_label = QLabel()
+        self.scan_account_label.setObjectName("muted")
+        self.scan_account_combo = QComboBox()
+        self.scan_account_combo.setMinimumWidth(200)
+        self.scan_account_combo.currentIndexChanged.connect(self._on_scan_account_chosen)
+        detail_head.addWidget(self.scan_account_label)
+        detail_head.addWidget(self.scan_account_combo)
+        detail_head.addStretch(1)
+        box.addLayout(detail_head)
+
+        detail_row = QHBoxLayout()
+        detail_row.setSpacing(12)
+        growth_side = QVBoxLayout()
+        growth_side.setSpacing(6)
+        large_side = QVBoxLayout()
+        large_side.setSpacing(6)
+        detail_row.addLayout(growth_side, 1)
+        detail_row.addLayout(large_side, 1)
+        box.addLayout(detail_row, 1)
 
         self.growth_caption = QLabel()
         self.growth_caption.setObjectName("muted")
         self.growth_caption.setWordWrap(True)
-        box.addWidget(self.growth_caption)
+        growth_side.addWidget(self.growth_caption)
 
         self.growth_table = QTableWidget(0, len(GROWTH_COLUMN_KEYS))
         growth_header = self.growth_table.horizontalHeader()
@@ -384,14 +442,14 @@ class ScanTab(QFrame):
         )
         # 이 표는 보조 정보다. 최소 높이를 낮게 잡아 두지 않으면 계정 표(이
         # 화면의 주인공)를 아래에서 밀어 올려 행이 잘린다.
-        self.growth_table.setMinimumHeight(80)
-        box.addWidget(self.growth_table)
+        self.growth_table.setMinimumHeight(120)
+        growth_side.addWidget(self.growth_table, 1)
 
         self.large_caption = QLabel()
         self.large_caption.setObjectName("muted")
         self.large_caption.setWordWrap(True)
         self.large_caption.setToolTip(i18n.t("large.tip"))
-        box.addWidget(self.large_caption)
+        large_side.addWidget(self.large_caption)
 
         self.large_table = QTableWidget(0, len(LARGE_COLUMN_KEYS))
         large_header = self.large_table.horizontalHeader()
@@ -403,8 +461,8 @@ class ScanTab(QFrame):
         self.large_table.verticalHeader().setVisible(False)
         self.large_table.verticalHeader().setDefaultSectionSize(30)
         self.large_table.setShowGrid(False)
-        self.large_table.setMinimumHeight(80)
-        box.addWidget(self.large_table)
+        self.large_table.setMinimumHeight(120)
+        large_side.addWidget(self.large_table, 1)
 
     def _current_target_text(self, latest_run) -> str:
         """지금 훑고 있는 경로 한 줄."""
@@ -585,9 +643,150 @@ class ScanTab(QFrame):
 
         self.scan_run_btn.setEnabled(not running)
         self.scan_stop_btn.setEnabled(running)
+        self._refresh_digest(snapshot)
         self._refresh_scan_accounts_table(snapshot, running)
         self._refresh_growth_table()
         self._refresh_large_files()
+
+    # -- 요약 ------------------------------------------------------------
+    def _refresh_digest(self, snapshot) -> None:
+        """카드 넷과 살펴볼 것 목록.
+
+        아침에 사람이 실제로 묻는 것은 넷뿐이다 - 잘 돌았나, 얼마나 늘었나,
+        어느 계정이, 손댈 것이 있나. 표 셋을 읽고 스스로 요약을 만들게 하는
+        대신 답을 먼저 세운다."""
+
+        digest = scan_digest.build(snapshot)
+
+        # 1. 잘 돌았나
+        self.card_run.set_label(i18n.t("digest.run"))
+        if digest.is_running:
+            self.card_run.show_value(
+                i18n.t("digest.running"), i18n.t("digest.running_detail")
+            )
+        elif digest.scanned_at:
+            self.card_run.show_value(
+                formatting.scan_label(digest.scanned_at),
+                i18n.t(
+                    "digest.run_detail",
+                    status=self._status_text(digest.run_status),
+                    duration=self._duration_text(digest.run_seconds),
+                ),
+            )
+        else:
+            # 아직 한 번도 안 끝났다. '-' 를 세우고 무엇을 하면 되는지 적는다 -
+            # 빈 카드는 고장으로 읽힌다.
+            self.card_run.show_value("-", i18n.t("digest.never_run"))
+
+        # 2. 얼마나 늘었나
+        self.card_delta.set_label(i18n.t("digest.delta"))
+        if digest.total_delta_kb is None:
+            self.card_delta.show_value("-", i18n.t("digest.no_compare"))
+        else:
+            self.card_delta.show_value(
+                formatting.format_kb_delta(digest.total_delta_kb),
+                i18n.t("digest.delta_detail", count=digest.accounts_compared),
+                # 늘어난 것만 물들인다. 줄어든 것은 좋은 소식이라 경고가 아니다.
+                color=(
+                    tiers.color(tiers.WARN) if digest.total_delta_kb > 0 else None
+                ),
+            )
+
+        # 3. 어느 계정이
+        self.card_biggest.set_label(i18n.t("digest.biggest"))
+        biggest = digest.biggest
+        if biggest is None:
+            self.card_biggest.show_value("-", i18n.t("digest.no_compare"))
+        else:
+            self.card_biggest.show_value(
+                biggest.name,
+                i18n.t(
+                    "digest.biggest_detail",
+                    delta=formatting.format_kb_delta(biggest.delta_kb),
+                    total=formatting.format_kb(biggest.total_kb),
+                ),
+            )
+
+        # 4. 손댈 것
+        self.card_findings.set_label(i18n.t("digest.findings"))
+        if not digest.findings:
+            self.card_findings.show_value("0", i18n.t("digest.findings_none"))
+        else:
+            self.card_findings.show_value(
+                str(len(digest.findings)),
+                i18n.t("digest.findings_detail", urgent=digest.urgent_count),
+                color=tiers.color(tiers.ALERT) if digest.urgent_count else None,
+            )
+
+        self._refresh_findings(digest)
+
+    def _refresh_findings(self, digest) -> None:
+        self.findings_caption.setText(i18n.t("digest.findings_heading"))
+        self.findings_list.clear()
+        if not digest.findings:
+            item = QListWidgetItem(i18n.t("digest.findings_empty"))
+            item.setForeground(QColor(theme.TEXT_MUTED))
+            self.findings_list.addItem(item)
+            return
+        for finding in digest.findings:
+            item = QListWidgetItem(self._finding_text(finding))
+            if finding.urgent:
+                item.setForeground(QColor(tiers.color(tiers.ALERT)))
+            if finding.path:
+                item.setToolTip(finding.path)
+            self.findings_list.addItem(item)
+
+    def _finding_text(self, finding) -> str:
+        """살펴볼 것 한 줄을 사람 문장으로.
+
+        표의 한 행이 아니라 문장으로 쓰는 것은 의도다 - 이 목록은 훑어보라고
+        있는 것이고, 훑을 때는 열을 따라 읽는 것보다 문장이 빠르다."""
+
+        if finding.kind == scan_digest.FINDING_FAILED:
+            return i18n.t(
+                "digest.item.failed", account=finding.account, count=finding.count
+            )
+        if finding.kind == scan_digest.FINDING_PARTIAL:
+            return i18n.t(
+                "digest.item.partial", account=finding.account, count=finding.count
+            )
+        if finding.kind == scan_digest.FINDING_LARGE_FILE:
+            change = (
+                formatting.format_kb_delta(finding.delta_kb)
+                if finding.delta_kb is not None
+                else i18n.t("large.new")
+            )
+            return i18n.t(
+                "digest.item.large_file",
+                account=finding.account,
+                name=finding.path.rsplit("/", 1)[-1],
+                size=formatting.format_kb(finding.size_kb),
+                change=change,
+            )
+        return i18n.t(
+            "digest.item.growth",
+            account=finding.account,
+            delta=formatting.format_kb_delta(finding.delta_kb),
+            total=formatting.format_kb(finding.size_kb),
+        )
+
+    def _status_text(self, status) -> str:
+        """실행 상태를 사람 말로. 모르는 값은 그대로 보여 준다."""
+
+        if not status:
+            return i18n.t("common.none")
+        key = f"digest.status.{status}"
+        text = i18n.t(key)
+        return status if text == key else text
+
+    def _duration_text(self, seconds) -> str:
+        if seconds is None:
+            return i18n.t("common.none")
+        hours, rest = divmod(int(seconds), 3600)
+        minutes = rest // 60
+        if hours:
+            return i18n.t("digest.duration_hm", hours=hours, minutes=minutes)
+        return i18n.t("digest.duration_m", minutes=minutes)
 
     def _refresh_scan_accounts_table(self, snapshot, running: bool) -> None:
         """계정별 진행·측정량·예상 남은 시간을 한 표로 보여준다."""

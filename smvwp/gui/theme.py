@@ -173,6 +173,9 @@ QLabel#caption {{ color: {TEXT_MUTED}; font-size: {FONT_CAPTION}px; }}
 QLabel#captionWarn {{ color: {DANGER}; font-size: {FONT_CAPTION}px; }}
 QLabel#statLabel {{ color: {TEXT_MUTED}; font-size: {FONT_CAPTION}px; }}
 QLabel#statValue {{ font-size: {FONT_TITLE}px; font-weight: {WEIGHT_HEAVY}; }}
+/* 살펴볼 것 목록: 카드 위에 얹히므로 자기 배경과 테두리를 갖지 않는다. */
+QListWidget#findings {{ background: transparent; border: none; }}
+QListWidget#findings::item {{ padding: 3px 2px; }}
 
 /* ---------- 버튼 ---------- */
 QPushButton {{

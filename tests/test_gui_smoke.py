@@ -447,3 +447,123 @@ class LargeFilesTableTests(_GuiCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class ScanDigestSmokeTests(_GuiCase):
+    """상세 스캔 탭 위의 요약 층.
+
+    표 셋을 읽고 스스로 요약을 만들라고 하면 대부분 안 읽는다. 카드 넷과
+    한 목록이 그 요약이고, **여기서 보는 것은 그것이 실제로 채워지는가**다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.tab = self.window._scan_tab
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def snapshot(self, *accounts, run=None, running=False):
+        from dataclasses import dataclass, field
+        from typing import List, Optional
+
+        @dataclass
+        class Snap:
+            accounts: list
+            latest_run: Optional[dict] = None
+            is_running: bool = False
+            window_description: str = ""
+
+        return Snap(list(accounts), run, running)
+
+    def account(self, name="proj", measured=None, previous=None, **kwargs):
+        from dataclasses import dataclass, field
+        from typing import List, Optional
+
+        @dataclass
+        class Acct:
+            account_id: str = "a1"
+            account_name: str = "proj"
+            measured_kb: Optional[int] = None
+            previous_measured_kb: Optional[int] = None
+            current_scan_at: Optional[str] = "2026-09-10T00:00:00+00:00"
+            large_files: List[tuple] = field(default_factory=list)
+            failed_count: int = 0
+            partial_paths: List[str] = field(default_factory=list)
+
+        return Acct(
+            account_name=name, measured_kb=measured, previous_measured_kb=previous,
+            **kwargs
+        )
+
+    def findings_text(self):
+        return [
+            self.tab.findings_list.item(row).text()
+            for row in range(self.tab.findings_list.count())
+        ]
+
+    def test_the_four_cards_exist(self):
+        for card in (
+            self.tab.card_run, self.tab.card_delta,
+            self.tab.card_biggest, self.tab.card_findings,
+        ):
+            self.assertTrue(card.isVisibleTo(self.tab))
+
+    def test_growth_lands_in_the_card(self):
+        gb = 1024 * 1024
+        self.tab._refresh_digest(
+            self.snapshot(self.account(measured=900 * gb, previous=700 * gb))
+        )
+        self.assertIn("GB", self.tab.card_delta.value.text())
+        self.assertIn("+", self.tab.card_delta.value.text())
+
+    def test_without_a_previous_scan_the_card_says_dash_not_zero(self):
+        """0 을 세우면 '안 늘었다'가 되는데 사실은 '견줄 것이 없다'이다."""
+
+        gb = 1024 * 1024
+        self.tab._refresh_digest(self.snapshot(self.account(measured=900 * gb)))
+        self.assertEqual(self.tab.card_delta.value.text(), "-")
+
+    def test_the_biggest_account_is_named(self):
+        gb = 1024 * 1024
+        self.tab._refresh_digest(self.snapshot(
+            self.account(name="small", measured=110 * gb, previous=100 * gb),
+            self.account(name="huge", measured=900 * gb, previous=200 * gb),
+        ))
+        self.assertEqual(self.tab.card_biggest.value.text(), "huge")
+
+    def test_a_failure_shows_up_in_the_list(self):
+        self.tab._refresh_digest(
+            self.snapshot(self.account(name="broken", failed_count=2))
+        )
+        self.assertTrue(any("broken" in line for line in self.findings_text()))
+
+    def test_nothing_to_report_still_says_something(self):
+        """빈 목록은 고장으로 읽힌다 - 없다는 것도 말해 줘야 한다."""
+
+        self.tab._refresh_digest(self.snapshot())
+        self.assertEqual(len(self.findings_text()), 1)
+        self.assertTrue(self.findings_text()[0])
+
+    def test_no_translation_keys_leak(self):
+        gb = 1024 * 1024
+        self.tab._refresh_digest(self.snapshot(
+            self.account(measured=900 * gb, previous=100 * gb, failed_count=1),
+            run={"status": "completed",
+                 "started_at": "2026-09-09T13:00:00+00:00",
+                 "ended_at": "2026-09-09T20:10:00+00:00"},
+        ))
+        text = " ".join([
+            self.tab.card_run.value.text(), self.tab.card_run.detail.text(),
+            self.tab.card_delta.detail.text(), self.tab.card_biggest.detail.text(),
+            self.tab.card_findings.detail.text(), self.tab.findings_caption.text(),
+        ] + self.findings_text())
+        self.assertNotIn("digest.", text)
+
+    def test_an_unknown_run_status_is_shown_as_is(self):
+        """번역이 없는 상태값이 `digest.status.xyz` 로 뜨면 읽는 사람이 당황한다."""
+
+        self.assertEqual(self.tab._status_text("weird_state"), "weird_state")

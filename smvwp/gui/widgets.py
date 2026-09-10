@@ -11,11 +11,13 @@ from typing import Optional
 from PyQt5.QtCore import QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QStyle,
     QStyledItemDelegate,
     QTableWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -186,3 +188,47 @@ class UsageBar(QWidget):
                 QRectF(track_left, top, filled, self.BAR_HEIGHT), radius, radius
             )
         painter.end()
+
+
+class StatCard(QFrame):
+    """숫자 하나를 크게 세우는 작은 카드.
+
+    표를 읽고 스스로 요약을 만들게 하는 대신 **답을 먼저 보여 주기** 위한
+    것이다. 한 카드에 값 하나만 둔다 - 둘을 넣으면 어느 쪽이 답인지 흐려진다.
+
+    값이 없으면 '-' 를 세운다. 0 을 세우면 "없다"가 되는데 "아직 모른다"와는
+    다른 이야기다.
+    """
+
+    def __init__(self, label: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("card")
+        box = QVBoxLayout(self)
+        box.setContentsMargins(14, 10, 14, 10)
+        box.setSpacing(1)
+
+        self.label = QLabel(label)
+        self.label.setObjectName("statLabel")
+        box.addWidget(self.label)
+
+        self.value = QLabel("-")
+        self.value.setObjectName("statValue")
+        box.addWidget(self.value)
+
+        self.detail = QLabel("")
+        self.detail.setObjectName("caption")
+        self.detail.setWordWrap(True)
+        box.addWidget(self.detail)
+
+    def set_label(self, text: str) -> None:
+        self.label.setText(text)
+
+    def show_value(self, value: str, detail: str = "", color: Optional[str] = None):
+        """값과 그 밑의 한 줄을 세운다. `color` 를 주면 값만 물들인다.
+
+        설명까지 같이 물들이면 카드 전체가 경고처럼 보여서, 정작 급한 카드와
+        구분이 안 된다."""
+
+        self.value.setText(value if value else "-")
+        self.detail.setText(detail)
+        self.value.setStyleSheet(f"color: {color};" if color else "")
