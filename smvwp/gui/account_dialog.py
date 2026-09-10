@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import config as config_module
-from .. import i18n, readability, scan_store
+from .. import formatting, i18n, readability, scan_store
 from . import theme
 
 # 계정 경로의 관례 접두사. 이름을 입력하면 `<접두사><이름>`으로 경로를 채워
@@ -117,7 +117,7 @@ def _short_date(iso_text) -> str:
 
     if not iso_text:
         return ""
-    return str(iso_text)[:10]
+    return formatting.local_date_text(iso_text, fallback="")
 
 
 class AccountDialog(QDialog):

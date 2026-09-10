@@ -712,9 +712,9 @@ class MainWindow(QMainWindow):
             time_item = QTableWidgetItem(
                 freshness.format_age(status_info.age_seconds)
                 if status_info is not None and status_info.age_seconds is not None
-                else sample.collected_at
+                else formatting.local_minute_text(sample.collected_at)
             )
-            time_item.setToolTip(sample.collected_at)
+            time_item.setToolTip(formatting.local_datetime_text(sample.collected_at))
             if status_info is not None and status_info.needs_attention:
                 time_item.setForeground(QColor(tiers.color(tiers.ALERT)))
             self.table.setItem(row, COL_TIME, time_item)

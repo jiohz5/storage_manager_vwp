@@ -12,9 +12,82 @@ Qt 를 쓰지 않는 코드가 Qt 파일 안에 있으면 그 코드는 영원�
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from . import i18n, tiers
+
+
+# ---------------------------------------------------------------------------
+# 시각 - 저장은 UTC, 표시는 지역시간
+# ---------------------------------------------------------------------------
+#
+# 모든 시각은 UTC로 저장한다(`scan_store.utc_now_iso`). 그래야 서머타임이나
+# 서버 시간대 변경에 흔들리지 않고, 구간 계산이 언제나 옳다.
+#
+# 그런데 **화면과 보고서는 그것을 그대로 잘라 쓰고 있었다.** 한국시간은
+# UTC+9 라, 오전 9시에 돌린 스캔이 `00:00` 으로 나왔다. 밤 0시~9시 사이에
+# 일어난 일은 **날짜까지 하루 전으로** 나왔는데, 이 도구의 말투가 온통
+# "260819 스캔"과 밤 시간창이라 특히 나쁘다.
+#
+# 문자열을 자르는 방식은 이 오류를 눈에 안 띄게 만든다 - `[:19]` 는 어떤
+# ISO 문자열이든 그럴듯한 결과를 내놓기 때문이다. 그래서 자르지 않고 반드시
+# 여기를 거치게 한다.
+
+
+def to_local(iso_text, tz=None) -> Optional[datetime]:
+    """저장된 ISO 문자열을 지역시간 `datetime` 으로. 못 읽으면 None.
+
+    시간대 정보가 없는 값은 UTC로 본다 - 이 프로그램이 쓰는 모든 시각이
+    UTC이고, 지역시간으로 잘못 보면 9시간이 더 밀린다.
+
+    `tz` 를 주면 그 시간대로 바꾼다. 평소에는 쓰지 않지만(장비의 시간대를
+    따르는 것이 맞다) **시험이 개발 PC 의 시간대에 기대지 않게** 하려면
+    필요하다. 이 이음매가 없으면 정작 문제가 났던 한국시간 경우가 반입
+    장비에서만 돌고 개발 PC 에서는 건너뛰어진다."""
+
+    if not iso_text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(iso_text))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    try:
+        return parsed.astimezone(tz)
+    except (OSError, ValueError):  # pragma: no cover - 시간대 설정이 깨진 장비
+        return parsed
+
+
+def local_datetime_text(iso_text, fallback: str = "-", tz=None) -> str:
+    """`2026-09-10 09:00:00` (지역시간)."""
+
+    moment = to_local(iso_text, tz)
+    return moment.strftime("%Y-%m-%d %H:%M:%S") if moment else fallback
+
+
+def local_minute_text(iso_text, fallback: str = "-", tz=None) -> str:
+    """`2026-09-10 09:00` - 초까지 볼 이유가 없는 곳에서."""
+
+    moment = to_local(iso_text, tz)
+    return moment.strftime("%Y-%m-%d %H:%M") if moment else fallback
+
+
+def local_date_text(iso_text, fallback: str = "-", tz=None) -> str:
+    """`2026-09-10` (지역시간 기준 날짜).
+
+    UTC 날짜를 그대로 쓰면 새벽 0~9시에 일어난 일이 전날로 적힌다."""
+
+    moment = to_local(iso_text, tz)
+    return moment.strftime("%Y-%m-%d") if moment else fallback
+
+
+def local_clock_text(iso_text, fallback: str = "-", tz=None) -> str:
+    """`09:00` - 시각만."""
+
+    moment = to_local(iso_text, tz)
+    return moment.strftime("%H:%M") if moment else fallback
 
 
 def tier_badge_text(tier: str, pct: Optional[float]) -> str:
@@ -42,7 +115,7 @@ def format_kb(size_kb: Optional[int]) -> str:
 
 
 
-def scan_label(completed_at, fallback_generation=None) -> str:
+def scan_label(completed_at, fallback_generation=None, tz=None) -> str:
     """스캔을 가리키는 이름. 완료 시각이 있으면 **날짜**로, 없으면 회차 번호로.
 
     "3번째 스캔"은 내부 번호라 사용자에게 기준점이 못 된다. "260819 스캔"은
@@ -51,15 +124,14 @@ def scan_label(completed_at, fallback_generation=None) -> str:
     한국어는 사내 관례대로 `YYMMDD`, 영어는 오해가 없도록 `YYYY-MM-DD`를 쓴다.
     """
 
-    if completed_at:
-        text = str(completed_at)
-        try:
-            year, month, day = text[:4], text[5:7], text[8:10]
-            if i18n.get_language() == i18n.KOREAN:
-                return f"{year[2:]}{month}{day}"
-            return f"{year}-{month}-{day}"
-        except (IndexError, ValueError):  # pragma: no cover - 방어적 처리
-            pass
+    moment = to_local(completed_at, tz)
+    if moment is not None:
+        # 지역시간으로 바꾼 뒤 날짜를 뗀다. UTC 날짜를 그대로 쓰면 새벽에 끝난
+        # 스캔이 전날 것으로 불린다 - 이름이 하루 어긋나면 사람은 그 스캔을
+        # 아예 다른 날 것으로 기억한다.
+        if i18n.get_language() == i18n.KOREAN:
+            return moment.strftime("%y%m%d")
+        return moment.strftime("%Y-%m-%d")
     if fallback_generation is not None:
         return i18n.t("scan.nth", n=fallback_generation)
     return i18n.t("common.none")

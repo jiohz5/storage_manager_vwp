@@ -245,14 +245,21 @@ class ReportPicksTheRightRunTests(unittest.TestCase):
     def test_the_headline_says_which_run_it_was(self):
         """'이 숫자가 무엇의 것인가'에 답이 되어야 한다."""
 
+        from datetime import datetime
+
         from smvwp import i18n, reports
 
         i18n.set_language("ko")
-        run = self._add_run(
-            "night", "cron", "2026-08-24T22:00:00+00:00", "2026-08-25T05:10:00+00:00"
-        )
+        # 저장은 UTC. 밤 10시 스캔은 한국시간 기준이므로 UTC 로는 13:00 이다.
+        # 예전에는 여기에 22:00+00:00 을 적고 현지 22시인 양 읽었는데, 그것이
+        # 화면에 오전 9시를 00:00 으로 띄우던 착각과 같은 것이다.
+        started = "2026-08-24T13:00:00+00:00"
+        run = self._add_run("night", "cron", started, "2026-08-24T20:10:00+00:00")
         line = reports._run_headline(run)
-        self.assertIn("2026-08-24 22:00", line)
+        # 기대값을 표준 라이브러리로 따로 구한다 - 구현이 문자열 자르기로
+        # 되돌아가면 어긋나고, 이 컴퓨터의 시간대와도 무관하다.
+        expected = datetime.fromisoformat(started).astimezone().strftime("%Y-%m-%d %H:%M")
+        self.assertIn(expected, line)
         self.assertIn("cron", line)
         self.assertIn("7시간", line)      # 22:00 -> 05:10
         self.assertIn("completed", line)

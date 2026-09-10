@@ -175,7 +175,9 @@ class ScanProgressDialog(QDialog):
             self.table.setItem(index, COL_RESULT, result_item)
 
             scanned = row["scanned_at"]
-            time_item = QTableWidgetItem(str(scanned)[:19].replace("T", " ") if scanned else dash)
+            time_item = QTableWidgetItem(
+                formatting.local_datetime_text(scanned, fallback=dash)
+            )
             if not scanned:
                 time_item.setForeground(QColor(theme.TEXT_FAINT))
             self.table.setItem(index, COL_TIME, time_item)

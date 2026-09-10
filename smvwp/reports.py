@@ -278,7 +278,7 @@ def _append_progress(lines: List[str], conn, account_id: str, generation: int) -
 
     last = scan_store.last_processed(conn, account_id, scan_store.BASELINE, generation)
     if last is not None:
-        when = str(last["scanned_at"])[:19].replace("T", " ")
+        when = formatting.local_datetime_text(last["scanned_at"])
         size = _fmt_kb(last["size_kb"]) if last["size_kb"] is not None else "-"
         lines.append(
             f"    {i18n.t('reports.scan_last_path', when=when, size=size)}"
@@ -831,7 +831,7 @@ def _run_seconds(run):
 def _run_headline(run) -> str:
     """`22:00 시작 · cron · 7시간 12분 · completed` 한 줄."""
 
-    started = (run["started_at"] or "")[:19].replace("T", " ")
+    started = formatting.local_datetime_text(run["started_at"])
     seconds = _run_seconds(run)
     return i18n.t(
         "reports.resource_run",
@@ -1220,7 +1220,7 @@ def _append_night_comparison(lines: List[str], data_dir: Path) -> None:
     lines.append(detail_header)
     for night in nights[:NIGHT_DETAIL_ROWS]:
         lines.append(
-            pad(night.started_at[:10], 13)
+            pad(formatting.local_date_text(night.started_at), 13)
             + pad(
                 i18n.t(
                     "reports.night_weekend" if night.weekend_night else "reports.night_weekday"

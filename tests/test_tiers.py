@@ -1,4 +1,5 @@
 import unittest
+from datetime import timedelta, timezone
 
 from smvwp import i18n, tiers
 
@@ -182,20 +183,40 @@ class ScanLabelTests(unittest.TestCase):
 
     `3번째 스캔`은 사용자에게 아무 기준점이 못 되지만 `260819 스캔`은 그날
     무슨 일이 있었는지와 바로 연결된다.
+
+    시간대를 못박고 시험한다. 예전에는 UTC 문자열을 적어 놓고 현지 시각인 양
+    읽었는데, 그것이 바로 화면에 오전 9시를 `00:00` 으로 띄우던 착각이다.
+    시간대 규칙 자체는 `test_local_time.py` 가 맡는다.
     """
 
     def test_korean_uses_yymmdd(self):
         from smvwp import formatting as widgets
 
         i18n.set_language(i18n.KOREAN)
-        self.assertEqual(widgets.scan_label("2026-08-19T22:31:05+00:00"), "260819")
+        self.assertEqual(
+            widgets.scan_label("2026-08-19T22:31:05+00:00", tz=timezone.utc), "260819"
+        )
+
+    def test_the_name_follows_the_local_date_not_the_stored_one(self):
+        """한국시간으로는 이미 다음 날 아침이다 - 이름도 그날 것이어야 한다."""
+
+        from smvwp import formatting as widgets
+
+        i18n.set_language(i18n.KOREAN)
+        kst = timezone(timedelta(hours=9))
+        self.assertEqual(
+            widgets.scan_label("2026-08-19T22:31:05+00:00", tz=kst), "260820"
+        )
 
     def test_english_uses_iso_date(self):
         from smvwp import formatting as widgets
 
         i18n.set_language(i18n.ENGLISH)
         try:
-            self.assertEqual(widgets.scan_label("2026-08-19T22:31:05+00:00"), "2026-08-19")
+            self.assertEqual(
+                widgets.scan_label("2026-08-19T22:31:05+00:00", tz=timezone.utc),
+                "2026-08-19",
+            )
         finally:
             i18n.set_language(i18n.KOREAN)
 

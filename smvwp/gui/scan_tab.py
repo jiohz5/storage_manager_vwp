@@ -498,7 +498,11 @@ class ScanTab(QFrame):
         latest = snapshot.latest_run
         if latest:
             parts.append(
-                i18n.t("scan.latest_run", status=latest["status"], started_at=latest["started_at"][:19])
+                i18n.t(
+                    "scan.latest_run",
+                    status=latest["status"],
+                    started_at=formatting.local_datetime_text(latest["started_at"]),
+                )
             )
         pending_total = sum(
             item.pending_baseline_count + item.pending_activity_count for item in snapshot.accounts
