@@ -505,7 +505,15 @@ def _print_scan_status(data_dir, config) -> int:
     작업 비율과 체크포인트 하나에 걸린 시간.
     """
 
-    from smvwp import scan_store
+    from smvwp import formatting, scan_store
+
+    # 어느 엔진으로 재고 있는지부터 적는다. 설정 파일을 열어 보지 않으면 알 수
+    # 없었는데, "지금 du 로 도는 건가 순회로 도는 건가"는 속도를 이야기할 때
+    # 가장 먼저 나오는 질문이다.
+    engine = config.settings.scan_engine
+    engine_note = "파이썬 순회" if engine == config_module.SCAN_ENGINE_PYTHON else "du 실행"
+    print(f"측정 엔진  {engine} ({engine_note})")
+    print()
 
     conn = scan_store.connect(data_dir)
     try:
@@ -521,7 +529,9 @@ def _print_scan_status(data_dir, config) -> int:
         if weekend is not None:
             night = "주말 밤" if weekend else "평일 밤"
         print(f"최근 실행  {run['run_id']}  상태={run['status']}")
-        print(f"  시작 {str(run['started_at'])[:19]}  종료 {str(run['ended_at'] or '-')[:19]}")
+        started = formatting.local_datetime_text(run["started_at"])
+        ended = formatting.local_datetime_text(run["ended_at"])
+        print(f"  시작 {started}  종료 {ended}")
         print(f"  {night} · 동시 볼륨 {parallel or 1}개")
         print()
 
