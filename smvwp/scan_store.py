@@ -245,6 +245,26 @@ CREATE TABLE IF NOT EXISTS server_sample_mounts (
     PRIMARY KEY (sample_id, mount_point)
 );
 
+-- 누가 이 도구를 어떻게 쓰는지.
+--
+-- 몇 명이 쓸지, 무엇을 보러 들어오는지, 스캔을 직접 돌리는 사람이 있는지가
+-- 아직 미지수다. 물어봐서 알 수 있는 것이 아니라(사람은 자기가 무엇을 얼마나
+-- 쓰는지 잘 기억하지 못한다) 쓰는 순간을 그때그때 남긴다.
+--
+-- **굵직한 행동만** 남긴다. 탭을 옮긴 것까지 남기면 행 수만 불고 정작 알고
+-- 싶은 것이 잡음에 묻힌다. 검색을 했다는 사실은 남기되 무엇을 검색했는지는
+-- 남기지 않는다.
+CREATE TABLE IF NOT EXISTS usage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    happened_at TEXT NOT NULL,
+    user_name TEXT,
+    host_name TEXT,
+    action TEXT NOT NULL,
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_time
+    ON usage_events(happened_at);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
@@ -1483,6 +1503,91 @@ def prune_server_samples(
     cursor = conn.execute(
         "DELETE FROM server_samples WHERE sampled_at < ?" + scope, (cutoff,) + extra
     )
+    conn.commit()
+    return cursor.rowcount
+
+
+# ---------------------------------------------------------------------------
+# 사용 기록
+# ---------------------------------------------------------------------------
+
+
+def usage_events(
+    conn: sqlite3.Connection,
+    since: Optional[str] = None,
+    limit: int = 500,
+) -> List[sqlite3.Row]:
+    """최근 사용 기록 (최신순)."""
+
+    where, params = ("WHERE happened_at >= ?", [since]) if since else ("", [])
+    params.append(limit)
+    return conn.execute(
+        "SELECT * FROM usage_events " + where + " ORDER BY happened_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+
+
+def _local_offset_modifier() -> str:
+    """저장된 UTC 시각을 지역시간으로 옮기는 SQLite 수정자 (`'+9 hours'`).
+
+    날짜별로 묶을 때 필요하다. UTC 날짜로 묶으면 한국시간 기준 새벽 0~9시에
+    한 일이 **전날 것으로 세어진다** - 아침 일찍 쓰는 사람의 '연속으로 쓴 날'이
+    실제보다 적게 나온다.
+
+    고정 오프셋이라 서머타임이 있는 지역에서는 경계에서 어긋난다. 한국은
+    서머타임이 없어 문제가 없고, 이 값은 '며칠 썼나'를 세는 데만 쓰이므로
+    하루 어긋나도 해석이 무너지지는 않는다."""
+
+    offset = datetime.now().astimezone().utcoffset()
+    minutes = int(offset.total_seconds() // 60) if offset else 0
+    return f"{minutes:+d} minutes"
+
+
+def usage_by_user(
+    conn: sqlite3.Connection, since: Optional[str] = None
+) -> List[sqlite3.Row]:
+    """사람별 요약 - 몇 번, 며칠, 언제부터 언제까지.
+
+    **며칠 썼는가(`days`)를 횟수와 따로 센다.** 하루에 창을 열 번 연 사람과
+    열흘 동안 매일 한 번씩 연 사람은 횟수가 같아도 전혀 다른 이야기다 -
+    뒤쪽만이 이 도구가 일과에 들어갔다는 뜻이다.
+
+    날짜는 **지역시간 기준**으로 센다 (`_local_offset_modifier` 참고)."""
+
+    where, params = ("WHERE happened_at >= ?", [since]) if since else ("", [])
+    params = list(params)
+    params.insert(0, _local_offset_modifier())
+    return conn.execute(
+        "SELECT user_name, COUNT(*) AS events, "
+        "COUNT(DISTINCT date(happened_at, ?)) AS days, "
+        "MIN(happened_at) AS first_seen, MAX(happened_at) AS last_seen "
+        "FROM usage_events " + where + " "
+        "GROUP BY user_name ORDER BY events DESC",
+        params,
+    ).fetchall()
+
+
+def usage_by_action(
+    conn: sqlite3.Connection, since: Optional[str] = None
+) -> List[sqlite3.Row]:
+    """무엇을 하러 들어오는가.
+
+    쓰는 사람 수(`users`)를 함께 센다 - 한 사람이 백 번 쓴 기능과 열 사람이
+    열 번씩 쓴 기능은 같은 숫자라도 뜻이 다르다."""
+
+    where, params = ("WHERE happened_at >= ?", [since]) if since else ("", [])
+    return conn.execute(
+        "SELECT action, COUNT(*) AS events, "
+        "COUNT(DISTINCT user_name) AS users, MAX(happened_at) AS last_seen "
+        "FROM usage_events " + where + " "
+        "GROUP BY action ORDER BY events DESC",
+        params,
+    ).fetchall()
+
+
+def prune_usage_events(conn: sqlite3.Connection, retention_days: int) -> int:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    cursor = conn.execute("DELETE FROM usage_events WHERE happened_at < ?", (cutoff,))
     conn.commit()
     return cursor.rowcount
 

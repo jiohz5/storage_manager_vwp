@@ -56,6 +56,7 @@ GUI 없이 수집만 하려면 아래 하위 명령은 GUI 툴킷 없이도 동�
 
   ./smvwp_cli.py collect
   ./smvwp_cli.py load                    # 쌓인 서버 부하 이력 보기
+  ./smvwp_cli.py usage                   # 누가 이 도구를 얼마나 쓰는지
   ./smvwp_cli.py scan
 """
 
@@ -349,6 +350,83 @@ def command_load(args) -> int:
     return 0
 
 
+# -- usage -----------------------------------------------------------------
+#
+# 이 도구를 어떻게 안착시킬지가 아직 미지수다 - 몇 명이 쓸지, 무엇을 보러
+# 들어오는지, 스캔을 직접 돌리는 사람이 있는지. 감으로 정하면 아무도 안 쓰는
+# 기능에 공을 들이게 된다.
+
+
+def command_usage(args) -> int:
+    from smvwp import formatting, scan_store
+    from smvwp.reports import pad
+    from datetime import datetime, timedelta, timezone
+
+    data_dir = _resolve_or_fail(args.data_dir)
+    since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat()
+
+    conn = scan_store.connect(data_dir)
+    try:
+        people = scan_store.usage_by_user(conn, since=since)
+        actions = scan_store.usage_by_action(conn, since=since)
+        if not people:
+            print(f"최근 {args.days}일 사용 기록이 없습니다.")
+            print("GUI 를 한 번도 열지 않았거나, 이 기능이 붙기 전 기간입니다.")
+            return 0
+
+        print(f"== 사용 현황 최근 {args.days}일 ==  쓴 사람 {len(people)}명")
+        print()
+
+        print("[사람별]")
+        print(
+            "  " + pad("사용자", 14) + pad("횟수", 8, ">") + pad("쓴 날", 8, ">")
+            + "  " + pad("처음", 20) + pad("마지막", 20)
+        )
+        for row in people:
+            print(
+                "  " + pad(str(row["user_name"] or "-"), 14)
+                + pad(f"{row['events']:,}", 8, ">")
+                + pad(f"{row['days']:,}", 8, ">")
+                + "  " + pad(formatting.local_minute_text(row["first_seen"]), 20)
+                + pad(formatting.local_minute_text(row["last_seen"]), 20)
+            )
+        print()
+        print("  '쓴 날'이 횟수보다 중요합니다. 하루에 열 번 연 사람과 열흘 동안")
+        print("  매일 한 번 연 사람은 횟수가 같아도 전혀 다른 이야기입니다 -")
+        print("  뒤쪽만이 이 도구가 일과에 들어갔다는 뜻입니다.")
+        print()
+
+        print("[무엇을 하러 들어오나]")
+        print(
+            "  " + pad("행동", 18) + pad("횟수", 8, ">") + pad("쓴 사람", 9, ">")
+            + "  " + pad("마지막", 20)
+        )
+        for row in actions:
+            print(
+                "  " + pad(str(row["action"]), 18)
+                + pad(f"{row['events']:,}", 8, ">")
+                + pad(f"{row['users']:,}", 9, ">")
+                + "  " + pad(formatting.local_minute_text(row["last_seen"]), 20)
+            )
+        print()
+        print("  쓴 사람 수를 함께 봅니다. 한 사람이 백 번 쓴 기능과 열 사람이")
+        print("  열 번씩 쓴 기능은 같은 숫자라도 뜻이 다릅니다.")
+
+        if args.recent:
+            print()
+            print("[최근 기록]")
+            for row in scan_store.usage_events(conn, since=since, limit=args.recent):
+                detail = f"  {row['detail']}" if row["detail"] else ""
+                print(
+                    "  " + pad(formatting.local_minute_text(row["happened_at"]), 20)
+                    + pad(str(row["user_name"] or "-"), 14)
+                    + str(row["action"]) + detail
+                )
+    finally:
+        conn.close()
+    return 0
+
+
 # -- scan ------------------------------------------------------------------
 
 def command_scan(args) -> int:
@@ -611,6 +689,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=15, help="작업 목록 줄 수 (기본 15)"
     )
     load.set_defaults(func=command_load)
+
+    usage = sub.add_parser("usage", help="누가 이 도구를 얼마나 쓰는지")
+    _add_data_dir(usage)
+    usage.add_argument("--days", type=int, default=30, help="며칠치를 볼지 (기본 30)")
+    usage.add_argument(
+        "--recent", type=int, default=0, help="최근 기록을 N줄 함께 보기"
+    )
+    usage.set_defaults(func=command_usage)
 
     scan = sub.add_parser("scan", help="야간 상세 스캔 (cron용)")
     _add_data_dir(scan)

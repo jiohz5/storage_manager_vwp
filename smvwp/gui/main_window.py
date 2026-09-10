@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting
+from .. import usage_log
 from .. import (
     diagnostics,
     forecast_notify,
@@ -174,6 +175,11 @@ class MainWindow(QMainWindow):
         생성자가 아니라 별도 메서드로 둔 이유: 창이 화면에 뜨기 전에 모달
         다이얼로그를 띄우면 부모 없는 창처럼 보이고, 테스트에서도 창을 만들 때
         마다 모달이 뜨면 곤란하기 때문. 호출은 `smvwp_cli.py gui`가 `show()` 뒤에 한다."""
+
+        # 창을 실제로 띄운 경로에서만 부르는 메서드라(생성자는 시험도 부른다)
+        # "사람이 이 도구를 열었다"를 여기서 남긴다. 시험이 창을 만들 때마다
+        # 기록이 쌓이면 집계가 사람 것이 아니게 된다.
+        usage_log.record(self._data_dir, usage_log.GUI_OPENED)
 
         if self._config.accounts:
             return
@@ -858,6 +864,7 @@ class MainWindow(QMainWindow):
         self.status_bar_label.setText(i18n.t("dashboard.collect_error", message=message))
 
     def _open_account_dialog(self) -> None:
+        usage_log.record(self._data_dir, usage_log.ACCOUNTS_OPENED)
         dialog = AccountDialog(self._data_dir, self._config, parent=self)
         if dialog.exec_():
             self._config = config_module.load_config(self._data_dir)
@@ -870,9 +877,13 @@ class MainWindow(QMainWindow):
             self._scheduler.restart_with_current_interval()
 
     def _open_reports_dialog(self) -> None:
+        usage_log.record(self._data_dir, usage_log.REPORT_VIEWED)
         ReportsDialog(self._data_dir, self._config, parent=self).exec_()
 
     def _open_search_dialog(self) -> None:
+        # 검색을 **했다는 사실**만 남긴다. 무엇을 찾았는지는 남기지 않는다 -
+        # 운영 판단에 필요한 것은 이 기능을 쓰는 사람이 있느냐까지다.
+        usage_log.record(self._data_dir, usage_log.SEARCH_USED)
         SearchDialog(self._data_dir, self._config, parent=self).exec_()
 
     def _open_diagnostics(self) -> None:

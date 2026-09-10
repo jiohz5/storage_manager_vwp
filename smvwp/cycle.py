@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List
 
 from . import collector, config as config_module, forecast_notify, notifications, reports
-from . import scan_store, servermon, store
+from . import scan_store, servermon, store, usage_log
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,9 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
                 )
                 scan_store.prune_server_samples(
                     scan_conn, settings.server_sample_retention_days
+                )
+                scan_store.prune_usage_events(
+                    scan_conn, usage_log.DEFAULT_RETENTION_DAYS
                 )
             finally:
                 scan_conn.close()
