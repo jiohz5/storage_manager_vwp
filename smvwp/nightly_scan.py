@@ -55,6 +55,7 @@ from . import (
     paths,
     reports,
     loadstat,
+    servermon,
     scan_lock,
     scan_store,
     scan_window,
@@ -838,10 +839,18 @@ def run_nightly_scan(
     # 체크포인트 주기와 별개로 **일정 시간마다** 시스템 전체 리소스를 찍는다.
     # 체크포인트 하나가 15분까지 갈 수 있어, 그 안에서 부하가 어떻게 움직였는지는
     # 주기 표본이 아니면 볼 수 없다.
+    # 같은 시각에 서버에서 **무엇이** 돌았는지도 함께 남긴다. 부하 숫자만
+    # 있으면 "스캔 때문에 바빴나, 원래 바빴나"를 나중에 가릴 수 없다.
+    server_monitor = (
+        servermon.ServerMonitor(with_cmdline=settings.record_process_cmdline)
+        if servermon.procstat.available()
+        else None
+    )
     recorder = loadstat.Recorder(
         interval_seconds=settings.load_sample_interval_seconds,
         accumulator=load,
         active_accounts=active,
+        server_monitor=server_monitor,
     )
     try:
         scan_store.start_run(conn, run_id, triggered_by)
@@ -918,6 +927,16 @@ def run_nightly_scan(
         try:
             scan_store.save_load_samples(conn, run_id, recorder.samples())
             scan_store.prune_load_samples(conn, settings.load_sample_retention_days)
+            for server_sample in recorder.server_samples():
+                scan_store.save_server_sample(
+                    conn, server_sample, source=scan_store.SOURCE_SCAN, run_id=run_id
+                )
+            # 스캔 중 표본은 촘촘해서 금방 쌓인다 - 상시 표본보다 짧게 둔다.
+            scan_store.prune_server_samples(
+                conn,
+                settings.load_sample_retention_days,
+                source=scan_store.SOURCE_SCAN,
+            )
         except Exception:  # pragma: no cover - 측정 기록 실패가 스캔을 실패로 만들지 않는다
             logger.exception("리소스 표본 저장 실패")
         conn.close()

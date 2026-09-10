@@ -149,6 +149,102 @@ CREATE TABLE IF NOT EXISTS scan_load_samples (
 CREATE INDEX IF NOT EXISTS idx_load_samples_run
     ON scan_load_samples(run_id, sampled_at);
 
+-- 서버 전체의 부하 이력 (스캔과 무관하게 상시).
+--
+-- `scan_load_samples` 는 **스캔이 도는 동안만** 남는다. 그것만으로는 정작
+-- 물어야 할 것에 답할 수 없다 - "이 서버는 평소에 어떤 모습인가."
+-- 비교 대상이 없으면 "스캔 중 load 8" 이 높은 것인지 원래 그런 것인지 모른다.
+-- 낮에 상세 스캔을 돌려도 되는지 같은 판단은 특히 이 바탕이 없으면 감이 된다.
+--
+-- 수집기가 15분마다 어차피 돌므로 그때 한 벌씩 뜬다. 스캔 중에는 같은 표에
+-- 30초 간격으로 더 촘촘히 들어간다(`source`, `run_id` 로 구분).
+CREATE TABLE IF NOT EXISTS server_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sampled_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    run_id TEXT,
+    interval_seconds REAL,
+    cpu_count INTEGER,
+    cpu_busy_percent REAL,
+    cpu_iowait_percent REAL,
+    cpu_steal_percent REAL,
+    load_avg_1m REAL,
+    load_avg_5m REAL,
+    load_avg_15m REAL,
+    procs_running INTEGER,
+    procs_blocked INTEGER,
+    blocked_ours INTEGER,
+    blocked_others INTEGER,
+    memory_total_kb INTEGER,
+    memory_available_kb INTEGER,
+    memory_used_percent REAL,
+    swap_used_kb INTEGER,
+    scan_cpu_percent REAL,
+    scan_rss_kb INTEGER,
+    scan_process_count INTEGER,
+    nfs_ops_per_second REAL,
+    nfs_read_bytes_per_second REAL
+);
+CREATE INDEX IF NOT EXISTS idx_server_samples_time
+    ON server_samples(sampled_at);
+CREATE INDEX IF NOT EXISTS idx_server_samples_run
+    ON server_samples(run_id, sampled_at);
+
+-- 그 시각에 서버에서 무엇이 돌고 있었나.
+--
+-- 부하 숫자만 남기면 "그래서 누가 그랬나"에 답할 수 없다. 상위 몇 개만
+-- 남긴다 - 프로세스가 수백 개여도 부하를 만든 것은 늘 몇 개이고, 나머지
+-- 대부분은 CPU 0.0% 의 잠든 데몬이다.
+--
+-- `cmdline` 에는 **다른 사용자의 작업 내용이 그대로 남는다.** 어떤 작업이
+-- 서버를 쓰고 있었는지 알려면 이름만으로는 부족해서 기본으로 남기되,
+-- 설정으로 끌 수 있다 (`record_process_cmdline`).
+CREATE TABLE IF NOT EXISTS server_sample_processes (
+    sample_id INTEGER NOT NULL,
+    pid INTEGER NOT NULL,
+    comm TEXT NOT NULL,
+    user_name TEXT,
+    cpu_percent REAL,
+    rss_kb INTEGER,
+    state TEXT,
+    threads INTEGER,
+    is_ours INTEGER NOT NULL DEFAULT 0,
+    blkio_percent REAL,
+    cmdline TEXT,
+    PRIMARY KEY (sample_id, pid)
+);
+
+-- NFS 마운트마다 그 구간에 실제로 오간 것.
+--
+-- 상세 스캔은 CPU 를 거의 안 쓰고 메타데이터 조회를 만든다. CPU 만 남기면
+-- "부하가 없었다"는 잘못된 결론이 나온다.
+--
+-- `avg_queue_ms` 를 `avg_rtt_ms` 와 따로 두는 것이 핵심이다. 왕복이 느린 것
+-- (파일서버가 밀림)과 보내지도 못하고 기다린 것(우리 쪽 슬롯 부족)은 할 일이
+-- 정반대다 - 뒤쪽인데 병렬을 줄이면 정확히 반대 처방이 된다.
+CREATE TABLE IF NOT EXISTS server_sample_mounts (
+    sample_id INTEGER NOT NULL,
+    mount_point TEXT NOT NULL,
+    device TEXT,
+    nfs_version TEXT,
+    ops INTEGER,
+    ops_per_second REAL,
+    read_bytes INTEGER,
+    write_bytes INTEGER,
+    avg_rtt_ms REAL,
+    avg_queue_ms REAL,
+    queue_share REAL,
+    getattr_ops INTEGER,
+    lookup_ops INTEGER,
+    access_ops INTEGER,
+    readdir_ops INTEGER,
+    read_ops INTEGER,
+    write_ops INTEGER,
+    bad_xids INTEGER,
+    max_slots INTEGER,
+    PRIMARY KEY (sample_id, mount_point)
+);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
@@ -1129,6 +1225,266 @@ def load_samples(conn: sqlite3.Connection, run_id: str) -> List[sqlite3.Row]:
         "SELECT * FROM scan_load_samples WHERE run_id = ? ORDER BY sampled_at",
         (run_id,),
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# 서버 전체 부하 이력
+# ---------------------------------------------------------------------------
+
+SOURCE_COLLECTOR = "collector"   # 15분 상시 수집
+SOURCE_SCAN = "scan"             # 스캔이 도는 동안 촘촘히
+
+_SAMPLE_COLUMNS = (
+    "sampled_at", "source", "run_id", "interval_seconds", "cpu_count",
+    "cpu_busy_percent", "cpu_iowait_percent", "cpu_steal_percent",
+    "load_avg_1m", "load_avg_5m", "load_avg_15m",
+    "procs_running", "procs_blocked", "blocked_ours", "blocked_others",
+    "memory_total_kb", "memory_available_kb", "memory_used_percent",
+    "swap_used_kb", "scan_cpu_percent", "scan_rss_kb", "scan_process_count",
+    "nfs_ops_per_second", "nfs_read_bytes_per_second",
+)
+
+
+def _op_count(mount, name: str) -> int:
+    entry = mount.ops.get(name)
+    return entry.ops if entry is not None else 0
+
+
+def save_server_sample(
+    conn: sqlite3.Connection,
+    sample,
+    source: str = SOURCE_COLLECTOR,
+    run_id: Optional[str] = None,
+) -> Optional[int]:
+    """`servermon.ServerSample` 한 벌을 저장한다. 표본 id를 돌려준다.
+
+    아무것도 못 잰 표본은 저장하지 않는다 - `/proc` 이 없는 환경에서 빈 행만
+    쌓이면 나중에 "그 시각엔 한가했다"로 잘못 읽힌다."""
+
+    if sample is None or not sample.measured:
+        return None
+
+    values = (
+        sample.sampled_at,
+        source,
+        run_id,
+        sample.interval_seconds,
+        sample.cpu_count,
+        sample.cpu_busy_percent,
+        sample.cpu_iowait_percent,
+        sample.cpu_steal_percent,
+        sample.load_avg_1m,
+        sample.load_avg_5m,
+        sample.load_avg_15m,
+        sample.procs_running,
+        sample.procs_blocked,
+        sample.blocked_ours,
+        sample.blocked_others,
+        sample.memory_total_kb,
+        sample.memory_available_kb,
+        sample.memory_used_percent,
+        sample.swap_used_kb,
+        sample.scan_cpu_percent,
+        sample.scan_rss_kb,
+        sample.scan_process_count,
+        sample.nfs_ops_per_second,
+        sample.nfs_read_bytes_per_second,
+    )
+    placeholders = ", ".join("?" for _ in _SAMPLE_COLUMNS)
+    columns = ", ".join(_SAMPLE_COLUMNS)
+    cursor = conn.execute(
+        "INSERT INTO server_samples (" + columns + ") VALUES (" + placeholders + ")",
+        values,
+    )
+    sample_id = cursor.lastrowid
+
+    if sample.processes:
+        conn.executemany(
+            "INSERT OR REPLACE INTO server_sample_processes ("
+            "sample_id, pid, comm, user_name, cpu_percent, rss_kb, state, "
+            "threads, is_ours, blkio_percent, cmdline"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    sample_id, item.pid, item.comm, item.user, item.cpu_percent,
+                    item.rss_kb, item.state, item.threads,
+                    1 if item.is_ours else 0, item.blkio_percent, item.cmdline,
+                )
+                for item in sample.processes
+            ],
+        )
+    if sample.mounts:
+        conn.executemany(
+            "INSERT OR REPLACE INTO server_sample_mounts ("
+            "sample_id, mount_point, device, nfs_version, ops, ops_per_second, "
+            "read_bytes, write_bytes, avg_rtt_ms, avg_queue_ms, queue_share, "
+            "getattr_ops, lookup_ops, access_ops, readdir_ops, read_ops, "
+            "write_ops, bad_xids, max_slots"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    sample_id, mount.mount_point, mount.device, mount.nfs_version,
+                    mount.total_ops, mount.ops_per_second,
+                    mount.read_bytes, mount.write_bytes,
+                    mount.avg_rtt_ms, mount.avg_queue_ms, mount.queue_share,
+                    _op_count(mount, "GETATTR"), _op_count(mount, "LOOKUP"),
+                    _op_count(mount, "ACCESS"),
+                    _op_count(mount, "READDIR") + _op_count(mount, "READDIRPLUS"),
+                    _op_count(mount, "READ"), _op_count(mount, "WRITE"),
+                    mount.bad_xids, mount.max_slots,
+                )
+                for mount in sample.mounts
+            ],
+        )
+    conn.commit()
+    return sample_id
+
+
+def _time_clauses(since, until, source=None, run_id=None, prefix=""):
+    """공통 시간 범위 조건. `prefix` 는 조인할 때의 표 별칭(`s.`)."""
+
+    clauses, params = [], []
+    if since:
+        clauses.append(prefix + "sampled_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append(prefix + "sampled_at < ?")
+        params.append(until)
+    if source:
+        clauses.append(prefix + "source = ?")
+        params.append(source)
+    if run_id:
+        clauses.append(prefix + "run_id = ?")
+        params.append(run_id)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
+
+
+def server_samples(
+    conn: sqlite3.Connection,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    source: Optional[str] = None,
+    run_id: Optional[str] = None,
+    limit: int = 2000,
+) -> List[sqlite3.Row]:
+    """시간 범위 안의 서버 표본 (시간순)."""
+
+    where, params = _time_clauses(since, until, source, run_id)
+    params.append(limit)
+    return conn.execute(
+        "SELECT * FROM server_samples " + where + " ORDER BY sampled_at LIMIT ?",
+        params,
+    ).fetchall()
+
+
+def sample_processes(conn: sqlite3.Connection, sample_id: int) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM server_sample_processes WHERE sample_id = ? "
+        "ORDER BY cpu_percent DESC",
+        (sample_id,),
+    ).fetchall()
+
+
+def sample_mounts(conn: sqlite3.Connection, sample_id: int) -> List[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM server_sample_mounts WHERE sample_id = ? ORDER BY ops DESC",
+        (sample_id,),
+    ).fetchall()
+
+
+BUSIEST_BY_CPU = "cpu"
+BUSIEST_BY_MEMORY = "mem"
+
+
+def busiest_processes(
+    conn: sqlite3.Connection,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    by: str = BUSIEST_BY_CPU,
+    limit: int = 20,
+    run_id: Optional[str] = None,
+) -> List[sqlite3.Row]:
+    """이 시간대에 서버를 쓴 작업들 - 사용자와 이름으로 묶어서.
+
+    pid 로 묶지 않는 이유: 같은 작업이 죽었다 살아나면 pid 가 바뀌어 따로
+    세어진다. 사람이 알고 싶은 것은 "누구의 무슨 작업"이지 번호가 아니다.
+
+    **`cpu_avg` 는 상위 목록에 들었던 표본들만의 평균이다.** 한가할 때는
+    목록에 못 들어 빠지므로 하루 종일의 평균보다 높게 나온다. 이 값을 "이
+    작업이 평소 쓰는 양"으로 읽으면 안 된다 - `samples`(몇 번이나 상위에
+    들었나)를 같이 주는 것도 그래서다."""
+
+    where, params = _time_clauses(since, until, run_id=run_id, prefix="s.")
+    order = "rss_peak DESC" if by == BUSIEST_BY_MEMORY else "cpu_peak DESC"
+    params.append(limit)
+    return conn.execute(
+        "SELECT p.user_name AS user_name, p.comm AS comm, p.is_ours AS is_ours, "
+        "COUNT(*) AS samples, AVG(p.cpu_percent) AS cpu_avg, "
+        "MAX(p.cpu_percent) AS cpu_peak, MAX(p.rss_kb) AS rss_peak, "
+        "MAX(p.cmdline) AS cmdline "
+        "FROM server_sample_processes p "
+        "JOIN server_samples s ON s.id = p.sample_id " + where + " "
+        "GROUP BY p.user_name, p.comm, p.is_ours "
+        "ORDER BY " + order + " LIMIT ?",
+        params,
+    ).fetchall()
+
+
+def mount_activity(
+    conn: sqlite3.Connection,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> List[sqlite3.Row]:
+    """마운트별 요약 - 어디에 얼마나 실었고 얼마나 느렸나."""
+
+    where, params = _time_clauses(since, until, run_id=run_id, prefix="s.")
+    return conn.execute(
+        "SELECT m.mount_point AS mount_point, m.device AS device, "
+        "COUNT(*) AS samples, SUM(m.ops) AS total_ops, "
+        "AVG(m.ops_per_second) AS ops_avg, MAX(m.ops_per_second) AS ops_peak, "
+        "SUM(m.read_bytes) AS read_bytes, "
+        "AVG(m.avg_rtt_ms) AS rtt_avg, MAX(m.avg_rtt_ms) AS rtt_peak, "
+        "AVG(m.avg_queue_ms) AS queue_avg, "
+        "MAX(m.queue_share) AS queue_share_peak "
+        "FROM server_sample_mounts m "
+        "JOIN server_samples s ON s.id = m.sample_id " + where + " "
+        "GROUP BY m.mount_point, m.device ORDER BY total_ops DESC",
+        params,
+    ).fetchall()
+
+
+def prune_server_samples(
+    conn: sqlite3.Connection, retention_days: int, source: Optional[str] = None
+) -> int:
+    """보존 기간이 지난 서버 표본과 그 자식 행들을 지운다.
+
+    `source` 로 나눠 지울 수 있다. 스캔 중 표본은 촘촘해서(2분 간격) 금방
+    쌓이지만 "그날 밤 어디서 튀었나"를 보는 것이라 지나면 값이 줄고, 상시
+    표본은 성기지만 **평소 이 서버가 어떤 모습인가**를 쌓는 것이라 길수록
+    낫다. 같은 기간으로 묶으면 한쪽이 반드시 손해를 본다."""
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    scope = " AND source = ?" if source else ""
+    extra = (source,) if source else ()
+    # 자식을 먼저 지운다. 부모를 먼저 지우면 어느 자식이 고아인지 알 방법이
+    # 없어진다 (SQLite 의 외래키 연쇄 삭제는 기본으로 꺼져 있다).
+    conn.execute(
+        "DELETE FROM server_sample_processes WHERE sample_id IN "
+        "(SELECT id FROM server_samples WHERE sampled_at < ?" + scope + ")",
+        (cutoff,) + extra,
+    )
+    conn.execute(
+        "DELETE FROM server_sample_mounts WHERE sample_id IN "
+        "(SELECT id FROM server_samples WHERE sampled_at < ?" + scope + ")",
+        (cutoff,) + extra,
+    )
+    cursor = conn.execute(
+        "DELETE FROM server_samples WHERE sampled_at < ?" + scope, (cutoff,) + extra
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def prune_load_samples(conn: sqlite3.Connection, retention_days: int) -> int:

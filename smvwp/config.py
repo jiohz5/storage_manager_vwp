@@ -174,6 +174,17 @@ DEFAULT_WEEKEND_PARALLEL_ACCOUNTS = DEFAULT_NIGHTLY_PARALLEL_ACCOUNTS
 DEFAULT_LOAD_SAMPLE_INTERVAL_SECONDS = 30
 DEFAULT_LOAD_SAMPLE_RETENTION_DAYS = 30
 
+# 상시 서버 부하 표본(수집기가 15분마다 뜨는 것)을 얼마나 보관할지.
+#
+# 스캔 중 표본(30초 주기)보다 훨씬 오래 둔다. 촘촘한 쪽은 "그날 밤 어디서
+# 튀었나"를 보는 것이라 지나면 값이 없지만, 이쪽은 **평소 이 서버가 어떤
+# 모습인가**를 쌓는 것이라 길수록 낫다. 계절이나 프로젝트 주기에 따라 서버가
+# 어떻게 달라지는지는 한 달로는 안 보인다.
+#
+# 하루 96벌 x (표본 1 + 프로세스 10 + 마운트 몇) 이라 90일이어도 십만 행
+# 남짓이다.
+DEFAULT_SERVER_SAMPLE_RETENTION_DAYS = 90
+
 
 @dataclass
 class Settings:
@@ -220,6 +231,16 @@ class Settings:
     # 스캔 중 리소스 표본 주기와 보관 기간.
     load_sample_interval_seconds: int = DEFAULT_LOAD_SAMPLE_INTERVAL_SECONDS
     load_sample_retention_days: int = DEFAULT_LOAD_SAMPLE_RETENTION_DAYS
+    # 상시 서버 부하 표본(수집기가 15분마다)의 보관 기간. 위 상수 참고.
+    server_sample_retention_days: int = DEFAULT_SERVER_SAMPLE_RETENTION_DAYS
+    # 부하를 만든 프로세스의 **명령줄**까지 남길지.
+    #
+    # 남기면 "어떤 작업이 서버를 쓰고 있었나"에 훨씬 잘 답한다 - 이름만으로는
+    # `python` 이 수십 개 나올 뿐이다. 다만 그 명령줄에는 **다른 사용자의 작업
+    # 내용이 그대로 들어간다** (프로젝트 이름, 파일 경로 등). 이것을 남길지는
+    # 운영하는 쪽이 정할 일이라 스위치를 둔다. 끄면 프로세스 이름과 사용자만
+    # 남는다.
+    record_process_cmdline: bool = True
     activity_initial_lookback_days: int = DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS
     language: str = DEFAULT_LANGUAGE
     # 알림 채널. command/webhook은 사내 endpoint가 있을 때만 쓰고, 설정하지
@@ -378,6 +399,8 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("load_sample_interval_seconds는 5 이상이어야 합니다")
     if settings.load_sample_retention_days < 1:
         raise ConfigError("load_sample_retention_days는 1 이상이어야 합니다")
+    if settings.server_sample_retention_days < 1:
+        raise ConfigError("server_sample_retention_days는 1 이상이어야 합니다")
     if not i18n.is_supported(settings.language):
         # 언어는 잘못돼도 앱을 막지 않고 기본값으로 되돌린다 - 표시 문제일 뿐
         # 데이터 무결성 문제가 아니기 때문.

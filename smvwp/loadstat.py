@@ -389,6 +389,13 @@ PHASE_BEFORE = "before"
 PHASE_DURING = "during"
 PHASE_WARMUP = "warmup"
 
+# 서버 전체 표본(프로세스 목록 포함)을 뜨는 간격.
+#
+# 부하 숫자는 30초마다 찍어도 싸지만, "무엇이 돌았나"는 `/proc` 을 수백 번
+# 읽는 일이라 더 뜸하게 본다. 2분이면 밤새 240벌 - 사람이 훑어보기에도
+# 그쯤이 상한이다.
+SERVER_SAMPLE_SECONDS = 120.0
+
 
 @dataclass
 class Snapshot:
@@ -441,6 +448,8 @@ class Recorder:
         interval_seconds: float = 30.0,
         accumulator: Optional[Accumulator] = None,
         active_accounts: Optional[Callable[[], int]] = None,
+        server_monitor=None,
+        server_interval_seconds: float = SERVER_SAMPLE_SECONDS,
     ):
         self.interval_seconds = max(1.0, float(interval_seconds))
         self._accumulator = accumulator
@@ -451,6 +460,18 @@ class Recorder:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._started_at = time.monotonic()
+        # 위쪽 표본이 답하지 못하는 것 - **그 시각에 서버에서 무엇이 돌았나.**
+        # 숫자만 있으면 "스캔 때문에 바빴나, 원래 바빴나"를 가릴 수 없다.
+        self._server_monitor = server_monitor
+        self._server_samples: List = []
+        # 프로세스 목록은 표본마다 뜨지 않는다. `/proc` 을 수백 번 읽는 것이라
+        # 한 번은 싸지만 30초마다 밤새 하면 그때부터는 재는 쪽이 부담이 되고,
+        # 남는 행도 하룻밤에 만 줄이 넘는다. 무엇이 돌았는지는 2분 간격이면
+        # 충분히 잡힌다 - 그 사이에 떴다 사라지는 작업은 부하도 그만큼 작다.
+        self._server_every = max(
+            1, int(round(server_interval_seconds / self.interval_seconds))
+        )
+        self._tick = 0
 
     # -- 표본 만들기 -------------------------------------------------
     def _take(self, phase: str) -> Snapshot:
@@ -486,6 +507,10 @@ class Recorder:
             # /proc이 없는 환경(개발 PC 등)에서는 기다려도 얻을 것이 없다.
             # 잴 수 없는 값을 위해 스캔 시작을 늦추지는 않는다.
             warmup_seconds = 0.0
+        if self._server_monitor is not None:
+            # 서버 표본도 두 시점이 필요하다. 여기서 기준점을 안 잡으면 첫
+            # 표본이 통째로 비고, 그러면 스캔 초반이 시계열에서 사라진다.
+            self._server_monitor.prime()
         self._take(PHASE_WARMUP)  # 델타 기준점만 잡고 버린다
         if warmup_seconds > 0:
             time.sleep(warmup_seconds)
@@ -508,12 +533,33 @@ class Recorder:
         # Event.wait는 중지 요청이 오면 남은 대기를 건너뛴다. sleep으로 짜면
         # 스캔이 끝나도 마지막 주기만큼 프로세스가 더 붙잡혀 있다.
         while not self._stop.wait(self.interval_seconds):
-            try:
-                snapshot = self._take(PHASE_DURING)
-            except Exception:  # pragma: no cover - 측정 실패가 스캔을 막으면 안 된다
-                continue
-            with self._lock:
-                self._samples.append(snapshot)
+            self.tick_once()
+
+    def tick_once(self) -> None:
+        """한 주기 분의 측정.
+
+        루프에서 떼어 둔 것은 **시험을 위해서**다. 스레드를 띄워 시간을 기다리는
+        시험은 장비가 바쁠 때 들쭉날쭉해지고, 그러면 아무도 안 믿게 된다.
+
+        측정이 실패해도 예외를 밖으로 내지 않는다 - 재는 쪽 때문에 스캔이
+        멈추면 본말이 뒤집힌다."""
+
+        try:
+            snapshot = self._take(PHASE_DURING)
+        except Exception:  # pragma: no cover - 측정 실패가 스캔을 막으면 안 된다
+            return
+        with self._lock:
+            self._samples.append(snapshot)
+
+        self._tick += 1
+        if self._server_monitor is None or self._tick % self._server_every:
+            return
+        try:
+            server = self._server_monitor.sample()
+        except Exception:  # pragma: no cover - 측정이 스캔을 막으면 안 된다
+            return
+        with self._lock:
+            self._server_samples.append(server)
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
@@ -524,6 +570,12 @@ class Recorder:
     def samples(self) -> List[Snapshot]:
         with self._lock:
             return list(self._samples)
+
+    def server_samples(self) -> List:
+        """스캔 중에 뜬 서버 전체 표본들 (`servermon.ServerSample`)."""
+
+        with self._lock:
+            return list(self._server_samples)
 
 
 @dataclass

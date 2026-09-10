@@ -152,7 +152,10 @@ class ServerMonitor:
         if self._primed_at is None:
             self.prime()
         now = time.monotonic()
-        seconds = max(0.0, now - (self._primed_at or now))
+        # `self._primed_at or now` 로 쓰면 안 된다 - 기준 시각이 정확히 0.0 일 때
+        # 거짓으로 취급돼 구간이 0 이 되고, 그러면 그 표본이 통째로 비어 버린다.
+        # `time.monotonic()` 의 기준점은 플랫폼마다 달라서 0.0 이 실제로 나온다.
+        seconds = max(0.0, now - (now if self._primed_at is None else self._primed_at))
 
         cpu_after = procstat.read_system_counters()
         usage = procstat.cpu_usage(self._cpu_before, cpu_after)
