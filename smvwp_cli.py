@@ -55,6 +55,7 @@ ERROR: PyQt5를 불러올 수 없습니다 ({error}).
 GUI 없이 수집만 하려면 아래 하위 명령은 GUI 툴킷 없이도 동작합니다:
 
   ./smvwp_cli.py collect
+  ./smvwp_cli.py load                    # 쌓인 서버 부하 이력 보기
   ./smvwp_cli.py scan
 """
 
@@ -191,6 +192,160 @@ def command_collect(args) -> int:
     print(f"수집 완료: {len(records)}개 계정, 실패 {len(failed)}건")
     for record in failed:
         print(f"  - {record.account_id}: {record.error_message}")
+    return 0
+
+
+# -- load ------------------------------------------------------------------
+#
+# 이 명령이 답하려는 것: **낮에 돌려도 되나, 몇 갈래까지 되나, 그때 누가 서버를
+# 쓰고 있었나.** 표본을 아무리 쌓아도 꺼내 볼 길이 없으면 판단에 못 쓴다.
+
+
+def _bar(value, full=100.0, width=20) -> str:
+    """숫자 하나를 눈으로 견줄 수 있게. 값이 없으면 빈 칸."""
+
+    if value is None:
+        return " " * width
+    filled = int(round(min(1.0, max(0.0, value / full)) * width))
+    return "#" * filled + "." * (width - filled)
+
+
+def _num(value, digits=1, suffix="") -> str:
+    return "-" if value is None else f"{value:,.{digits}f}{suffix}"
+
+
+def command_load(args) -> int:
+    from smvwp import loadreport, scan_store
+    from smvwp.reports import pad
+    from datetime import datetime, timedelta, timezone
+
+    data_dir = _resolve_or_fail(args.data_dir)
+    since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat()
+
+    conn = scan_store.connect(data_dir)
+    try:
+        rows = scan_store.server_samples(conn, since=since, limit=200000)
+        if not rows:
+            print("아직 서버 부하 표본이 없습니다.")
+            print("수집기(15분 주기)가 한 번은 돌아야 쌓이기 시작합니다:")
+            print("  ./smvwp_cli.py collect")
+            return 0
+
+        print(f"== 서버 부하 최근 {args.days}일 ==  표본 {len(rows):,}벌")
+        print()
+
+        # -- 스캔이 돌 때와 안 돌 때 --------------------------------------
+        #
+        # "스캔이 서버를 얼마나 흔드나"에 답하는 가장 곧은 방법 - 같은 서버의
+        # 두 상태를 나란히 놓는 것.
+        split = loadreport.split_by_scan(rows)
+        print("[스캔 중 vs 평소]  (CPU 는 우리를 뺀 나머지 기준)")
+        print(
+            pad("", 12) + pad("표본", 8, ">") + pad("CPU평균", 10, ">")
+            + pad("CPU최고", 10, ">") + pad("load", 8, ">")
+            + pad("대기중", 9, ">") + pad("NFS ops/s", 12, ">")
+        )
+        for key in ("without_scan", "with_scan"):
+            bucket = split[key]
+            print(
+                pad(bucket.label, 12)
+                + pad(f"{bucket.samples:,}", 8, ">")
+                + pad(_num(bucket.others_cpu.average, 1, "%"), 10, ">")
+                + pad(_num(bucket.others_cpu.peak, 1, "%"), 10, ">")
+                + pad(_num(bucket.load_avg.average), 8, ">")
+                + pad(_num(bucket.blocked_others.average), 9, ">")
+                + pad(_num(bucket.nfs_ops.average, 0), 12, ">")
+            )
+        print()
+
+        # -- 시간대별 --------------------------------------------------------
+        buckets = loadreport.hourly_profile(rows)
+        print("[시간대별]  다른 작업이 쓰는 CPU (우리 제외)")
+        for bucket in buckets:
+            # 우리 스캔이 섞인 칸을 표시하지 않으면 "새벽은 한가하다"를
+            # 그대로 믿게 되는데, 사실은 그 한가함 안에 우리가 들어 있다.
+            mark = "" if bucket.scan_free else "  <- 우리 스캔 섞임"
+            print(
+                "  " + pad(bucket.label, 6)
+                + _bar(bucket.others_cpu.average) + "  "
+                + pad(_num(bucket.others_cpu.average, 1, "%"), 8, ">")
+                + "  표본 " + pad(f"{bucket.samples:,}", 5, ">") + mark
+            )
+        print()
+
+        # 우리 스캔이 돌던 시간대는 후보에서 뺀다 - 새벽이 한가한 것은 이미
+        # 우리가 그 자리를 쓰고 있어서라, "여기에 더 얹으세요"가 되지 않는다.
+        #
+        # 제목을 "여유가 있는 시간대"라고 달지 않는다. 가장 한가한 축에 든
+        # 시간대라도 여유가 없을 수 있는데, 그러면 제목이 약속한 것과 아래
+        # 줄들이 서로 어긋난다. 순위는 순위대로 보여 주고 판단은 줄마다 붙인다.
+        quiet = loadreport.quietest_hours(buckets, limit=3)
+        print("[다른 작업이 가장 적었던 시간대]  (우리 스캔이 없던 때만)")
+        if not quiet:
+            print("  아직 판단할 만큼 쌓이지 않았습니다.")
+            print("  수집기가 며칠 더 돌아야 시간대별 표본이 모입니다.")
+        else:
+            for bucket in quiet:
+                verdict = loadreport.daytime_verdict(bucket)
+                mark = "여유 있음" if verdict.room else "여유 없음"
+                print(
+                    f"  {verdict.label}  {mark} - {verdict.reason}"
+                    f"  (다른 작업 CPU {_num(verdict.others_cpu, 1, '%')},"
+                    f" 표본 {verdict.samples})"
+                )
+            if not any(loadreport.daytime_verdict(item).room for item in quiet):
+                print()
+                print("  가장 한가한 시간대에도 여유가 없습니다 - 낮 스캔은 권하지 않습니다.")
+        print()
+
+        # -- 그때 무엇이 돌았나 ----------------------------------------------
+        by = scan_store.BUSIEST_BY_MEMORY if args.by == "mem" else scan_store.BUSIEST_BY_CPU
+        busiest = scan_store.busiest_processes(conn, since=since, by=by, limit=args.limit)
+        if busiest:
+            label = "메모리" if args.by == "mem" else "CPU"
+            print(f"[서버를 쓴 작업]  {label} 큰 것부터")
+            print(
+                "  " + pad("사용자", 12) + pad("작업", 18)
+                + pad("CPU최고", 10, ">") + pad("CPU평균", 10, ">")
+                + pad("메모리최고", 13, ">") + pad("표본", 8, ">")
+            )
+            for item in busiest:
+                mine = "  (우리)" if item["is_ours"] else ""
+                print(
+                    "  " + pad(str(item["user_name"] or "-"), 12)
+                    + pad((item["comm"] or "-")[:16], 18)
+                    + pad(_num(item["cpu_peak"], 0, "%"), 10, ">")
+                    + pad(_num(item["cpu_avg"], 0, "%"), 10, ">")
+                    + pad(_num((item["rss_peak"] or 0) / 1024, 0, "MB"), 13, ">")
+                    + pad(f"{item['samples']:,}", 8, ">") + mine
+                )
+            print()
+            print("  CPU 평균은 **상위 목록에 들었던 표본들만의 평균**입니다.")
+            print("  한가할 때는 목록에 못 들어 빠지므로 하루 평균보다 높게 나옵니다.")
+            print()
+
+        # -- NFS ------------------------------------------------------------
+        mounts = scan_store.mount_activity(conn, since=since)
+        if mounts:
+            print("[NFS 마운트]")
+            print(
+                "  " + pad("마운트", 26) + pad("ops합", 13, ">")
+                + pad("ops/s평균", 12, ">") + pad("왕복ms", 10, ">")
+                + pad("대기ms", 10, ">")
+            )
+            for item in mounts:
+                print(
+                    "  " + pad(str(item["mount_point"])[:24], 26)
+                    + pad(f"{int(item['total_ops'] or 0):,}", 13, ">")
+                    + pad(_num(item["ops_avg"], 0), 12, ">")
+                    + pad(_num(item["rtt_avg"], 2), 10, ">")
+                    + pad(_num(item["queue_avg"], 2), 10, ">")
+                )
+            print()
+            print("  대기(queue)가 왕복(rtt)보다 크면 병목은 파일서버가 아니라")
+            print("  이쪽 RPC 슬롯입니다 - 그때 병렬을 줄이면 정확히 반대 처방입니다.")
+    finally:
+        conn.close()
     return 0
 
 
@@ -440,6 +595,22 @@ def build_parser() -> argparse.ArgumentParser:
     collect = sub.add_parser("collect", help="15분 경량 수집 1회 (cron용)")
     _add_data_dir(collect)
     collect.set_defaults(func=command_collect)
+
+    load = sub.add_parser("load", help="쌓인 서버 부하 이력 보기")
+    _add_data_dir(load)
+    load.add_argument(
+        "--days", type=int, default=7, help="며칠치를 볼지 (기본 7)"
+    )
+    load.add_argument(
+        "--by",
+        choices=["cpu", "mem"],
+        default="cpu",
+        help="작업 목록 정렬 기준 (기본 cpu)",
+    )
+    load.add_argument(
+        "--limit", type=int, default=15, help="작업 목록 줄 수 (기본 15)"
+    )
+    load.set_defaults(func=command_load)
 
     scan = sub.add_parser("scan", help="야간 상세 스캔 (cron용)")
     _add_data_dir(scan)
