@@ -78,7 +78,6 @@ class AccountScanStateTests(ScanStoreTestCase):
     def test_fresh_account_working_generation_is_1(self):
         state = scan_store.get_account_state(self.conn, "acct-1")
         self.assertEqual(state.working_generation, 1)
-        self.assertEqual(state.working_activity_pass, 1)
 
     def test_working_generation_advances_after_completion(self):
         conn = self.conn
@@ -87,14 +86,25 @@ class AccountScanStateTests(ScanStoreTestCase):
         self.assertEqual(state.last_completed_generation, 1)
         self.assertEqual(state.working_generation, 2)
 
-    def test_activity_pass_completion_records_cursor_and_total(self):
+    def test_leftover_activity_checkpoints_are_cleaned_up(self):
+        """없앤 기능이 남긴 행을 치운다.
+
+        연결할 때마다 지우면 GUI 가 5초마다 쓰기 트랜잭션을 여는데, NFS 위에서는
+        그 하나가 왕복이다. 밤마다 계정별로 한 번 도는 정리 자리에 붙였다."""
+
         conn = self.conn
-        scan_store.mark_activity_pass_completed(conn, "acct-1", 1, "2026-07-31T00:00:00", 42)
-        state = scan_store.get_account_state(conn, "acct-1")
-        self.assertEqual(state.last_completed_activity_pass, 1)
-        self.assertEqual(state.activity_cursor, "2026-07-31T00:00:00")
-        self.assertEqual(state.last_activity_total_changed, 42)
-        self.assertEqual(state.working_activity_pass, 2)
+        conn.execute(
+            "INSERT INTO scan_checkpoints "
+            "(account_id, kind, generation, path, depth, status) "
+            "VALUES (?, 'activity', 1, '/a', 0, 'pending')",
+            ("acct-1",),
+        )
+        conn.commit()
+        scan_store.prune_old_generations(conn, "acct-1", keep_last=2)
+        left = conn.execute(
+            "SELECT COUNT(*) FROM scan_checkpoints WHERE kind = 'activity'"
+        ).fetchone()[0]
+        self.assertEqual(left, 0)
 
 
 class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):

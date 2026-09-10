@@ -13,11 +13,10 @@
 
 ## 왜 명령을 보고 분기하는 단일 러너를 쓰는가
 
-`smvwp.detail_scan.subprocess`, `smvwp.activity_scan.subprocess`,
-`smvwp.quota.subprocess` 등은 전부 **같은 표준 subprocess 모듈 객체**다. 여러
-경로를 각각 patch하면 나중에 적용된 patch가 앞의 것을 조용히 덮어써서, `du`
-호출이 `find`용 가짜 결과를 받는 식의 혼선이 생긴다. 그래서 patch는 한 번만
-걸고 명령 내용으로 분기한다.
+`smvwp.detail_scan.subprocess`, `smvwp.quota.subprocess` 등은 전부 **같은 표준
+subprocess 모듈 객체**다. 여러 경로를 각각 patch하면 나중에 적용된 patch가 앞의
+것을 조용히 덮어써서, `du` 호출이 다른 명령용 가짜 결과를 받는 식의 혼선이
+생긴다. 그래서 patch는 한 번만 걸고 명령 내용으로 분기한다.
 """
 
 from __future__ import annotations

@@ -482,8 +482,7 @@ def command_scan(args) -> int:
     for outcome in summary.accounts:
         print(
             f"  - {outcome.account_name}: 기준선 세대 {outcome.baseline_generation} "
-            f"({outcome.baseline_status}), 활동 스캔 pass {outcome.activity_pass} "
-            f"({outcome.activity_status})"
+            f"({outcome.baseline_status})"
         )
     return 0 if summary.status in (nightly_scan.STATUS_COMPLETED, nightly_scan.STATUS_PAUSED) else 1
 

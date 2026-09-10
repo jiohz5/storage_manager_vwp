@@ -43,12 +43,11 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from . import (
-    activity_scan,
     config as config_module,
     detail_scan,
     notifications,
@@ -77,8 +76,6 @@ class AccountOutcome:
     account_name: str
     baseline_status: str  # 'done' | 'interrupted'
     baseline_generation: int
-    activity_status: str  # 'done' | 'interrupted'
-    activity_pass: int
     # 검색 인덱싱을 켠 계정만 해당. 'skipped' | 'done' | 'interrupted' | 'error'
     search_status: str = "skipped"
     search_entries: int = 0
@@ -375,50 +372,6 @@ def _process_baseline(
     return "done", generation
 
 
-def _process_activity(
-    conn,
-    account: config_module.Account,
-    settings: config_module.Settings,
-    clock: Callable[[], datetime],
-    should_stop: Callable[[], bool],
-    deadline_reached: Callable[[], bool],
-    top_level_lister: Callable[[str], List[str]],
-    load=None,
-    run_id: Optional[str] = None,
-) -> "tuple[str, int]":
-    state = scan_store.get_account_state(conn, account.account_id)
-    pass_no = state.working_activity_pass
-    since_iso = state.activity_cursor or _iso(
-        clock() - timedelta(days=settings.activity_initial_lookback_days)
-    )
-
-    if not scan_store.is_seeded(conn, account.account_id, scan_store.ACTIVITY, pass_no):
-        top_dirs = top_level_lister(account.path)
-        scan_store.seed_checkpoints(conn, account.account_id, scan_store.ACTIVITY, pass_no, top_dirs)
-
-    while True:
-        if should_stop():
-            return "interrupted", pass_no
-        if deadline_reached():
-            return "interrupted", pass_no
-        checkpoint = scan_store.next_pending(conn, account.account_id, scan_store.ACTIVITY, pass_no)
-        if checkpoint is None:
-            break
-        if run_id:
-            scan_store.set_current_target(
-                conn, run_id, account.account_id, scan_store.ACTIVITY, checkpoint["path"]
-            )
-        activity_scan.process_one_checkpoint(conn, checkpoint, since_iso, settings.detail_task_timeout_seconds)
-        if load is not None:
-            load.sample()
-
-    total = activity_scan.total_changed(conn, account.account_id, pass_no)
-    new_cursor = _iso(clock())
-    scan_store.mark_activity_pass_completed(conn, account.account_id, pass_no, new_cursor, total)
-    scan_store.prune_completed_activity_checkpoints(conn, account.account_id, pass_no)
-    return "done", pass_no
-
-
 def _process_account(
     conn,
     data_dir: Path,
@@ -441,13 +394,8 @@ def _process_account(
             account_name=account.name,
             baseline_status=baseline_status,
             baseline_generation=generation,
-            activity_status="interrupted",
-            activity_pass=scan_store.get_account_state(conn, account.account_id).working_activity_pass,
         )
 
-    activity_status, pass_no = _process_activity(
-        conn, account, settings, clock, should_stop, deadline_reached, top_level_lister, load, run_id
-    )
     search_status, search_entries = _process_search_index(
         data_dir, account, should_stop, deadline_reached
     )
@@ -456,8 +404,6 @@ def _process_account(
         account_name=account.name,
         baseline_status=baseline_status,
         baseline_generation=generation,
-        activity_status=activity_status,
-        activity_pass=pass_no,
         search_status=search_status,
         search_entries=search_entries,
     )
@@ -530,7 +476,7 @@ def resolve_parallel_accounts(
 
 
 def _outcome_interrupted(outcome: AccountOutcome) -> bool:
-    return outcome.baseline_status == "interrupted" or outcome.activity_status == "interrupted"
+    return outcome.baseline_status == "interrupted"
 
 
 def _run_accounts_serial(
@@ -1075,10 +1021,7 @@ class AccountScanSnapshot:
     last_completed_generation: Optional[int]
     top_paths: list  # List[sqlite3.Row] (path, size_kb)
     growth: list  # List[sqlite3.Row] (path, current_kb, previous_kb) - 이전 세대가 없으면 빈 리스트
-    last_activity_total_changed: Optional[int]
-    last_activity_completed_at: Optional[str]
     pending_baseline_count: int
-    pending_activity_count: int
     # 진행률을 보여주기 위한 개수. 분모(total)는 **진행 중 늘어날 수 있다** -
     # 시간 초과로 디렉터리를 쪼개면 작업이 추가되기 때문이다. 그래서 화면에
     # 그 사실을 함께 적는다 (숨기면 진행률이 뒤로 가는 것처럼 보인다).
@@ -1159,11 +1102,6 @@ def get_status_snapshot(
             baseline_counts = scan_store.checkpoint_progress(
                 conn, account.account_id, scan_store.BASELINE, state.working_generation
             )
-            pending_activity_count = conn.execute(
-                "SELECT COUNT(*) FROM scan_checkpoints WHERE account_id = ? AND kind = 'activity' "
-                "AND generation = ? AND status = 'pending'",
-                (account.account_id, state.working_activity_pass),
-            ).fetchone()[0]
             accounts_snapshot.append(
                 AccountScanSnapshot(
                     account_id=account.account_id,
@@ -1185,10 +1123,7 @@ def get_status_snapshot(
                         )
                         if current_gen else []
                     ),
-                    last_activity_total_changed=state.last_activity_total_changed,
-                    last_activity_completed_at=state.last_activity_completed_at,
                     pending_baseline_count=pending_baseline_count,
-                    pending_activity_count=pending_activity_count,
                     baseline_done=baseline_counts["done"] + baseline_counts["error"],
                     baseline_total=baseline_counts["total"],
                     partial_paths=(

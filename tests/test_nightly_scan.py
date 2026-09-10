@@ -12,14 +12,17 @@ from tests import support
 
 
 class FakeCommandRunner:
-    """`du`와 `find`를 명령 내용으로 구분해 가짜 결과를 돌려주는 단일 러너.
+    """명령 내용으로 구분해 가짜 결과를 돌려주는 단일 러너.
 
-    주의(이 파일에서 한 번 실수했던 부분): `smvwp.detail_scan.subprocess`와
-    `smvwp.activity_scan.subprocess`는 서로 다른 객체가 아니라 **같은 표준
-    subprocess 모듈 객체**다. 따라서 두 경로를 각각 patch하면 나중에 적용된
-    patch가 앞의 것을 그대로 덮어써서, `du` 호출이 `find`용 가짜 결과(빈
-    stdout)를 받아 엉뚱하게 실패한다. 그래서 patch는 한 번만 걸고, 그 하나가
-    명령을 보고 분기하도록 했다.
+    `find` 갈래는 **없앤 기능이 되살아나지 않는지 보려고 남겨 둔다.** 활동
+    스캔을 걷어낸 뒤로 `find` 는 한 번도 돌면 안 되고, 여기에 걸리면 시험이
+    그것을 알려 준다.
+
+    주의(이 파일에서 한 번 실수했던 부분): 여러 모듈의 `subprocess` 는 서로
+    다른 객체가 아니라 **같은 표준 subprocess 모듈 객체**다. 따라서 여러
+    경로를 각각 patch 하면 나중에 적용된 patch 가 앞의 것을 그대로 덮어써서
+    엉뚱한 가짜 결과를 받는다. 그래서 patch 는 한 번만 걸고, 그 하나가 명령을
+    보고 분기하도록 했다.
 
     stdout은 bytes로 돌려준다 - 앱이 `procio.run_utf8`로 바이트 모드 실행 후
     직접 UTF-8 디코딩하기 때문 (tests/support.py 참고).
@@ -134,11 +137,12 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertEqual(len(summary.accounts), 1)
         outcome = summary.accounts[0]
         self.assertEqual(outcome.baseline_status, "done")
-        self.assertEqual(outcome.activity_status, "done")
 
-        # 최상위 디렉터리 2개에 대해 du/find가 각각 한 번씩 실행되어야 한다.
+        # 최상위 디렉터리 2개에 대해 du가 한 번씩 실행되어야 한다.
         self.assertEqual(runner.du_count, 2)
-        self.assertEqual(len(runner.find_calls), 2)
+        # find 는 이제 아예 돌지 않는다. 변경 파일 수를 세려고 트리를 한 번 더
+        # 완주했는데, 그 숫자로 할 수 있는 일이 없었다.
+        self.assertEqual(runner.find_calls, [])
 
         conn = scan_store.connect(self.data_dir)
         try:

@@ -407,7 +407,6 @@ class ScanTab(QFrame):
             return ""
         try:
             path = latest_run["current_path"]
-            kind = latest_run["current_kind"]
             account_id = latest_run["current_account_id"]
         except (KeyError, IndexError):
             return ""
@@ -415,7 +414,7 @@ class ScanTab(QFrame):
             return ""
         account = config_module.find_account(self._get_config(), account_id) if account_id else None
         kind_text = i18n.t(
-            "progress.kind.activity" if kind == "activity" else "progress.kind.baseline"
+            "progress.kind.baseline"
         )
         return i18n.t(
             "scan.current_target",
@@ -505,7 +504,7 @@ class ScanTab(QFrame):
                 )
             )
         pending_total = sum(
-            item.pending_baseline_count + item.pending_activity_count for item in snapshot.accounts
+            item.pending_baseline_count for item in snapshot.accounts
         )
         done_total = sum(item.baseline_done for item in snapshot.accounts)
         total_total = sum(item.baseline_total for item in snapshot.accounts)
@@ -621,7 +620,7 @@ class ScanTab(QFrame):
             progress_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             table.setItem(row, SCAN_ACCT_PROGRESS, progress_item)
 
-            pending = entry.pending_baseline_count + entry.pending_activity_count
+            pending = entry.pending_baseline_count
             pending_item = QTableWidgetItem(f"{pending:,}" if pending else dash)
             pending_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             table.setItem(row, SCAN_ACCT_PENDING, pending_item)
@@ -666,15 +665,7 @@ class ScanTab(QFrame):
                 notes.append(
                     i18n.t("scan.acct.note_partial", count=len(entry.partial_paths))
                 )
-            if entry.last_activity_total_changed is not None:
-                notes.append(
-                    i18n.t("scan.acct.note_changed", count=entry.last_activity_total_changed)
-                )
             note_item = QTableWidgetItem("  ·  ".join(notes) if notes else "")
-            # '변경 파일 N개'가 무엇을 센 것인지 화면 어디에도 설명이 없었다.
-            # 개수뿐이고 어떤 파일인지는 담지 않는다는 것을 여기서 밝힌다.
-            if entry.last_activity_total_changed is not None:
-                note_item.setToolTip(i18n.t("scan.acct.changed_tip"))
             if entry.failed_count or entry.partial_paths:
                 note_item.setForeground(QColor(tiers.color(tiers.WARN)))
             table.setItem(row, SCAN_ACCT_NOTE, note_item)
@@ -814,17 +805,15 @@ class ScanTab(QFrame):
                 self.growth_caption.setText(i18n.t("scan.no_baseline", account=account.name))
             return
 
-        activity_note = ""
-        if entry.last_activity_total_changed is not None:
-            activity_note = i18n.t("scan.activity_note", count=entry.last_activity_total_changed)
         # 권한 부족으로 축소 측정된 경로가 있으면 반드시 알린다 - 모르고 보면
         # "안 늘었네"로 잘못 읽는다.
+        notice = ""
         if entry.partial_paths:
-            activity_note += "\n" + i18n.t(
+            notice += "\n" + i18n.t(
                 "scan.partial_warning", count=len(entry.partial_paths)
             )
         if entry.failed_count:
-            activity_note += "\n" + self._scan_failure_text(entry, account.name)
+            notice += "\n" + self._scan_failure_text(entry, account.name)
 
         if entry.growth:
             self.growth_caption.setText(
@@ -838,7 +827,7 @@ class ScanTab(QFrame):
                         entry.previous_scan_at,
                         (entry.last_completed_generation or 1) - 1,
                     ),
-                    activity=activity_note,
+                    notice=notice,
                 )
             )
             self.growth_table.setSortingEnabled(False)
@@ -885,7 +874,7 @@ class ScanTab(QFrame):
                 current=formatting.scan_label(
                     entry.current_scan_at, entry.last_completed_generation
                 ),
-                activity=activity_note,
+                notice=notice,
             )
         )
         self.growth_table.setSortingEnabled(False)

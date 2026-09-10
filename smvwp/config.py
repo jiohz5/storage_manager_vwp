@@ -40,7 +40,6 @@ DEFAULT_DETAIL_TASK_TIMEOUT_SECONDS = 15 * 60  # 디렉터리 하나당 du/find 
 DEFAULT_DETAIL_SCAN_KEEP_GENERATIONS = 2
 DEFAULT_DETAIL_SCAN_TOP_N = 15
 DEFAULT_DETAIL_SCAN_MAX_DEPTH = 3
-DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS = 2
 
 # 표시 언어 (i18n). 저장은 언어 코드로만 하고 라벨은 그때그때 만든다.
 DEFAULT_LANGUAGE = i18n.DEFAULT_LANGUAGE
@@ -241,7 +240,6 @@ class Settings:
     # 운영하는 쪽이 정할 일이라 스위치를 둔다. 끄면 프로세스 이름과 사용자만
     # 남는다.
     record_process_cmdline: bool = True
-    activity_initial_lookback_days: int = DEFAULT_ACTIVITY_INITIAL_LOOKBACK_DAYS
     language: str = DEFAULT_LANGUAGE
     # 알림 채널. command/webhook은 사내 endpoint가 있을 때만 쓰고, 설정하지
     # 않으면 outbox 그대로 동작한다.
@@ -376,8 +374,6 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("detail_scan_top_n은 1~200이어야 합니다")
     if not 1 <= settings.detail_scan_max_depth <= 12:
         raise ConfigError("detail_scan_max_depth는 1~12여야 합니다")
-    if settings.activity_initial_lookback_days < 1:
-        raise ConfigError("activity_initial_lookback_days는 1 이상이어야 합니다")
     # 상한을 16으로 둔 것은 임의값이 아니다 - 계정 수만큼 du를 동시에 띄우면
     # 파일서버가 감당하는 범위를 넘어설 수 있고, 이 프로그램이 장애의 원인이
     # 되는 것이 가장 나쁜 실패다. 실측용으로 충분히 넓으면서 사고는 막는 선.

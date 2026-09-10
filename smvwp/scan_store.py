@@ -35,7 +35,6 @@ from . import paths
 logger = logging.getLogger(__name__)
 
 BASELINE = "baseline"
-ACTIVITY = "activity"
 
 STATUS_PENDING = "pending"
 STATUS_DONE = "done"
@@ -268,10 +267,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_time
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
-    last_completed_activity_pass INTEGER,
-    activity_cursor TEXT,
-    last_activity_total_changed INTEGER,
-    last_activity_completed_at TEXT
+    last_baseline_completed_at TEXT
 );
 """
 
@@ -538,10 +534,6 @@ def latest_run(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
 class AccountScanState:
     account_id: str
     last_completed_generation: Optional[int] = None
-    last_completed_activity_pass: Optional[int] = None
-    activity_cursor: Optional[str] = None
-    last_activity_total_changed: Optional[int] = None
-    last_activity_completed_at: Optional[str] = None
 
     @property
     def working_generation(self) -> int:
@@ -553,9 +545,6 @@ class AccountScanState:
 
         return (self.last_completed_generation or 0) + 1
 
-    @property
-    def working_activity_pass(self) -> int:
-        return (self.last_completed_activity_pass or 0) + 1
 
 
 def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanState:
@@ -572,10 +561,6 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
     return AccountScanState(
         account_id=row["account_id"],
         last_completed_generation=row["last_completed_generation"],
-        last_completed_activity_pass=row["last_completed_activity_pass"],
-        activity_cursor=row["activity_cursor"],
-        last_activity_total_changed=row["last_activity_total_changed"],
-        last_activity_completed_at=row["last_activity_completed_at"],
     )
 
 
@@ -585,26 +570,6 @@ def mark_generation_completed(conn: sqlite3.Connection, account_id: str, generat
         "UPDATE account_scan_state SET last_completed_generation = ?, "
         "last_baseline_completed_at = ? WHERE account_id = ?",
         (generation, utc_now_iso(), account_id),
-    )
-    conn.commit()
-
-
-def mark_activity_pass_completed(
-    conn: sqlite3.Connection,
-    account_id: str,
-    pass_no: int,
-    cursor_iso: str,
-    total_changed: int,
-) -> None:
-    get_account_state(conn, account_id)  # 행이 없으면 만들어 둠
-    conn.execute(
-        """
-        UPDATE account_scan_state
-        SET last_completed_activity_pass = ?, activity_cursor = ?,
-            last_activity_total_changed = ?, last_activity_completed_at = ?
-        WHERE account_id = ?
-        """,
-        (pass_no, cursor_iso, total_changed, utc_now_iso(), account_id),
     )
     conn.commit()
 
@@ -1109,6 +1074,18 @@ def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: 
     안 된) 세대는 절대 건드리지 않는다.
     """
 
+    # 예전 '활동 스캔'이 남긴 체크포인트를 치운다. 그 기능은 없앴는데(변경 파일
+    # 수를 세려고 트리를 한 번 더 완주했고, 그 숫자로 할 수 있는 일이 없었다)
+    # 진행 중이던 행이 DB 에 남아 있을 수 있다.
+    #
+    # **아래 조기 반환보다 위에 둔다.** 지울 세대가 없으면 그대로 돌아가는데,
+    # 그 뒤에 두면 계정이 세대를 여럿 쌓기 전까지 이 찌꺼기가 안 치워진다.
+    conn.execute(
+        "DELETE FROM scan_checkpoints WHERE account_id = ? AND kind = 'activity'",
+        (account_id,),
+    )
+    conn.commit()
+
     completed = [
         row["generation"]
         for row in conn.execute(
@@ -1133,18 +1110,6 @@ def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: 
     conn.execute(
         f"DELETE FROM baseline_large_files WHERE account_id = ? AND generation IN ({placeholders})",
         (account_id, *to_delete),
-    )
-    conn.commit()
-    return cursor.rowcount
-
-
-def prune_completed_activity_checkpoints(conn: sqlite3.Connection, account_id: str, pass_no: int) -> int:
-    """완료된 activity pass의 체크포인트 상세는 요약(account_scan_state)만
-    남기고 지운다 - 파일 하나하나를 오래 들고 있을 필요가 없다."""
-
-    cursor = conn.execute(
-        "DELETE FROM scan_checkpoints WHERE account_id = ? AND kind = 'activity' AND generation = ?",
-        (account_id, pass_no),
     )
     conn.commit()
     return cursor.rowcount

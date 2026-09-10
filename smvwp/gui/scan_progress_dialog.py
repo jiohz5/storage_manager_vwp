@@ -73,7 +73,6 @@ class ScanProgressDialog(QDialog):
         self.account_combo.currentIndexChanged.connect(self._reload)
         self.kind_combo = QComboBox()
         self.kind_combo.addItem(i18n.t("progress.kind.baseline"), scan_store.BASELINE)
-        self.kind_combo.addItem(i18n.t("progress.kind.activity"), scan_store.ACTIVITY)
         self.kind_combo.currentIndexChanged.connect(self._reload)
         refresh_btn = QPushButton(i18n.t("progress.btn.refresh"))
         refresh_btn.clicked.connect(self._reload)
@@ -120,11 +119,7 @@ class ScanProgressDialog(QDialog):
         conn = scan_store.connect(self._data_dir)
         try:
             state = scan_store.get_account_state(conn, account_id)
-            generation = (
-                state.working_generation
-                if kind == scan_store.BASELINE
-                else state.working_activity_pass
-            )
+            generation = state.working_generation
             counts = scan_store.checkpoint_progress(conn, account_id, kind, generation)
             rows = scan_store.recent_checkpoints(conn, account_id, kind, generation)
             # 진행 중인 스캔은 아직 완료 시각이 없다 - 그때는 회차 번호로 물러난다.

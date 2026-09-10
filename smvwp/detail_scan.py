@@ -204,7 +204,7 @@ def run_du(path: str, timeout_seconds: int) -> DuOutcome:
     # 계속 합산한 뒤 exit 1로 끝낸다. 여기서 결과를 통째로 버리면, 관리자가
     # 아닌 사용자가 남의 프로젝트 계정을 볼 때 사실상 모든 계정이 실패로
     # 기록되어 기준선이 영영 만들어지지 않는다. stdout에 총계가 있으면 부분
-    # 결과로 받아들이고 `partial`로 표시한다 (activity_scan의 find 처리와
+    # 결과로 받아들이고 `partial`로 표시한다 (예전 활동 스캔의 find 처리와
     # 같은 원칙).
     if proc.returncode != 0:
         return DuOutcome(

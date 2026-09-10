@@ -139,12 +139,11 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.nth": "{n}번째 스캔",
         "scan.select_account": "계정을 선택하면 증가 경로가 표시됩니다.",
         "scan.no_baseline": "{account}: 아직 완료된 기준선이 없습니다 (상세 스캔이 한 바퀴 끝나야 표시됩니다).",
-        "scan.growth_caption": "{account}: {current} 스캔 기준, {previous} 스캔과 같은 경로끼리 비교{activity}",
+        "scan.growth_caption": "{account}: {current} 스캔 기준, {previous} 스캔과 같은 경로끼리 비교{notice}",
         "scan.baseline_only_caption": (
             "{account}: {current} 스캔 결과만 있습니다 "
-            "(비교할 이전 스캔이 없어 증감은 다음 스캔부터 표시됩니다){activity}"
+            "(비교할 이전 스캔이 없어 증감은 다음 스캔부터 표시됩니다){notice}"
         ),
-        "scan.activity_note": " · 최근 변경 파일 {count:,}개",
         "scan.partial_warning": (
             "⚠ 경로 {count}곳은 읽을 수 없는 하위 디렉터리가 있어 실제보다 작게 "
             "측정되었습니다 (권한 부족). 증가량도 그만큼 축소될 수 있습니다."
@@ -194,7 +193,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.acct.note_failed": "실패 {count}곳",
         "scan.acct.note_partial": "일부만 읽음 {count}곳",
-        "scan.acct.note_changed": "변경 파일 {count:,}개",
         "reports.large_heading": "[눈에 띄는 큰 파일]",
         "reports.large_caveat": (
             "파일 하나가 계정의 5% 이상을 차지하거나, 지난 스캔보다 1.5배 이상 "
@@ -217,11 +215,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "순회가 파일을 훑는 김에 100MB 이상인 것 중 큰 순서로 모아 둡니다.\n\n"
             "'목록에 없던 파일'은 새로 생겼다는 뜻이 아닙니다 - 지난 스캔의 상위 "
             "목록에 없었다는 것까지만 알 수 있습니다(그때는 작았을 수도 있습니다)."
-        ),
-        "scan.acct.changed_tip": (
-            "지난 스캔 이후 수정 시각이 바뀐 파일의 **개수**입니다. 어떤 파일이 "
-            "어떻게 바뀌었는지는 담지 않습니다 - '이 계정이 활발하다'까지만 "
-            "말해 줍니다. 5,000개가 넘으면 그 이상은 세지 않습니다."
         ),
         # -- 기간 표기 ---------------------------------------------
         "duration.under_minute": "1분 미만",
@@ -336,7 +329,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.title": "상세 스캔 진행 상황",
         "progress.kind_label": "무엇을",
         "progress.kind.baseline": "용량 - 디렉터리마다 얼마인지",
-        "progress.kind.activity": "변경 - 지난 스캔 이후 바뀐 파일 수",
         "progress.btn.refresh": "새로고침",
         "progress.summary": (
             "{generation} 스캔 · 완료 {done} / 대기 {pending} / 분할 {split} / "
@@ -698,12 +690,11 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.nth": "scan #{n}",
         "scan.select_account": "Select an account to see its growth paths.",
         "scan.no_baseline": "{account}: no completed baseline yet (one full detail scan is required).",
-        "scan.growth_caption": "{account}: {current} scan, compared path-by-path with the {previous} scan{activity}",
+        "scan.growth_caption": "{account}: {current} scan, compared path-by-path with the {previous} scan{notice}",
         "scan.baseline_only_caption": (
             "{account}: only the {current} scan exists so far "
-            "(no previous scan to compare, deltas appear after the next scan){activity}"
+            "(no previous scan to compare, deltas appear after the next scan){notice}"
         ),
-        "scan.activity_note": " - {count:,} changed file(s) recently",
         "scan.partial_warning": (
             "! {count} path(s) contain unreadable subdirectories, so their sizes are "
             "under-measured (insufficient permissions). Growth figures may be understated."
@@ -755,7 +746,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         ),
         "scan.acct.note_failed": "{count} failed",
         "scan.acct.note_partial": "{count} partially read",
-        "scan.acct.note_changed": "{count:,} changed files",
         "reports.large_heading": "[Files worth a look]",
         "reports.large_caveat": (
             "Listed only when a single file takes 5% or more of the account, "
@@ -780,11 +770,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "'Not in the previous list' does not mean the file is new. All we "
             "know is that it was absent from the previous scan's top list; it "
             "may simply have been smaller then."
-        ),
-        "scan.acct.changed_tip": (
-            "The **number** of files whose modification time changed since the "
-            "last scan. It does not say which files or how - only that the "
-            "account is active. Counting stops at 5,000."
         ),
         # -- Durations ---------------------------------------------
         "duration.under_minute": "under a minute",
@@ -903,7 +888,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.title": "Detail scan progress",
         "progress.kind_label": "What",
         "progress.kind.baseline": "Size - how much each directory holds",
-        "progress.kind.activity": "Changes - files touched since the last scan",
         "progress.btn.refresh": "Refresh",
         "progress.summary": (
             "{generation} scan - done {done} / pending {pending} / split {split} / "
