@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import config as config_module
-from . import formatting, i18n, large_files, loadstat, scan_store, store, tiers, workflow
+from . import formatting, i18n, large_files, loadreport, loadstat, scan_store, store, tiers, workflow
 
 DAILY = "daily"
 WEEKLY = "weekly"
@@ -179,6 +179,7 @@ def build_daily_report(
     _append_new_tasks_section(lines, data_dir, config)
     _append_large_files_section(lines, data_dir, config)
     _append_resource_section(lines, data_dir)
+    _append_company_section(lines, data_dir)
     return "\n".join(lines) + "\n"
 
 
@@ -926,6 +927,92 @@ def _append_large_files_section(
     lines.append(i18n.t("reports.large_caveat"))
 
 
+def _append_company_section(lines: List[str], data_dir: Path) -> None:
+    """스캔이 도는 동안 **서버에서 우리 말고 무엇이 돌았나.**
+
+    부하 숫자만 있으면 "스캔 중 load 8" 이 스캔이 만든 것인지 마침 다른 사람의
+    작업 때문인지 가릴 수 없다. 아침에 보고서를 여는 사람이 가장 먼저 묻는
+    것이 그것이라, 명령을 따로 치지 않아도 보이게 여기에 싣는다.
+
+    표본이 없으면 절 자체를 만들지 않는다 - 빈 표는 "아무것도 안 돌았다"로
+    읽히는데, 사실은 "아직 못 재고 있다"이다.
+    """
+
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover - 방어적 처리
+        return
+    try:
+        run = _pick_scan_run(scan_store.last_runs(conn, limit=5))
+        if run is None:
+            return
+        run_id = run["run_id"]
+        busiest = scan_store.busiest_processes(
+            conn, run_id=run_id, limit=COMPANY_ROWS
+        )
+        mounts = scan_store.mount_activity(conn, run_id=run_id)
+        samples = scan_store.server_samples(conn, run_id=run_id, limit=5000)
+    finally:
+        conn.close()
+
+    if not busiest and not mounts:
+        return
+
+    lines.append("")
+    lines.append(i18n.t("reports.company_heading"))
+    lines.append("-" * 72)
+
+    if samples:
+        summary = loadreport.summarize(samples)
+        lines.append(
+            i18n.t(
+                "reports.company_context",
+                cpu=_fmt_pct(summary.others_cpu.average),
+                peak=_fmt_pct(summary.others_cpu.peak),
+                blocked=f"{summary.blocked_others.average:.1f}"
+                if summary.blocked_others.average is not None
+                else i18n.t("common.unknown_value"),
+            )
+        )
+        lines.append("")
+
+    others = [item for item in busiest if not item["is_ours"]]
+    if others:
+        lines.append(
+            pad(i18n.t("reports.company_col.user"), 14)
+            + pad(i18n.t("reports.company_col.job"), 20)
+            + pad(i18n.t("reports.company_col.cpu_peak"), 11, ">")
+            + pad(i18n.t("reports.company_col.mem_peak"), 13, ">")
+        )
+        for item in others:
+            lines.append(
+                pad(str(item["user_name"] or "-"), 14)
+                + pad(str(item["comm"] or "-")[:18], 20)
+                + pad(_fmt_pct(item["cpu_peak"]), 11, ">")
+                + pad(_fmt_kb(item["rss_peak"]), 13, ">")
+            )
+    else:
+        lines.append(i18n.t("reports.company_alone"))
+
+    if mounts:
+        lines.append("")
+        for item in mounts:
+            # 대기가 왕복보다 크면 병목은 파일서버가 아니라 우리 쪽 슬롯이다.
+            # 그 구분이 다음에 병렬을 올릴지 내릴지를 가른다.
+            lines.append(
+                i18n.t(
+                    "reports.company_mount",
+                    mount=str(item["mount_point"]),
+                    ops=f"{int(item['total_ops'] or 0):,}",
+                    rtt=f"{item['rtt_avg']:.2f}" if item["rtt_avg"] is not None else "-",
+                    queue=f"{item['queue_avg']:.2f}"
+                    if item["queue_avg"] is not None
+                    else "-",
+                )
+            )
+        lines.append(i18n.t("reports.company_mount_note"))
+
+
 def _append_resource_section(lines: List[str], data_dir: Path) -> None:
     try:
         conn = scan_store.connect(data_dir)
@@ -1064,6 +1151,9 @@ def _append_resource_section(lines: List[str], data_dir: Path) -> None:
 
 # 비교에 쓸 기간. 리소스 표본 보존 기간(`load_sample_retention_days`, 기본 30일)을
 # 넘겨 봐야 숫자가 없는 실행만 늘어난다.
+# 보고서에 실을 '다른 작업' 줄 수. 다 실으면 아침에 아무도 안 읽는다.
+COMPANY_ROWS = 6
+
 NIGHT_COMPARE_DAYS = 30
 # 밤별 상세에 적을 최대 줄 수. 한 달치를 다 적으면 요약이 묻힌다.
 NIGHT_DETAIL_ROWS = 14

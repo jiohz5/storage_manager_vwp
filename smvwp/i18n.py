@@ -240,6 +240,22 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.new_task_stages": "단계: {stages}",
         "reports.new_tasks_truncated": "  … 계정당 {shown}건까지만 표시했습니다",
         # -- 스캔 중 리소스 변화 ------------------------------------
+        "reports.company_heading": "[그때 서버에서 무엇이 돌았나]",
+        "reports.company_context": (
+            "우리 스캔을 뺀 나머지가 쓴 CPU: 평균 {cpu}, 최고 {peak} · "
+            "I/O 를 기다린 남의 작업 평균 {blocked}개"
+        ),
+        "reports.company_col.user": "사용자",
+        "reports.company_col.job": "작업",
+        "reports.company_col.cpu_peak": "CPU최고",
+        "reports.company_col.mem_peak": "메모리최고",
+        "reports.company_alone": "이 시간에 서버를 쓴 다른 작업이 잡히지 않았습니다.",
+        "reports.company_mount": (
+            "{mount} - {ops}건, 왕복 {rtt}ms, 대기 {queue}ms"
+        ),
+        "reports.company_mount_note": (
+            "  대기가 왕복보다 크면 병목은 파일서버가 아니라 이쪽 RPC 슬롯입니다."
+        ),
         "reports.resource_heading": "[스캔 중 리소스 변화]",
         "reports.resource_run": "{started} · {trigger} · {duration} · {status}",
         "reports.resource_other_runs": "같은 기간의 다른 실행 (이것도 부하를 만들었습니다):",
@@ -788,6 +804,23 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "reports.new_task_stages": "Stages: {stages}",
         "reports.new_tasks_truncated": "  ... showing at most {shown} per account",
         # -- Resource change during the scan ------------------------
+        "reports.company_heading": "[What else the server was doing]",
+        "reports.company_context": (
+            "CPU used by everything except our scan: {cpu} average, {peak} peak - "
+            "{blocked} other jobs waiting on I/O on average"
+        ),
+        "reports.company_col.user": "User",
+        "reports.company_col.job": "Job",
+        "reports.company_col.cpu_peak": "CPU peak",
+        "reports.company_col.mem_peak": "Memory peak",
+        "reports.company_alone": "No other job was seen using the server at that time.",
+        "reports.company_mount": (
+            "{mount} - {ops} ops, {rtt}ms round trip, {queue}ms queued"
+        ),
+        "reports.company_mount_note": (
+            "  Queue larger than round trip means the bottleneck is our RPC slots,"
+            " not the filer."
+        ),
         "reports.resource_heading": "[Resource change during scan]",
         "reports.resource_run": "{started} · {trigger} · {duration} · {status}",
         "reports.resource_other_runs": "Other runs in the same period (they added load too):",
