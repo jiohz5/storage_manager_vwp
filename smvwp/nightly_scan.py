@@ -214,7 +214,7 @@ def _drain_checkpoints(
 
     끝까지 비웠으면 True, 중지·시간창으로 중단됐으면 False.
 
-    `handle(conn, checkpoint)`가 체크포인트 하나를 처리한다 (`du` 또는 `find`).
+    `handle(conn, checkpoint)`가 체크포인트 하나를 처리한다 (크기 측정).
     """
 
     dispatcher = _CheckpointDispatcher()
@@ -417,7 +417,7 @@ def _process_search_index(
 ) -> "tuple[str, int]":
     """검색 인덱싱을 켠 계정만 이름 인덱스를 갱신한다.
 
-    시간창/안전 중지 규칙은 `du`/`find`와 똑같이 적용한다 - 인덱싱도 파일
+    시간창/안전 중지 규칙은 크기 측정과 똑같이 적용한다 - 인덱싱도 파일
     시스템을 훑는 무거운 작업이기 때문. 중간에 멈추면 그때까지 커밋한 항목은
     남고, 완주하지 못했으므로 사라진 항목 정리는 다음 실행으로 미룬다
     (`search_index.index_account` 참고).

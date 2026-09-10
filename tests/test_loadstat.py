@@ -29,7 +29,7 @@ def _self_stat(utime: int, stime: int, cutime: int, cstime: int) -> str:
 
 class SelfJiffiesTests(unittest.TestCase):
     def test_sums_own_and_reaped_children(self):
-        """자식(du/find)의 CPU가 빠지면 스캔 작업량이 통째로 안 잡힌다."""
+        """자식(`du` 엔진)의 CPU가 빠지면 스캔 작업량이 통째로 안 잡힌다."""
 
         with tempfile.TemporaryDirectory() as tmp:
             path = _write(Path(tmp), "self_stat", _self_stat(10, 5, 100, 50))
@@ -127,7 +127,7 @@ class AccumulatorTests(unittest.TestCase):
 
 
 class MemoryTests(unittest.TestCase):
-    """메모리는 최고치를 남긴다 - du/find는 끝나면 사라져 사후 관측이 안 된다."""
+    """메모리는 최고치를 남긴다 - 자식으로 돈 du는 끝나면 사라져 사후 관측이 안 된다."""
 
     def test_reads_vmrss_from_status(self):
         status = (

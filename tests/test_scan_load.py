@@ -34,7 +34,7 @@ class SystemSamplerTests(unittest.TestCase):
         self.assertIsNone(result.iowait_percent)
 
     def test_separates_iowait_from_busy(self):
-        """du/find는 CPU가 아니라 I/O 대기를 만든다 - 둘을 합치면 그게 안 보인다."""
+        """상세 스캔은 CPU가 아니라 I/O 대기를 만든다 - 둘을 합치면 그게 안 보인다."""
 
         sampler = loadstat.SystemSampler()
         sampler._prev = (0, 0, 0)

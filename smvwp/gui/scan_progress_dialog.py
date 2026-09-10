@@ -71,15 +71,10 @@ class ScanProgressDialog(QDialog):
         for account in self._config.accounts:
             self.account_combo.addItem(account.name, account.account_id)
         self.account_combo.currentIndexChanged.connect(self._reload)
-        self.kind_combo = QComboBox()
-        self.kind_combo.addItem(i18n.t("progress.kind.baseline"), scan_store.BASELINE)
-        self.kind_combo.currentIndexChanged.connect(self._reload)
         refresh_btn = QPushButton(i18n.t("progress.btn.refresh"))
         refresh_btn.clicked.connect(self._reload)
         top.addWidget(QLabel(i18n.t("scan.account_label")))
         top.addWidget(self.account_combo)
-        top.addWidget(QLabel(i18n.t("progress.kind_label")))
-        top.addWidget(self.kind_combo)
         top.addWidget(refresh_btn)
         top.addStretch(1)
         root.addLayout(top)
@@ -110,7 +105,8 @@ class ScanProgressDialog(QDialog):
 
     def _reload(self) -> None:
         account_id = self.account_combo.currentData()
-        kind = self.kind_combo.currentData()
+        # 종류는 이제 기준선 하나뿐이다. 고르는 상자를 없앴으니 여기서도 못박는다.
+        kind = scan_store.BASELINE
         if not account_id:
             self.summary_label.setText(i18n.t("search.no_account"))
             self.table.setRowCount(0)

@@ -13,26 +13,30 @@ def _completed(stdout, returncode=0, stderr=""):
     return support.completed(["du"], stdout=stdout, returncode=returncode, stderr=stderr)
 
 
-class RunDuTests(unittest.TestCase):
+class RunDuTreeTests(unittest.TestCase):
+    """`du` 엔진의 유일한 실행 경로.
+
+    예전에는 이 시험들이 `run_du`(`du -sk`)를 보고 있었는데, 그 함수는 아무도
+    부르지 않는 죽은 코드였다. 같은 성질을 실제로 도는 쪽에서 못박는다."""
+
     @patch("smvwp.detail_scan.subprocess.run")
     def test_parses_size_kb(self, mock_run):
         mock_run.return_value = _completed("123456\t/user/project_a/data\n")
-        outcome = detail_scan.run_du("/user/project_a/data", timeout_seconds=60)
-        self.assertTrue(outcome.ok)
-        self.assertEqual(outcome.size_kb, 123456)
+        outcome = detail_scan.run_du_tree("/user/project_a/data", timeout_seconds=60)
+        self.assertIsNone(outcome.error_message)
+        self.assertEqual(outcome.root_size_kb, 123456)
 
     @patch("smvwp.detail_scan.subprocess.run")
     def test_timeout_reported_not_raised(self, mock_run):
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="du", timeout=60)
-        outcome = detail_scan.run_du("/slow", timeout_seconds=60)
-        self.assertFalse(outcome.ok)
+        outcome = detail_scan.run_du_tree("/slow", timeout_seconds=60)
         self.assertTrue(outcome.timed_out)
+        self.assertIsNone(outcome.root_size_kb)
 
     @patch("smvwp.detail_scan.subprocess.run")
     def test_permission_error_reported_as_failure_not_timeout(self, mock_run):
         mock_run.return_value = _completed("", returncode=1, stderr="du: cannot read directory: Permission denied")
-        outcome = detail_scan.run_du("/denied", timeout_seconds=60)
-        self.assertFalse(outcome.ok)
+        outcome = detail_scan.run_du_tree("/denied", timeout_seconds=60)
         self.assertFalse(outcome.timed_out)
         self.assertIn("Permission denied", outcome.error_message)
 
@@ -90,10 +94,9 @@ class PriorityPrefixTests(unittest.TestCase):
             "smvwp.detail_scan.build_priority_prefix", return_value=["ionice", "-c3"]
         ):
             with patch("smvwp.detail_scan.subprocess.run", side_effect=run):
-                outcome = detail_scan.run_du("/acct/a", 60)
+                outcome = detail_scan.run_du_tree("/acct/a", 60)
 
-        self.assertTrue(outcome.ok)
-        self.assertEqual(outcome.size_kb, 777)
+        self.assertEqual(outcome.root_size_kb, 777)
         self.assertFalse(outcome.partial)
 
     def test_real_failure_is_not_masked_by_the_retry(self):
@@ -111,9 +114,9 @@ class PriorityPrefixTests(unittest.TestCase):
                     returncode=1,
                 ),
             ):
-                outcome = detail_scan.run_du("/acct/a", 60)
+                outcome = detail_scan.run_du_tree("/acct/a", 60)
 
-        self.assertFalse(outcome.ok)
+        self.assertIsNone(outcome.root_size_kb)
         # 권한 문제는 고장이 아니라 '이 사용자로는 못 본다'는 뜻이므로 그렇게 읽혀야 한다.
         self.assertIn("읽기 권한이 없어", outcome.error_message)
 
@@ -211,10 +214,9 @@ class PermissionDeniedTests(unittest.TestCase):
 
     def test_partial_result_is_kept_not_discarded(self):
         with patch("smvwp.detail_scan.subprocess.run", return_value=self._denied("/acct/a")):
-            outcome = detail_scan.run_du("/acct/a", 60)
+            outcome = detail_scan.run_du_tree("/acct/a", 60)
 
-        self.assertTrue(outcome.ok)
-        self.assertEqual(outcome.size_kb, 1234)
+        self.assertEqual(outcome.root_size_kb, 1234)
         self.assertTrue(outcome.partial)
         self.assertIn("Permission denied", outcome.error_message)
 
@@ -223,9 +225,9 @@ class PermissionDeniedTests(unittest.TestCase):
             "smvwp.detail_scan.subprocess.run",
             return_value=support.completed(["du"], stdout="42\t/acct/a\n"),
         ):
-            outcome = detail_scan.run_du("/acct/a", 60)
+            outcome = detail_scan.run_du_tree("/acct/a", 60)
 
-        self.assertTrue(outcome.ok)
+        self.assertEqual(outcome.root_size_kb, 42)
         self.assertFalse(outcome.partial)
         self.assertIsNone(outcome.error_message)
 
@@ -238,10 +240,10 @@ class PermissionDeniedTests(unittest.TestCase):
                 ["du"], stdout="", stderr="du: cannot access '/acct/a'\n", returncode=1
             ),
         ):
-            outcome = detail_scan.run_du("/acct/a", 60)
+            outcome = detail_scan.run_du_tree("/acct/a", 60)
 
-        self.assertFalse(outcome.ok)
-        self.assertIsNone(outcome.size_kb)
+        self.assertIsNone(outcome.root_size_kb)
+        self.assertTrue(outcome.error_message)
 
     def test_checkpoint_records_size_and_partial_reason(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -293,7 +295,7 @@ class SnapshotExclusionTests(unittest.TestCase):
         """큐에서 빼는 것만으로는 부족하다 - du가 스스로 내려가기 때문에
         명령 자체에 --exclude가 있어야 한다."""
 
-        command = detail_scan.du_command("/user/project_a")
+        command = detail_scan.du_tree_command("/user/project_a", max_depth=3)
         self.assertIn("--exclude=.snapshot", command)
         # 경로는 옵션 뒤, `--` 다음에 와야 한다 (하이픈으로 시작하는 경로 방어)
         self.assertEqual(command[-2:], ["--", "/user/project_a"])
@@ -306,7 +308,7 @@ class SnapshotExclusionTests(unittest.TestCase):
             return support.completed(list(command), stdout="10\t/acct/a\n")
 
         with patch("smvwp.detail_scan.subprocess.run", side_effect=fake_run):
-            detail_scan.run_du("/acct/a", 60)
+            detail_scan.run_du_tree("/acct/a", 60)
 
         self.assertTrue(any(a.startswith("--exclude=.snapshot") for a in captured["argv"]))
 

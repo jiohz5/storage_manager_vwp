@@ -108,7 +108,7 @@ class CrowdedTests(unittest.TestCase):
         self.assertTrue(bucket.crowded)
 
     def test_waiting_processes_count_even_when_cpu_is_low(self):
-        """du/find 의 영향은 CPU 가 아니라 여기에 먼저 나타난다."""
+        """상세 스캔의 영향은 CPU 가 아니라 여기에 먼저 나타난다."""
 
         bucket = loadreport.summarize(
             [row(cpu_busy_percent=3.0, blocked_others=4)]

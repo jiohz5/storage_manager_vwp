@@ -92,7 +92,7 @@ if __name__ == "__main__":
 class ChildCleanupTests(unittest.TestCase):
     """창을 닫을 때 우리가 띄운 자식만 정리한다.
 
-    부모가 그냥 종료하면 자식(du/find)은 죽지 않고 init에 재부모화되어 끝까지
+    부모가 그냥 종료하면 자식(`du`)은 죽지 않고 init에 재부모화되어 끝까지
     돈다 - 창을 껐는데도 파일서버 부하가 계속되는 상태다.
     """
 

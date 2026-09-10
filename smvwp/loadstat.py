@@ -10,9 +10,10 @@
 ## 무엇을 재는가
 
 - `/proc/self/stat`의 `utime + stime + cutime + cstime`
-  `cutime/cstime`는 **거둬들인 자식 프로세스**의 CPU 시간이다. 상세 스캔은
-  `du`/`find`를 `subprocess.run`으로 끝까지 기다렸다가 거두므로, 이 값에 자식이
-  쓴 CPU가 그대로 쌓인다. 즉 스캔 프로세스 하나만 봐도 실제 작업량이 잡힌다.
+  `cutime/cstime`는 **거둬들인 자식 프로세스**의 CPU 시간이다. `du` 엔진은
+  `du`를 `subprocess.run`으로 끝까지 기다렸다가 거두므로 이 값에 자식이 쓴
+  CPU가 그대로 쌓이고, 기본인 파이썬 순회는 이 프로세스 안에서 도니 애초에
+  자기 몫으로 잡힌다. 어느 쪽이든 스캔 프로세스 하나만 봐도 작업량이 잡힌다.
 - `/proc/stat` 첫 줄의 합계 = 같은 기간 시스템 전체가 쓴 CPU 시간.
 
 둘의 증분 비율이 곧 "전체 중 이 작업의 몫"이다.
@@ -170,7 +171,7 @@ def _self_rss_kb() -> Optional[int]:
 def _peak_rss_kb() -> Optional[int]:
     """자기 자신과 **자식들**의 최대 RSS 중 큰 값 (KB).
 
-    `du`/`find`는 자식으로 돌다가 끝나면 사라져서, 그 순간의 RSS를 나중에
+    `du` 엔진에서 자식으로 돈 프로세스는 끝나면 사라져서, 그 순간의 RSS를 나중에
     들여다볼 방법이 없다. `getrusage(RUSAGE_CHILDREN).ru_maxrss`는 거둬들인
     자식들의 **최고치**를 커널이 기억해 주므로, 사후에도 "가장 많이 썼을 때
     얼마였나"를 알 수 있다. 스캔이 메모리를 위협했는지는 평균이 아니라 최고치가
@@ -230,7 +231,7 @@ class Summary:
     load_avg_1m: Optional[float] = None
     cpu_count: int = 1
     # 메모리는 평균이 아니라 **최고치**를 남긴다. "스캔이 메모리를 위협했나"는
-    # 순간 최대가 답하는 질문이고, du/find는 끝나면 사라져 사후 관측이 안 된다.
+    # 순간 최대가 답하는 질문이고, 자식으로 돈 du는 끝나면 사라져 사후 관측이 안 된다.
     rss_peak_kb: Optional[int] = None
     memory_total_kb: Optional[int] = None
     memory_peak_percent: Optional[float] = None
@@ -324,7 +325,7 @@ class Accumulator:
 # 있을 때 서버가 어떻게 달라지는가**이므로, 프로세스 몫과 별개로 시스템 전체
 # 수치를 같은 시각에 함께 남긴다.
 #
-# iowait을 busy와 나눠 재는 것이 여기서 특히 중요하다. du/find는 CPU를 거의
+# iowait을 busy와 나눠 재는 것이 여기서 특히 중요하다. 상세 스캔은 CPU를 거의
 # 안 쓰고 I/O 대기를 만든다 - CPU 사용률만 보면 "부하가 거의 없다"는 결론이
 # 나오는데, 정작 그 시간에 다른 사람의 job은 디스크를 기다리며 느려진다.
 # 두 값을 나란히 놓아야 그 상황이 보인다.
@@ -594,7 +595,7 @@ class Change:
         return self.peak - self.before
 
 
-# 보고서에 낼 지표와 순서. CPU busy를 맨 위에 두지 않은 것은 의도다 - du/find의
+# 보고서에 낼 지표와 순서. CPU busy를 맨 위에 두지 않은 것은 의도다 - 상세 스캔의
 # 실제 영향은 iowait과 load에 먼저 나타나고, busy만 보면 "부하 없음"으로 잘못
 # 읽힌다. 사람이 위에서부터 읽는다는 것을 감안한 순서다.
 CHANGE_METRICS = (

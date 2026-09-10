@@ -39,22 +39,20 @@ class DetailScanError(Exception):
     pass
 
 
-@dataclass
-class DuOutcome:
-    ok: bool
-    size_kb: Optional[int] = None
-    timed_out: bool = False
-    error_message: Optional[str] = None
-    # 일부 하위 디렉터리를 못 읽어 실제보다 작게 측정된 값인지. 관리자가 아닌
-    # 사용자가 남의 프로젝트 계정을 볼 때는 이쪽이 오히려 일반적이다.
-    partial: bool = False
-
-
 _priority_prefix_cache: Optional[List[str]] = None
 
 # 우선순위 낮추기를 아예 끄고 싶을 때 쓰는 환경변수 (반입 장비에서 원인을
 # 가르는 데 쓴다 - 이 값을 주고 되면 원인은 nice/ionice 쪽이다).
 DISABLE_PRIORITY_ENV = "STORAGE_MANAGER_NO_NICE"
+
+
+# 스냅샷/백업 산출물 디렉터리. 스캔에서 제외한다.
+#
+# 이것들은 파일시스템이 만들어 둔 과거 시점의 사본이라, 세면 같은 데이터를 두
+# 번(스냅샷 세대만큼 여러 번) 세게 되어 계정 크기가 실제보다 몇 배로 부풀고
+# "증가 경로"도 엉뚱하게 잡힌다. 게다가 대개 읽기 전용이라 사용자가 정리할 수
+# 있는 대상도 아니다 - 즉 세어 봐야 부하만 늘고 판단에는 해롭다.
+SNAPSHOT_DIR_NAMES = {".snapshot", ".zfs", ".ckpt"}
 
 
 def _prefix_works(prefix: List[str]) -> bool:
@@ -76,8 +74,11 @@ def _prefix_works(prefix: List[str]) -> bool:
 
 def build_priority_prefix(force_recheck: bool = False) -> List[str]:
     """가능하면 `nice`/`ionice`로 우선순위를 낮춰 실행한다. 못 쓰면 빈 리스트를
-    반환해 그냥 `du`/`find`를 직접 실행한다 - 있으면 좋고 없어도 동작은 해야
+    반환해 그냥 `du`를 직접 실행한다 - 있으면 좋고 없어도 동작은 해야
     한다 (하드 상한이 아니라 최선 노력).
+
+    **`du` 엔진에서만 쓰인다.** 기본인 파이썬 순회는 이 프로세스 안에서
+    도므로 붙일 자리가 없고, 그쪽은 cron 줄 자체에 건다 (`setup_cron.csh`).
 
     ionice가 실패하는 장비에서도 스캔은 돌아야 하므로, 둘을 한 벌로 검사하지
     않고 **하나씩 떼어 내며** 되는 조합을 찾는다."""
@@ -110,39 +111,6 @@ def reset_priority_prefix() -> None:
     _priority_prefix_cache = None
 
 
-def du_command(path: str) -> List[str]:
-    """`du -sk` 명령 argv.
-
-    스냅샷 디렉터리를 `--exclude`로 뺀다. 큐에서 빼는 것만으로는 부족한데,
-    `du`는 주어진 디렉터리 아래를 스스로 전부 걸어 내려가므로 큐와 무관하게
-    `.snapshot` 안까지 세기 때문이다. 즉 제외는 **명령 자체에** 걸어야 한다.
-
-    `--exclude`는 경로 전체가 아니라 이름(basename)에 대해 모든 깊이에서
-    맞춰진다. NetApp처럼 디렉터리마다 `.snapshot`이 붙는 파일시스템을
-    감안한 것이다."""
-
-    command = ["du", "-sk"]
-    for name in sorted(SNAPSHOT_DIR_NAMES):
-        command.append(f"--exclude={name}")
-    command += ["--", path]
-    return command
-
-
-def _parse_du_total(stdout: str) -> Optional[int]:
-    """`du -sk` 출력의 마지막 줄에서 총계(KB)를 뽑는다."""
-
-    text = (stdout or "").strip()
-    if not text:
-        return None
-    parts = text.splitlines()[-1].split(None, 1)
-    if not parts:
-        return None
-    try:
-        return int(parts[0])
-    except ValueError:
-        return None
-
-
 def _is_permission_error(stderr: str) -> bool:
     """읽기 권한이 없어서 난 오류인지.
 
@@ -152,77 +120,6 @@ def _is_permission_error(stderr: str) -> bool:
 
     lowered = (stderr or "").lower()
     return "permission denied" in lowered or "허가 거부" in (stderr or "")
-
-
-def run_du(path: str, timeout_seconds: int) -> DuOutcome:
-    """`du -sk <path>` 실행. 성공하면 size_kb, 시간 초과면 timed_out=True."""
-
-    prefix = build_priority_prefix()
-    try:
-        # du 출력에는 파일 경로가 들어간다 - 비ASCII 경로가 로케일 인코딩으로
-        # 깨지지 않도록 UTF-8을 명시한다 (smvwp.procio 참고).
-        proc = procio.run_utf8(prefix + du_command(path), timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        return DuOutcome(ok=False, timed_out=True)
-    except FileNotFoundError:
-        return DuOutcome(ok=False, error_message="du 명령을 찾을 수 없습니다")
-
-    size_kb = _parse_du_total(proc.stdout)
-
-    # 접두사(nice/ionice)가 붙은 실행만 실패했을 수 있다. 접두사 자체가 죽으면
-    # du는 실행조차 안 되어 stdout이 비고 exit 1만 남는데, 그러면 스캔이
-    # 시작하자마자 전부 실패한 것처럼 보인다. 한 번은 접두사 없이 다시 해 보고,
-    # 그때 되면 접두사를 이번 실행 내내 쓰지 않는다.
-    if size_kb is None and prefix and proc.returncode != 0:
-        try:
-            bare = procio.run_utf8(du_command(path), timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            return DuOutcome(ok=False, timed_out=True)
-        except FileNotFoundError:
-            return DuOutcome(ok=False, error_message="du 명령을 찾을 수 없습니다")
-        if _parse_du_total(bare.stdout) is not None:
-            global _priority_prefix_cache
-            _priority_prefix_cache = []
-            proc = bare
-            size_kb = _parse_du_total(bare.stdout)
-        else:
-            # 접두사 탓이 아니었다. 원인 판단에 쓸 메시지는 접두사 없는 쪽이
-            # 깨끗하므로 그것을 남긴다.
-            proc = bare
-
-    if size_kb is None:
-        stderr = (proc.stderr or "").strip()
-        if _is_permission_error(stderr):
-            return DuOutcome(
-                ok=False,
-                error_message=f"읽기 권한이 없어 크기를 잴 수 없습니다: {stderr}",
-            )
-        message = stderr or (proc.stdout or "").strip() or f"du exit={proc.returncode}"
-        return DuOutcome(ok=False, error_message=message)
-
-    # du는 읽을 수 없는 하위 디렉터리를 만나면 그것만 stderr로 알리고 나머지는
-    # 계속 합산한 뒤 exit 1로 끝낸다. 여기서 결과를 통째로 버리면, 관리자가
-    # 아닌 사용자가 남의 프로젝트 계정을 볼 때 사실상 모든 계정이 실패로
-    # 기록되어 기준선이 영영 만들어지지 않는다. stdout에 총계가 있으면 부분
-    # 결과로 받아들이고 `partial`로 표시한다 (예전 활동 스캔의 find 처리와
-    # 같은 원칙).
-    if proc.returncode != 0:
-        return DuOutcome(
-            ok=True,
-            size_kb=size_kb,
-            partial=True,
-            error_message=(proc.stderr or "").strip() or f"du exit={proc.returncode}",
-        )
-    return DuOutcome(ok=True, size_kb=size_kb)
-
-
-# 스냅샷/백업 산출물 디렉터리. 스캔에서 제외한다.
-#
-# 이것들은 파일시스템이 만들어 둔 과거 시점의 사본이라, 세면 같은 데이터를 두
-# 번(스냅샷 세대만큼 여러 번) 세게 되어 계정 크기가 실제보다 몇 배로 부풀고
-# "증가 경로"도 엉뚱하게 잡힌다. 게다가 대개 읽기 전용이라 사용자가 정리할 수
-# 있는 대상도 아니다 - 즉 세어 봐야 부하만 늘고 판단에는 해롭다.
-SNAPSHOT_DIR_NAMES = {".snapshot", ".zfs", ".ckpt"}
 
 
 def is_snapshot_dir(name: str) -> bool:

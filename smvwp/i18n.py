@@ -289,7 +289,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "표본 {samples}개 · 동시 실행 볼륨 {parallel}개 기준"
         ),
         "reports.resource_caveat": (
-            "여기 숫자는 이 서버에서 본 것뿐입니다. du/find의 실제 부담은 대개 "
+            "여기 숫자는 이 서버에서 본 것뿐입니다. 상세 스캔의 실제 부담은 대개 "
             "파일서버 쪽 I/O인데 그것은 이 프로세스에서 관측할 수 없습니다. "
             "CPU가 낮아도 iowait과 load가 올랐다면 부하가 없었던 것이 아닙니다."
         ),
@@ -327,7 +327,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.current_target": "지금: {account} · {kind} · {path}",
         "scan.scanning_now": "상세 스캔 진행 중 · {path}",
         "progress.title": "상세 스캔 진행 상황",
-        "progress.kind_label": "무엇을",
         "progress.kind.baseline": "용량 - 디렉터리마다 얼마인지",
         "progress.btn.refresh": "새로고침",
         "progress.summary": (
@@ -349,7 +348,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.confirm_title": "상세 스캔 실행",
         "scan.confirm_body": (
             "야간 시간창과 무관하게 지금 상세 스캔을 실행합니다.\n"
-            "du/find가 대상 파일시스템을 훑으므로 부하가 생길 수 있습니다.\n\n"
+            "대상 파일시스템을 통째로 훑으므로 부하가 생길 수 있습니다.\n\n"
             "계속할까요?"
         ),
         "scan.already_running": "상세 스캔이 이미 실행 중입니다.",
@@ -848,7 +847,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "{samples} samples - {parallel} volume(s) scanned concurrently"
         ),
         "reports.resource_caveat": (
-            "These numbers are what this server saw. The real cost of du/find is "
+            "These numbers are what this server saw. The real cost of a detail scan is "
             "usually I/O on the file server, which this process cannot observe. "
             "Low CPU with raised iowait and load does not mean there was no load."
         ),
@@ -886,7 +885,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.current_target": "Now: {account} - {kind} - {path}",
         "scan.scanning_now": "Detail scan running - {path}",
         "progress.title": "Detail scan progress",
-        "progress.kind_label": "What",
         "progress.kind.baseline": "Size - how much each directory holds",
         "progress.btn.refresh": "Refresh",
         "progress.summary": (
@@ -908,7 +906,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.confirm_title": "Run detail scan",
         "scan.confirm_body": (
             "This runs the detail scan now, regardless of the nightly window.\n"
-            "du/find will walk the target filesystem and may add load.\n\n"
+            "The scan walks the whole target filesystem and may add load.\n\n"
             "Continue?"
         ),
         "scan.already_running": "A detail scan is already running.",
