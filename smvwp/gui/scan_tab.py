@@ -244,6 +244,7 @@ class ScanTab(QFrame):
         self.large_table.setHorizontalHeaderLabels(
             [i18n.t(key) for key in LARGE_COLUMN_KEYS]
         )
+        self.tree_btn.setText(i18n.t("tree.btn.open"))
 
     def _build(self) -> None:
         """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
@@ -318,9 +319,14 @@ class ScanTab(QFrame):
         self.scan_stop_btn.clicked.connect(self._request_scan_stop)
         self.scan_detail_btn = QPushButton()
         self.scan_detail_btn.clicked.connect(self._open_scan_progress)
+        # 계정 안을 파고드는 화면. 여기까지 와서 "그래서 그 300GB 가 어디야"를
+        # 묻게 되는데, 지금까지는 답할 자리가 없었다.
+        self.tree_btn = QPushButton(i18n.t("tree.btn.open"))
+        self.tree_btn.clicked.connect(self._open_tree)
         scan_buttons.addWidget(self.scan_run_btn)
         scan_buttons.addWidget(self.scan_stop_btn)
         scan_buttons.addWidget(self.scan_detail_btn)
+        scan_buttons.addWidget(self.tree_btn)
         scan_buttons.addStretch(1)
         box.addLayout(scan_buttons)
 
@@ -422,6 +428,20 @@ class ScanTab(QFrame):
             kind=kind_text,
             path=path,
         )
+
+    def _open_tree(self) -> None:
+        """지금 고른 계정을 펼쳐 보는 창.
+
+        다시 스캔하지 않는다 - 야간 스캔이 남긴 기록만 읽는다."""
+
+        from .tree_dialog import TreeDialog
+
+        TreeDialog(
+            self._data_dir,
+            self._get_config(),
+            account_id=self.scan_account_combo.currentData() or "",
+            parent=self,
+        ).exec_()
 
     def _open_scan_progress(self) -> None:
         account = self._selected_account()

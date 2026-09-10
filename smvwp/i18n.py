@@ -42,6 +42,30 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "저장",
         "common.cancel": "취소",
         "common.close": "닫기",
+        "tree.title": "폴더 펼쳐 보기",
+        "tree.btn.open": "폴더 펼쳐 보기",
+        "tree.btn.expand": "한 단계 더 펼치기",
+        "tree.col.path": "폴더",
+        "tree.col.size": "크기",
+        "tree.col.share": "계정 비중",
+        "tree.col.change": "지난 스캔 대비",
+        "tree.caption": "디렉터리 {count}개 · 계정 합계 {total} · 야간 스캔이 남긴 기록을 읽은 것이라 지금 다시 재지 않습니다",
+        "tree.loading": "불러오는 중...",
+        "tree.busy": "이미 불러오는 중입니다.",
+        "tree.failed": "불러오지 못했습니다: {error}",
+        "tree.no_account": "계정을 고르면 폴더가 표시됩니다.",
+        "tree.no_scan": "아직 완료된 상세 스캔이 없습니다. 한 번은 끝나야 안쪽을 볼 수 있습니다.",
+        "tree.rest": "(이 폴더에 직접 있는 파일)",
+        "tree.more": "(그 밖 폴더 {count}개)",
+        "tree.file": "파일: {name}",
+        "tree.new": "지난 스캔에 없던 것",
+        "tree.legend": (
+            "크기는 자기 자신을 포함한 합계입니다. 하위 폴더를 다 더해도 부모보다 "
+            "작으면 그 차이가 '이 폴더에 직접 있는 파일'입니다.\n"
+            "회색 줄은 계산으로 만든 줄이라 더 들어갈 수 없습니다. "
+            "'지난 스캔 대비'를 계산하지 않는 것도 그래서입니다 - 그때의 하위 구성이 "
+            "지금과 같다는 보장이 없어 그럴듯하지만 틀린 수가 됩니다."
+        ),
         "common.yes": "예",
         "common.no": "아니오",
         "common.unknown_value": "확인불가",
@@ -153,10 +177,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "· 장비 전체의 {system}%"
         ),
         "scan.memory_usage": "메모리 최대 {peak} (장비 전체의 {percent}%)",
-        "scan.cpu_caveat": (
-            "※ 이 값은 **이 장비에서 본 CPU**입니다. 상세 스캔의 실제 부담은 대개 "
-            "파일서버 쪽 I/O인데 그것은 여기서 관측할 수 없습니다."
-        ),
         "scan.failed_warning": (
             "⚠ 경로 {count}곳은 크기를 재지 못했습니다. 아래 사유를 확인하세요 "
             "(권한 부족이면 관리자에게 읽기 권한을 요청하거나 대상에서 제외하면 됩니다)."
@@ -591,6 +611,30 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "Save",
         "common.cancel": "Cancel",
         "common.close": "Close",
+        "tree.title": "Browse folders",
+        "tree.btn.open": "Browse folders",
+        "tree.btn.expand": "Expand one more level",
+        "tree.col.path": "Folder",
+        "tree.col.size": "Size",
+        "tree.col.share": "Share of account",
+        "tree.col.change": "vs last scan",
+        "tree.caption": "{count} directories - {total} total - read from what the nightly scan already recorded, nothing is measured again now",
+        "tree.loading": "Loading...",
+        "tree.busy": "Already loading.",
+        "tree.failed": "Could not load: {error}",
+        "tree.no_account": "Pick an account to see its folders.",
+        "tree.no_scan": "No detail scan has finished yet. One has to complete before the inside can be shown.",
+        "tree.rest": "(files directly in this folder)",
+        "tree.more": "({count} more folders)",
+        "tree.file": "file: {name}",
+        "tree.new": "not in the last scan",
+        "tree.legend": (
+            "Sizes include the folder itself. When the subfolders add up to less "
+            "than their parent, the gap is the files sitting directly in it.\n"
+            "Grey rows are computed, not real folders, so they cannot be opened. That "
+            "is also why they carry no comparison - there is no guarantee the previous "
+            "scan had the same subfolders, so the number would look right and be wrong."
+        ),
         "common.yes": "Yes",
         "common.no": "No",
         "common.unknown_value": "Unknown",
@@ -703,10 +747,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "- {system}% of the whole machine"
         ),
         "scan.memory_usage": "Memory peak {peak} ({percent}% of the machine)",
-        "scan.cpu_caveat": (
-            "Note: this is CPU **as seen on this client**. The real cost of a detail scan is "
-            "usually file-server I/O, which cannot be observed from here."
-        ),
         "scan.failed_warning": (
             "! {count} path(s) could not be measured. Check the reasons below "
             "(if it is a permission problem, request read access or drop the path)."
