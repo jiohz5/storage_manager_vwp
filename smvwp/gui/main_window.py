@@ -251,11 +251,17 @@ class MainWindow(QMainWindow):
         self.search_btn.clicked.connect(self._open_search_dialog)
         self.diagnose_btn = QPushButton()
         self.diagnose_btn.clicked.connect(self._open_diagnostics)
+        # 서버 부하는 계정이 아니라 **장비**에 대한 것이라 여기 둔다. 상세 스캔
+        # 탭에 두면 "스캔이 만든 부하"로만 읽힌다 - 정작 알고 싶은 것은 그 옆에서
+        # 다른 작업이 얼마나 쓰고 있었나다.
+        self.load_btn = QPushButton()
+        self.load_btn.clicked.connect(self._open_load_dialog)
         for button in (
             self.collect_btn,
             self.accounts_btn,
             self.reports_btn,
             self.search_btn,
+            self.load_btn,
             self.diagnose_btn,
         ):
             button_row.addWidget(button)
@@ -523,6 +529,7 @@ class MainWindow(QMainWindow):
         self.accounts_btn.setText(i18n.t("dashboard.btn.accounts"))
         self.reports_btn.setText(i18n.t("dashboard.btn.reports"))
         self.search_btn.setText(i18n.t("dashboard.btn.search"))
+        self.load_btn.setText(i18n.t("load.btn.open"))
         self.diagnose_btn.setText(i18n.t("dashboard.btn.diagnose"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
 
@@ -885,6 +892,15 @@ class MainWindow(QMainWindow):
         # 운영 판단에 필요한 것은 이 기능을 쓰는 사람이 있느냐까지다.
         usage_log.record(self._data_dir, usage_log.SEARCH_USED)
         SearchDialog(self._data_dir, self._config, parent=self).exec_()
+
+    def _open_load_dialog(self) -> None:
+        """서버 부하 이력 창.
+
+        수집기가 남긴 기록만 읽는다 - 창을 연다고 새로 재지 않는다."""
+
+        from .load_dialog import LoadDialog
+
+        LoadDialog(self._data_dir, self._config, parent=self).exec_()
 
     def _open_diagnostics(self) -> None:
         result = diagnostics.run_diagnostics(self._data_dir)

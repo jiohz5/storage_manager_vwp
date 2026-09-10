@@ -42,6 +42,57 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "저장",
         "common.cancel": "취소",
         "common.close": "닫기",
+        "load.title": "서버 부하 이력",
+        "load.btn.open": "서버 부하",
+        "load.btn.refresh": "새로고침",
+        "load.range_label": "기간",
+        "load.range_days": "최근 {days}일",
+        "load.sort_label": "작업 정렬",
+        "load.sort.cpu": "CPU 큰 것부터",
+        "load.sort.mem": "메모리 큰 것부터",
+        "load.loading": "불러오는 중...",
+        "load.failed": "불러오지 못했습니다: {error}",
+        "load.no_samples": (
+            "아직 부하 표본이 없습니다. 수집기(15분 주기)가 한 번은 돌아야 쌓이기 "
+            "시작하고, 시간대별로 판단하려면 며칠은 모여야 합니다."
+        ),
+        "load.summary": (
+            "표본 {samples}벌 · 우리 스캔이 없을 때 다른 작업이 쓴 CPU {idle}, "
+            "스캔 중에는 {busy} · {best}"
+        ),
+        "load.best_hour": "가장 한가한 때 {hour} ({verdict})",
+        "load.has_room": "여유 있음",
+        "load.no_room": "여유 없음",
+        "load.mixed_suffix": "  (우리 스캔 섞임)",
+        "load.ours_suffix": "  (우리)",
+        "load.hours_heading": "시간대별 · 우리를 뺀 나머지가 쓴 CPU. 붉은 줄은 이미 붐비는 시간대입니다",
+        "load.jobs_heading": "그 시간에 서버를 쓴 작업",
+        "load.jobs_note": (
+            "CPU 평균은 상위 목록에 들었던 표본들만의 평균입니다. 한가할 때는 목록에 "
+            "못 들어 빠지므로 하루 평균보다 높게 나옵니다 - '이 작업이 평소 쓰는 양'으로 "
+            "읽으면 안 됩니다. 열 제목을 눌러 정렬할 수 있습니다."
+        ),
+        "load.mounts_heading": "NFS 마운트",
+        "load.mounts_note": (
+            "왕복(rtt)은 파일서버가 답하기까지, 대기(queue)는 요청이 보내지기도 전에 "
+            "우리 쪽에서 기다린 시간입니다. 대기가 더 크면 병목은 파일서버가 아니라 "
+            "이쪽 RPC 슬롯이고, 그때 병렬을 줄이면 정확히 반대 처방입니다."
+        ),
+        "load.queue_tip": "대기가 왕복보다 큽니다 - 병목이 우리 쪽 RPC 슬롯입니다.",
+        "load.col.hour": "시간대",
+        "load.col.others_cpu": "다른 작업 CPU",
+        "load.col.load": "load",
+        "load.col.waiting": "I/O 대기 작업",
+        "load.col.samples": "표본",
+        "load.col.user": "사용자",
+        "load.col.job": "작업",
+        "load.col.cpu_peak": "CPU 최고",
+        "load.col.cpu_avg": "CPU 평균",
+        "load.col.mem_peak": "메모리 최고",
+        "load.col.mount": "마운트",
+        "load.col.ops": "요청 수",
+        "load.col.rtt": "왕복",
+        "load.col.queue": "대기",
         "tree.title": "폴더 펼쳐 보기",
         "tree.btn.open": "폴더 펼쳐 보기",
         "tree.btn.expand": "한 단계 더 펼치기",
@@ -611,6 +662,58 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "Save",
         "common.cancel": "Cancel",
         "common.close": "Close",
+        "load.title": "Server load history",
+        "load.btn.open": "Server load",
+        "load.btn.refresh": "Refresh",
+        "load.range_label": "Range",
+        "load.range_days": "last {days} days",
+        "load.sort_label": "Sort jobs by",
+        "load.sort.cpu": "CPU first",
+        "load.sort.mem": "Memory first",
+        "load.loading": "Loading...",
+        "load.failed": "Could not load: {error}",
+        "load.no_samples": (
+            "No load samples yet. The collector (every 15 minutes) has to run at least "
+            "once before anything is recorded, and judging by hour needs a few days."
+        ),
+        "load.summary": (
+            "{samples} samples - other jobs used {idle} CPU while our scan was idle, "
+            "{busy} while it ran - {best}"
+        ),
+        "load.best_hour": "quietest hour {hour} ({verdict})",
+        "load.has_room": "has room",
+        "load.no_room": "no room",
+        "load.mixed_suffix": "  (our scan mixed in)",
+        "load.ours_suffix": "  (ours)",
+        "load.hours_heading": "By hour - CPU used by everything except us. Red rows are already crowded",
+        "load.jobs_heading": "Jobs that used the server then",
+        "load.jobs_note": (
+            "The CPU average covers only the samples where the job made the top list. "
+            "It drops out when idle, so it reads higher than a true daily average - do "
+            "not read it as what the job normally uses. Click a header to sort."
+        ),
+        "load.mounts_heading": "NFS mounts",
+        "load.mounts_note": (
+            "Round trip is how long the filer took to answer; queue is how long the "
+            "request waited on our side before it was even sent. A larger queue means "
+            "the bottleneck is our RPC slots, not the filer - cutting parallelism there "
+            "is exactly the wrong move."
+        ),
+        "load.queue_tip": "Queue is larger than round trip - the bottleneck is our RPC slots.",
+        "load.col.hour": "Hour",
+        "load.col.others_cpu": "Other jobs CPU",
+        "load.col.load": "load",
+        "load.col.waiting": "Jobs waiting on I/O",
+        "load.col.samples": "Samples",
+        "load.col.user": "User",
+        "load.col.job": "Job",
+        "load.col.cpu_peak": "CPU peak",
+        "load.col.cpu_avg": "CPU avg",
+        "load.col.mem_peak": "Memory peak",
+        "load.col.mount": "Mount",
+        "load.col.ops": "Requests",
+        "load.col.rtt": "Round trip",
+        "load.col.queue": "Queued",
         "tree.title": "Browse folders",
         "tree.btn.open": "Browse folders",
         "tree.btn.expand": "Expand one more level",
