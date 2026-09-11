@@ -567,3 +567,100 @@ class ScanDigestSmokeTests(_GuiCase):
         """번역이 없는 상태값이 `digest.status.xyz` 로 뜨면 읽는 사람이 당황한다."""
 
         self.assertEqual(self.tab._status_text("weird_state"), "weird_state")
+
+
+class PriorityPanelTests(_GuiCase):
+    """홈 맨 위의 "무엇부터 할까".
+
+    사용률은 표에, 백업 상태는 헬스체크에, 튀는 파일은 상세 스캔 탭에 있었다.
+    각각은 맞는 말인데 **"그래서 오늘 뭘 먼저 하지"** 에는 아무도 답하지
+    않았다. 여기서 보는 것은 그 한 줄이 실제로 채워지는가다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def lines(self):
+        return [
+            self.window.priority_list.item(row).text()
+            for row in range(self.window.priority_list.count())
+        ]
+
+    def plan(self, *actions, unscanned=()):
+        from smvwp import priority
+
+        made = priority.Plan()
+        made.actions = list(actions)
+        made.accounts_without_scan = list(unscanned)
+        return made
+
+    def test_a_full_account_is_listed_with_its_remedy(self):
+        """문제와 해법을 따로 두면 사람이 두 화면을 오가야 하고, 그러면 안 한다."""
+
+        from smvwp import priority
+
+        self.window._refresh_priority(self.plan(priority.Action(
+            kind=priority.ACT_FULL, level=priority.LEVEL_CRITICAL,
+            account="layout_proj", account_id="a1", pct=96.0,
+            reclaimable_kb=800 * 1024 * 1024, count=6,
+        )))
+        line = self.lines()[0]
+        self.assertIn("layout_proj", line)
+        self.assertIn("96", line)
+        # 비울 양이 **같은 줄에** 있다 - 이것이 이 카드의 핵심이다.
+        self.assertIn("800.0 GB", line)
+
+    def test_a_missing_backup_says_what_is_at_stake(self):
+        from smvwp import priority
+
+        self.window._refresh_priority(self.plan(priority.Action(
+            kind=priority.ACT_NO_BACKUP, level=priority.LEVEL_HIGH,
+            account="layout_proj", account_id="a1", count=3,
+            size_kb=500 * 1024 * 1024,
+        )))
+        self.assertIn("복구", self.lines()[0])
+
+    def test_nothing_to_do_still_says_something(self):
+        """빈 목록은 고장으로 읽힌다."""
+
+        from smvwp import i18n
+
+        self.window._refresh_priority(self.plan())
+        self.assertEqual(self.window.priority_summary.text(), i18n.t("priority.nothing"))
+
+    def test_accounts_left_out_are_named(self):
+        """짧은 목록이 '볼 것이 없다' 로 읽히면 안 된다."""
+
+        self.window._refresh_priority(self.plan(unscanned=["fresh_one"]))
+        self.assertTrue(any("fresh_one" in line for line in self.lines()))
+
+    def test_a_failed_calculation_does_not_blank_the_screen(self):
+        from smvwp import i18n
+
+        self.window._refresh_priority(None)
+        self.assertEqual(
+            self.window.priority_summary.text(), i18n.t("priority.unavailable")
+        )
+
+    def test_no_translation_keys_leak(self):
+        from smvwp import priority
+
+        self.window._refresh_priority(self.plan(
+            priority.Action(kind=priority.ACT_CLEANUP, level=priority.LEVEL_MEDIUM,
+                            account="a", reclaimable_kb=100 * 1024 * 1024, count=2),
+            priority.Action(kind=priority.ACT_BIG_FILE, level=priority.LEVEL_MEDIUM,
+                            account="b", path="/x/huge.dat",
+                            size_kb=300 * 1024 * 1024, pct=30.0),
+            priority.Action(kind=priority.ACT_SURGE, level=priority.LEVEL_MEDIUM,
+                            account="c", delta_kb=500 * 1024 * 1024,
+                            size_kb=900 * 1024 * 1024),
+            unscanned=["z"],
+        ))
+        text = " ".join(self.lines() + [self.window.priority_summary.text()])
+        self.assertNotIn("priority.", text)

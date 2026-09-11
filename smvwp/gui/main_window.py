@@ -33,6 +33,8 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QListWidget,
+    QListWidgetItem,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -42,6 +44,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting
+from .. import priority
 from .. import usage_log
 from .. import (
     diagnostics,
@@ -235,6 +238,32 @@ class MainWindow(QMainWindow):
         banner_box.addWidget(self.home_scan_label, 1)
         banner_box.addWidget(self.home_scan_link)
         layout.addWidget(self.home_scan_banner)
+
+        # -- 처리 우선순위 -----------------------------------------------
+        #
+        # 사용률은 아래 표에, 백업 상태는 헬스체크에, 튀는 파일은 상세 스캔
+        # 탭에 있었다. 각각은 맞는 말인데 **"그래서 오늘 뭘 먼저 하지"** 에는
+        # 아무도 답하지 않았다. 그 한 줄을 맨 위에 둔다.
+        self.priority_card = QFrame()
+        self.priority_card.setObjectName("card")
+        priority_box = QVBoxLayout(self.priority_card)
+        priority_box.setContentsMargins(14, 10, 14, 10)
+        priority_box.setSpacing(4)
+        self.priority_title = QLabel()
+        self.priority_title.setObjectName("sectionTitle")
+        priority_box.addWidget(self.priority_title)
+        self.priority_summary = QLabel()
+        self.priority_summary.setObjectName("muted")
+        self.priority_summary.setWordWrap(True)
+        priority_box.addWidget(self.priority_summary)
+        self.priority_list = QListWidget()
+        self.priority_list.setObjectName("findings")
+        self.priority_list.setFrameShape(QListWidget.NoFrame)
+        self.priority_list.setSelectionMode(QListWidget.NoSelection)
+        self.priority_list.setFocusPolicy(Qt.NoFocus)
+        self.priority_list.setMaximumHeight(150)
+        priority_box.addWidget(self.priority_list)
+        layout.addWidget(self.priority_card)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -554,6 +583,101 @@ class MainWindow(QMainWindow):
         self._scan_tab.refresh()
 
     # -- 데이터 갱신 ----------------------------------------------------
+    def _refresh_priority(self, plan) -> None:
+        """무엇부터 손댈지.
+
+        급한 것이 위다. **빈 목록을 '문제 없음' 으로 읽히게 두지 않는다** -
+        아직 스캔이 안 돈 계정이 있으면 그 사실을 적는다."""
+
+        self.priority_title.setText(i18n.t("priority.heading"))
+        self.priority_list.clear()
+
+        if plan is None:
+            self.priority_summary.setText(i18n.t("priority.unavailable"))
+            return
+
+        if plan.actions:
+            self.priority_summary.setText(
+                i18n.t(
+                    "priority.summary",
+                    count=len(plan.actions),
+                    critical=plan.critical_count,
+                    freeable=formatting.format_kb(plan.reclaimable_kb)
+                    if plan.reclaimable_kb else i18n.t("common.none"),
+                )
+            )
+        else:
+            self.priority_summary.setText(i18n.t("priority.nothing"))
+
+        for action in plan.actions:
+            item = QListWidgetItem(self._priority_text(action))
+            if action.critical:
+                item.setForeground(QColor(tiers.color(tiers.EMERGENCY)))
+            elif action.level == priority.LEVEL_HIGH:
+                item.setForeground(QColor(tiers.color(tiers.ALERT)))
+            if action.path:
+                item.setToolTip(action.path)
+            self.priority_list.addItem(item)
+
+        if plan.accounts_without_scan:
+            # 판단에 못 쓴 것이 있으면 반드시 말한다. 안 그러면 짧은 목록이
+            # "볼 것이 없다" 로 읽힌다.
+            note = QListWidgetItem(
+                i18n.t(
+                    "priority.unscanned",
+                    count=len(plan.accounts_without_scan),
+                    names=", ".join(plan.accounts_without_scan[:3]),
+                )
+            )
+            note.setForeground(QColor(theme.TEXT_MUTED))
+            self.priority_list.addItem(note)
+
+    def _priority_text(self, action) -> str:
+        """할 일 한 줄을 사람 문장으로."""
+
+        if action.kind == priority.ACT_FULL:
+            if action.reclaimable_kb:
+                # 문제와 해법을 한 줄에. 따로 두면 사람이 두 화면을 오가며
+                # 스스로 이어 붙여야 하고, 그러면 대개 안 한다.
+                return i18n.t(
+                    "priority.item.full_with_fix",
+                    account=action.account,
+                    pct=f"{action.pct:.0f}",
+                    freeable=formatting.format_kb(action.reclaimable_kb),
+                    count=action.count,
+                )
+            return i18n.t(
+                "priority.item.full",
+                account=action.account, pct=f"{action.pct:.0f}",
+            )
+        if action.kind == priority.ACT_NO_BACKUP:
+            return i18n.t(
+                "priority.item.no_backup",
+                account=action.account, count=action.count,
+                size=formatting.format_kb(action.size_kb),
+            )
+        if action.kind == priority.ACT_CLEANUP:
+            return i18n.t(
+                "priority.item.cleanup",
+                account=action.account,
+                freeable=formatting.format_kb(action.reclaimable_kb),
+                count=action.count,
+            )
+        if action.kind == priority.ACT_BIG_FILE:
+            return i18n.t(
+                "priority.item.big_file",
+                account=action.account,
+                name=action.path.rsplit("/", 1)[-1],
+                size=formatting.format_kb(action.size_kb),
+                pct=f"{action.pct:.0f}" if action.pct is not None else "-",
+            )
+        return i18n.t(
+            "priority.item.surge",
+            account=action.account,
+            delta=formatting.format_kb_delta(action.delta_kb),
+            total=formatting.format_kb(action.size_kb),
+        )
+
     def _refresh_table_from_store(self) -> None:
         """대시보드 데이터를 **요청만** 한다. 실제 읽기는 백그라운드에서 돈다.
 
@@ -567,6 +691,7 @@ class MainWindow(QMainWindow):
         self._latest_samples = data.samples
         self._forecasts = data.forecasts
         self._render_table(data.samples)
+        self._refresh_priority(getattr(data, "plan", None))
         if data.forecast_failed:
             # 예측 칸이 비는 이유가 "표본이 모자라서"인지 "계산이 터져서"인지
             # 화면만 봐서는 구분이 안 된다. 후자면 말해 준다.

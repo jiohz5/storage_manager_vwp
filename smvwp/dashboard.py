@@ -16,10 +16,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import forecast_notify, store
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,6 +37,9 @@ class DashboardData:
     samples: dict = field(default_factory=dict)
     forecasts: dict = field(default_factory=dict)
     forecast_failed: bool = False
+    # "그래서 오늘 뭘 먼저 하지" 한 줄. 여기서 함께 읽는 이유는 재료가 이미
+    # 손에 있기 때문이다 - 표본은 방금 읽었고, 나머지는 스캔 DB 한 번이다.
+    plan: object = None
 
 
 def read_dashboard(data_dir: Path, config) -> DashboardData:
@@ -58,4 +64,44 @@ def read_dashboard(data_dir: Path, config) -> DashboardData:
     except Exception:
         forecasts = {}
         failed = True
-    return DashboardData(samples=samples, forecasts=forecasts, forecast_failed=failed)
+
+    return DashboardData(
+        samples=samples,
+        forecasts=forecasts,
+        forecast_failed=failed,
+        plan=_read_plan(data_dir, config, samples),
+    )
+
+
+def _read_plan(data_dir, config, samples):
+    """처리 우선순위. 터져도 대시보드는 떠야 한다.
+
+    용량 표는 이 프로그램의 본체다. 우선순위 계산 하나 때문에 그것까지 못 보게
+    되면 훨씬 나쁜 실패가 된다 - 예측을 그렇게 다루는 것과 같은 이유다."""
+
+    from . import health, nightly_scan, priority
+
+    try:
+        summary = health.check_all(data_dir, config)
+    except Exception:
+        logger.exception("헬스체크 실패 (대시보드는 계속합니다)")
+        summary = None
+
+    scan_accounts = []
+    try:
+        scan_accounts = nightly_scan.get_status_snapshot(data_dir, config).accounts
+    except Exception:
+        logger.exception("스캔 상태 읽기 실패 (대시보드는 계속합니다)")
+
+    try:
+        return priority.build(
+            samples=list(samples.values()),
+            health_summary=summary,
+            scan_accounts=scan_accounts,
+            accounts_by_id={
+                account.account_id: account.name for account in config.accounts
+            },
+        )
+    except Exception:
+        logger.exception("처리 우선순위 계산 실패 (대시보드는 계속합니다)")
+        return None
