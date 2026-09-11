@@ -42,6 +42,18 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "저장",
         "common.cancel": "취소",
         "common.close": "닫기",
+        "tree.tab.list": "목록",
+        "tree.tab.map": "그림",
+        "treemap.btn.up": "위로",
+        "treemap.btn.home": "처음으로",
+        "treemap.rest": "직접 있는 파일",
+        "treemap.share": "계정의 {pct}%",
+        "treemap.empty": "그릴 것이 없습니다.",
+        "treemap.hint": (
+            "넓이가 곧 용량입니다. 조각을 두 번 누르면 그 안으로 들어갑니다. "
+            "회색은 폴더가 아니라 계산으로 만든 칸이라 들어갈 수 없습니다. "
+            "빨간 테두리는 눈에 띄는 것입니다."
+        ),
         "digest.run": "지난 스캔",
         "digest.run_detail": "{status} · {duration}",
         "digest.running": "도는 중",
@@ -688,6 +700,18 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "Save",
         "common.cancel": "Cancel",
         "common.close": "Close",
+        "tree.tab.list": "List",
+        "tree.tab.map": "Map",
+        "treemap.btn.up": "Up",
+        "treemap.btn.home": "Top",
+        "treemap.rest": "files here",
+        "treemap.share": "{pct}% of the account",
+        "treemap.empty": "Nothing to draw.",
+        "treemap.hint": (
+            "Area is size. Double-click a tile to go inside it. Grey tiles are "
+            "computed, not real folders, so they cannot be opened. A red border "
+            "marks something worth a look."
+        ),
         "digest.run": "Last scan",
         "digest.run_detail": "{status} - {duration}",
         "digest.running": "running",

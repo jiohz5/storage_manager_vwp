@@ -32,6 +32,7 @@ from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QComboBox,
+    QTabWidget,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -39,11 +40,13 @@ from PyQt5.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from .. import config as config_module
 from .. import formatting, i18n, scan_store, tiers, tree_view, usage_log
 from . import theme
+from .treemap_view import TreemapView
 
 COLUMN_KEYS = ("tree.col.path", "tree.col.size", "tree.col.share", "tree.col.change")
 (COL_PATH, COL_SIZE, COL_SHARE, COL_CHANGE) = range(4)
@@ -174,9 +177,6 @@ class TreeDialog(QDialog):
             self.account_combo.addItem(account.name, account.account_id)
         self.account_combo.currentIndexChanged.connect(self._reload)
         top.addWidget(self.account_combo)
-        self.expand_btn = QPushButton(i18n.t("tree.btn.expand"))
-        self.expand_btn.clicked.connect(self._expand_more)
-        top.addWidget(self.expand_btn)
         top.addStretch(1)
         root.addLayout(top)
 
@@ -184,6 +184,23 @@ class TreeDialog(QDialog):
         self.caption.setObjectName("muted")
         self.caption.setWordWrap(True)
         root.addWidget(self.caption)
+
+        # 같은 데이터를 목록으로 볼지 그림으로 볼지 고른다. 목록은 정확한
+        # 숫자를 읽는 데 좋고, 그림은 "무엇이 큰가"를 한눈에 보는 데 좋다 -
+        # 어느 하나가 다른 하나를 대신하지 못한다.
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs, 1)
+
+        list_page = QWidget()
+        list_box = QVBoxLayout(list_page)
+        list_box.setContentsMargins(0, 8, 0, 0)
+        list_box.setSpacing(8)
+        list_tools = QHBoxLayout()
+        self.expand_btn = QPushButton(i18n.t("tree.btn.expand"))
+        self.expand_btn.clicked.connect(self._expand_more)
+        list_tools.addWidget(self.expand_btn)
+        list_tools.addStretch(1)
+        list_box.addLayout(list_tools)
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(COLUMN_KEYS))
@@ -196,7 +213,34 @@ class TreeDialog(QDialog):
         for column in (COL_SIZE, COL_SHARE, COL_CHANGE):
             header.setSectionResizeMode(column, header.ResizeToContents)
         self.tree.itemExpanded.connect(self._on_expanded)
-        root.addWidget(self.tree, 1)
+        list_box.addWidget(self.tree, 1)
+        self.tabs.addTab(list_page, i18n.t("tree.tab.list"))
+
+        # -- 그림 ------------------------------------------------------
+        map_page = QWidget()
+        map_box = QVBoxLayout(map_page)
+        map_box.setContentsMargins(0, 8, 0, 0)
+        map_box.setSpacing(8)
+        map_tools = QHBoxLayout()
+        self.map_up_btn = QPushButton(i18n.t("treemap.btn.up"))
+        self.map_up_btn.clicked.connect(self._map_up)
+        self.map_home_btn = QPushButton(i18n.t("treemap.btn.home"))
+        self.map_home_btn.clicked.connect(self._map_home)
+        map_tools.addWidget(self.map_up_btn)
+        map_tools.addWidget(self.map_home_btn)
+        self.map_path_label = QLabel()
+        self.map_path_label.setObjectName("muted")
+        map_tools.addWidget(self.map_path_label, 1)
+        map_box.addLayout(map_tools)
+
+        self.treemap = TreemapView()
+        self.treemap.zoomed.connect(self._on_map_zoomed)
+        map_box.addWidget(self.treemap, 1)
+        self.map_hint = QLabel(i18n.t("treemap.hint"))
+        self.map_hint.setObjectName("caption")
+        self.map_hint.setWordWrap(True)
+        map_box.addWidget(self.map_hint)
+        self.tabs.addTab(map_page, i18n.t("tree.tab.map"))
 
         self.legend = QLabel(i18n.t("tree.legend"))
         self.legend.setObjectName("caption")
@@ -231,10 +275,13 @@ class TreeDialog(QDialog):
         않은 것이다."""
 
         self.tree.clear()
+        self.treemap.set_roots([])
         self.caption.setText(i18n.t("tree.no_scan"))
 
     def _on_loaded(self, roots, total_kb) -> None:
         self.tree.clear()
+        self.treemap.set_roots(roots)
+        self._on_map_zoomed()
         if not roots:
             self._on_empty()
             return
@@ -336,6 +383,23 @@ class TreeDialog(QDialog):
             return
         for index in range(item.childCount()):
             self._fill_children(item.child(index), depth)
+
+    def _map_up(self) -> None:
+        self.treemap.go_up()
+
+    def _map_home(self) -> None:
+        self.treemap.go_home()
+
+    def _on_map_zoomed(self) -> None:
+        """어디까지 들어왔는지 위에 적는다.
+
+        그림만 보면 지금 무엇의 안인지 알 수 없다 - 조각 이름은 상대 이름이라
+        같은 이름이 여러 군데에 있다."""
+
+        labels = self.treemap.path_labels()
+        self.map_path_label.setText(" / ".join(labels) if labels else "")
+        self.map_up_btn.setEnabled(self.treemap.can_go_up())
+        self.map_home_btn.setEnabled(self.treemap.can_go_up())
 
     def _expand_more(self) -> None:
         """보이는 것 한 단계 더 펼치기.
