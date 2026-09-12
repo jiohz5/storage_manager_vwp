@@ -35,7 +35,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
 from . import workflow
@@ -60,6 +60,16 @@ STATUS_ORDER = (MISSING, PARTIAL, BACKED_UP, NO_BACKUP_DIR, NO_LINK)
 # 위험으로 볼 상태들.
 RISKY = (MISSING, PARTIAL)
 
+# 무엇을 열쇠로 맞췄는가.
+#
+# 백업 계정에 그대로 남는 이름은 **`BACKUP` 아래 항목들**이다. 그것으로 맞추면
+# 항목 단위로 "이건 갔고 이건 안 갔다"까지 말할 수 있다.
+MATCH_ITEMS = "items"
+# 그런데 그 항목들은 계정 루트 기준 깊이 4다 (`과제명/LAYOUT/run/BACKUP/항목`).
+# `detail_scan_max_depth` 기본값이 3이라 **기록에 없다.** 그때는 run 디렉터리
+# 이름으로 성기게 맞춘다 - 판정은 되지만 항목 단위로는 말할 수 없다.
+MATCH_RUN_NAME = "run"
+
 
 @dataclass
 class RunHealth:
@@ -76,6 +86,10 @@ class RunHealth:
     mirror_path: str = ""
     mirror_size_kb: Optional[int] = None
     status: str = NO_LINK
+    match_by: str = ""
+    # 백업 계정에서 못 찾은 항목 이름들. 이것이 있으면 "무엇이 안 갔는지"까지
+    # 말할 수 있다 - 사람이 바로 손댈 수 있는 형태다.
+    missing_items: List[str] = field(default_factory=list)
 
     @property
     def risky(self) -> bool:
@@ -91,6 +105,16 @@ class RunHealth:
         if self.status != BACKED_UP:
             return 0
         return self.backup_size_kb or 0
+
+    @property
+    def coarse(self) -> bool:
+        """성긴 판정인가 - `BACKUP` 아래 항목이 기록에 없어서.
+
+        화면이 이 사실을 밝혀야 한다. 성긴 판정을 정밀한 것처럼 내놓으면
+        "확인됨"이 실제보다 강하게 읽힌다. 정밀하게 보려면
+        `detail_scan_max_depth` 를 4 이상으로 둔다."""
+
+        return self.match_by == MATCH_RUN_NAME and self.backup_size_kb is not None
 
     @property
     def coverage(self) -> Optional[float]:
@@ -118,6 +142,25 @@ def _index_by_name(paths: Sequence[str]) -> Dict[str, List[str]]:
             continue
         index.setdefault(name, []).append(workflow.normalize(path))
     return index
+
+
+def _backup_items(project_sizes: Dict[str, int], backup_dir: str) -> Dict[str, int]:
+    """`BACKUP` **바로 아래** 항목들 `{이름: KB}`.
+
+    백업 계정에 그대로 남는 것이 이 이름들이다. 한 단계만 본다 - 더 내려가면
+    백업 계정 쪽 구조와 맞물리지 않는다."""
+
+    prefix = workflow.normalize(backup_dir) + "/"
+    items: Dict[str, int] = {}
+    for path, size_kb in project_sizes.items():
+        normalized = workflow.normalize(path)
+        if not normalized.startswith(prefix):
+            continue
+        remainder = normalized[len(prefix):]
+        if not remainder or "/" in remainder:
+            continue
+        items[remainder] = size_kb
+    return items
 
 
 def _pick_mirror(candidates: Sequence[str], task: str) -> str:
@@ -174,21 +217,64 @@ def check_account(
             item.status = NO_BACKUP_DIR
         else:
             task = workflow.task_name_for(path, account_path)
-            name = workflow.basename(path)
-            item.mirror_path = _pick_mirror(mirror_index.get(name, []), task)
-            if not item.mirror_path:
-                item.status = MISSING
+            items = _backup_items(project_sizes, backup_dir)
+            if items:
+                _match_items(item, items, mirror_index, backup_sizes, task)
             else:
-                item.mirror_size_kb = backup_sizes.get(item.mirror_path, 0)
-                covered = item.coverage
-                if covered is not None and covered >= BACKED_UP_RATIO:
-                    item.status = BACKED_UP
-                else:
-                    item.status = PARTIAL
+                _match_run_name(item, path, mirror_index, backup_sizes, task)
         results.append(item)
 
     results.sort(key=_sort_key)
     return results
+
+
+def _match_items(item, items, mirror_index, backup_sizes, task) -> None:
+    """`BACKUP` 아래 항목 이름으로 맞춘다 (정밀).
+
+    항목마다 따로 찾으므로 **무엇이 안 갔는지**까지 남길 수 있다."""
+
+    item.match_by = MATCH_ITEMS
+    matched_kb = 0
+    for name in sorted(items):
+        found = _pick_mirror(mirror_index.get(name, []), task)
+        if not found:
+            item.missing_items.append(name)
+            continue
+        if not item.mirror_path:
+            item.mirror_path = found
+        matched_kb += backup_sizes.get(found, 0)
+
+    item.mirror_size_kb = matched_kb
+    if len(item.missing_items) == len(items):
+        # 하나도 못 찾았다. 크기를 따질 것도 없다.
+        item.status = MISSING
+        return
+    covered = item.coverage
+    if covered is not None and covered >= BACKED_UP_RATIO and not item.missing_items:
+        item.status = BACKED_UP
+    else:
+        # 일부만 갔거나 크기가 모자란다. 둘 다 "다 됐다"고 하면 안 되는 경우다.
+        item.status = PARTIAL
+
+
+def _match_run_name(item, path, mirror_index, backup_sizes, task) -> None:
+    """run 디렉터리 이름으로 맞춘다 (성김).
+
+    `BACKUP` 아래가 기록에 없을 때의 차선책이다 - 깊이 제한 때문에 그런 것이지
+    백업이 없어서가 아니므로, 여기서 바로 '없음'이라고 하면 안 된다."""
+
+    item.match_by = MATCH_RUN_NAME
+    name = workflow.basename(path)
+    item.mirror_path = _pick_mirror(mirror_index.get(name, []), task)
+    if not item.mirror_path:
+        item.status = MISSING
+        return
+    item.mirror_size_kb = backup_sizes.get(item.mirror_path, 0)
+    covered = item.coverage
+    if covered is not None and covered >= BACKED_UP_RATIO:
+        item.status = BACKED_UP
+    else:
+        item.status = PARTIAL
 
 
 def _sort_key(item: RunHealth):
@@ -221,6 +307,15 @@ class HealthSummary:
 
     def count(self, status: str) -> int:
         return sum(1 for item in self.items if item.status == status)
+
+    @property
+    def coarse_count(self) -> int:
+        """성기게 판정한 과제 수.
+
+        화면이 이 수를 밝혀야 한다. 성긴 판정을 정밀한 것처럼 내놓으면
+        "확인됨"이 실제보다 강하게 읽힌다."""
+
+        return sum(1 for item in self.items if item.coarse)
 
 
 def summarize(per_account: Sequence[Sequence[RunHealth]]) -> HealthSummary:

@@ -90,6 +90,10 @@ class Plan:
     actions: List[Action] = field(default_factory=list)
     # 판단에 못 쓴 것들. 비어 있는 목록이 "문제 없음"으로 읽히지 않게 한다.
     accounts_without_scan: List[str] = field(default_factory=list)
+    # 성기게 판정한 과제 수 (`health.RunHealth.coarse`). 화면이 이 수를 밝혀야
+    # 한다 - 성긴 판정을 정밀한 것처럼 내놓으면 "확인됨"이 실제보다 강하게
+    # 읽히고, 그 위에서 정리 결정이 내려진다.
+    coarse_count: int = 0
 
     @property
     def critical_count(self) -> int:
@@ -151,6 +155,7 @@ def build(
     # 사용률 줄과 붙여 놓아야 "96% 인데 정리하면 800GB 빈다" 한 줄이 된다.
     cleanup_by_account = {}
     if health_summary is not None:
+        plan.coarse_count = health_summary.coarse_count
         for item in health_summary.cleanable:
             bucket = cleanup_by_account.setdefault(
                 item.account_id, {"kb": 0, "count": 0, "name": item.account_name}

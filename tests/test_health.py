@@ -215,5 +215,100 @@ class OrderTests(unittest.TestCase):
         self.assertEqual(items[0].label, "과제A / 01_run_0908")
 
 
+
+
+class ItemMatchingTests(unittest.TestCase):
+    """`BACKUP` 아래 항목 이름으로 맞추는 쪽 (정밀).
+
+    백업 계정에 그대로 남는 이름이 이것이다. 항목마다 따로 찾으므로 **무엇이
+    안 갔는지**까지 말할 수 있다.
+    """
+
+    def with_items(self, **items):
+        sizes = project(**{"/proj/과제A/LAYOUT/01_run_0908/BACKUP": sum(items.values())})
+        for name, size in items.items():
+            sizes[f"/proj/과제A/LAYOUT/01_run_0908/BACKUP/{name}"] = size
+        return sizes
+
+    def test_items_are_matched_one_by_one(self):
+        items = check(
+            self.with_items(designA=200 * GB, designB=100 * GB),
+            {"/bak/designA": 200 * GB, "/bak/designB": 100 * GB},
+        )
+        self.assertEqual(items[0].match_by, health.MATCH_ITEMS)
+        self.assertEqual(items[0].status, health.BACKED_UP)
+        self.assertEqual(items[0].missing_items, [])
+
+    def test_a_missing_item_is_named(self):
+        """'덜 갔다' 로 끝내지 않고 무엇이 안 갔는지까지 말한다."""
+
+        items = check(
+            self.with_items(designA=200 * GB, designB=100 * GB),
+            {"/bak/designA": 200 * GB},
+        )
+        self.assertEqual(items[0].status, health.PARTIAL)
+        self.assertEqual(items[0].missing_items, ["designB"])
+
+    def test_nothing_found_is_missing_not_partial(self):
+        items = check(
+            self.with_items(designA=200 * GB),
+            {"/bak/전혀다른것": 5 * GB},
+        )
+        self.assertEqual(items[0].status, health.MISSING)
+
+    def test_a_short_item_is_partial_even_if_all_names_are_there(self):
+        """이름만 있고 내용이 덜 갔을 수 있다."""
+
+        items = check(
+            self.with_items(designA=200 * GB),
+            {"/bak/designA": 20 * GB},
+        )
+        self.assertEqual(items[0].status, health.PARTIAL)
+
+    def test_a_precise_match_is_not_marked_coarse(self):
+        items = check(
+            self.with_items(designA=200 * GB), {"/bak/designA": 200 * GB}
+        )
+        self.assertFalse(items[0].coarse)
+
+
+class CoarseTests(unittest.TestCase):
+    """깊이 제한 때문에 `BACKUP` 아래가 기록에 없을 때."""
+
+    def test_it_falls_back_to_the_run_name(self):
+        """깊이 때문에 못 본 것이지 백업이 없어서가 아니다 - 여기서 '없음' 이라고
+        하면 멀쩡한 백업이 전부 경고가 된다."""
+
+        items = check(
+            project(**{"/proj/과제A/LAYOUT/01_run_0908/BACKUP": 300 * GB}),
+            {"/bak/과제A/01_run_0908": 300 * GB},
+        )
+        self.assertEqual(items[0].match_by, health.MATCH_RUN_NAME)
+        self.assertEqual(items[0].status, health.BACKED_UP)
+
+    def test_a_coarse_verdict_says_so(self):
+        """성긴 판정을 정밀한 것처럼 내놓으면 '확인됨' 이 실제보다 강하게 읽힌다."""
+
+        items = check(
+            project(**{"/proj/과제A/LAYOUT/01_run_0908/BACKUP": 300 * GB}),
+            {"/bak/과제A/01_run_0908": 300 * GB},
+        )
+        self.assertTrue(items[0].coarse)
+
+    def test_a_run_before_backup_is_not_called_coarse(self):
+        """아직 BACKUP 이 없는 것은 판정을 안 한 것이지 성기게 한 것이 아니다."""
+
+        items = check(project(), {})
+        self.assertFalse(items[0].coarse)
+
+    def test_the_summary_counts_coarse_verdicts(self):
+        coarse = check(
+            project(**{"/proj/과제A/LAYOUT/01_run_0908/BACKUP": 300 * GB}),
+            {"/bak/과제A/01_run_0908": 300 * GB},
+        )
+        summary = health.summarize([coarse])
+        self.assertEqual(summary.coarse_count, 1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

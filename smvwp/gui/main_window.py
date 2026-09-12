@@ -619,6 +619,15 @@ class MainWindow(QMainWindow):
                 item.setToolTip(action.path)
             self.priority_list.addItem(item)
 
+        if getattr(plan, "coarse_count", 0):
+            # 판정의 정밀도를 밝힌다. 성긴 판정을 정밀한 것처럼 내놓으면
+            # "확인됨"이 실제보다 강하게 읽히고, 그 위에서 정리가 결정된다.
+            note = QListWidgetItem(
+                i18n.t("priority.coarse", count=plan.coarse_count)
+            )
+            note.setForeground(QColor(theme.TEXT_MUTED))
+            self.priority_list.addItem(note)
+
         if plan.accounts_without_scan:
             # 판단에 못 쓴 것이 있으면 반드시 말한다. 안 그러면 짧은 목록이
             # "볼 것이 없다" 로 읽힌다.
