@@ -72,6 +72,9 @@ COLUMN_KEYS = [
     "dashboard.col.path",
     "dashboard.col.size",
     "dashboard.col.byte_pct",
+    # 사용률 옆에 추세선을 둔다. "지금 82%" 보다 "두 주 만에 60%에서 82%로
+    # 왔다" 가 훨씬 많은 것을 말하는데, 그 둘은 붙어 있어야 한 번에 읽힌다.
+    "trend.col",
     "dashboard.col.inode_pct",
     "dashboard.col.quota",
     "dashboard.col.tier",
@@ -85,13 +88,14 @@ COLUMN_KEYS = [
     COL_PATH,
     COL_SIZE,
     COL_BYTE,
+    COL_TREND,
     COL_INODE,
     COL_QUOTA,
     COL_TIER,
     COL_FORECAST,
     COL_TIME,
     COL_STATUS,
-) = range(11)
+) = range(12)
 
 # `파일시스템` 열은 뺐다. 값이 거의 항상 같아서(계정 대부분이 같은 파일시스템에
 # 있다) 열 하나를 통째로 쓰면서 정보는 거의 주지 않았다. 대신 경로 툴팁에
@@ -120,6 +124,7 @@ class MainWindow(QMainWindow):
         self._latest_samples: Dict[str, store.SampleRecord] = {}
         self._forecasts: Dict[str, object] = {}
         self._freshness: Dict[str, object] = {}
+        self._trends: Dict[str, object] = {}
         i18n.set_language(config.settings.language)
 
         # 열이 10개인 표 + 히어로 + 스캔 섹션이 한 화면에 들어가려면 이 정도는
@@ -285,11 +290,14 @@ class MainWindow(QMainWindow):
         # 다른 작업이 얼마나 쓰고 있었나다.
         self.load_btn = QPushButton()
         self.load_btn.clicked.connect(self._open_load_dialog)
+        self.trend_btn = QPushButton()
+        self.trend_btn.clicked.connect(self._open_trend_dialog)
         for button in (
             self.collect_btn,
             self.accounts_btn,
             self.reports_btn,
             self.search_btn,
+            self.trend_btn,
             self.load_btn,
             self.diagnose_btn,
         ):
@@ -559,6 +567,7 @@ class MainWindow(QMainWindow):
         self.reports_btn.setText(i18n.t("dashboard.btn.reports"))
         self.search_btn.setText(i18n.t("dashboard.btn.search"))
         self.load_btn.setText(i18n.t("load.btn.open"))
+        self.trend_btn.setText(i18n.t("trend.btn.open"))
         self.diagnose_btn.setText(i18n.t("dashboard.btn.diagnose"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
 
@@ -699,6 +708,8 @@ class MainWindow(QMainWindow):
     def _on_dashboard_ready(self, data) -> None:
         self._latest_samples = data.samples
         self._forecasts = data.forecasts
+        # 표를 그리기 **전에** 받아 둔다 - 그리는 쪽이 칸마다 여기서 꺼내 간다.
+        self._trends = getattr(data, "trends", {}) or {}
         self._render_table(data.samples)
         self._refresh_priority(getattr(data, "plan", None))
         if data.forecast_failed:
@@ -796,6 +807,7 @@ class MainWindow(QMainWindow):
                     self._style_value_item(item, column)
                     self.table.setItem(row, column, item)
                 self.table.setCellWidget(row, COL_BYTE, widgets.UsageBar(None, tiers.UNKNOWN))
+                self.table.setCellWidget(row, COL_TREND, self._spark_for(account.account_id))
                 self.table.setCellWidget(row, COL_TIER, widgets.badge_cell(tiers.UNKNOWN, None))
                 self.table.setItem(row, COL_STATUS, QTableWidgetItem(i18n.t("dashboard.not_collected")))
                 continue
@@ -817,6 +829,9 @@ class MainWindow(QMainWindow):
             usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier)
             usage_bar.setToolTip(formatting.size_tooltip(sample))
             self.table.setCellWidget(row, COL_BYTE, usage_bar)
+            self.table.setCellWidget(
+                row, COL_TREND, self._spark_for(account.account_id, sample.overall_tier)
+            )
             inode_item = QTableWidgetItem(inode_text)
             self._style_value_item(inode_item, COL_INODE)
             self.table.setItem(row, COL_INODE, inode_item)
@@ -1026,6 +1041,31 @@ class MainWindow(QMainWindow):
         # 운영 판단에 필요한 것은 이 기능을 쓰는 사람이 있느냐까지다.
         usage_log.record(self._data_dir, usage_log.SEARCH_USED)
         SearchDialog(self._data_dir, self._config, parent=self).exec_()
+
+    def _spark_for(self, account_id: str, tier: str = tiers.UNKNOWN):
+        """표 칸에 들어갈 작은 추세선.
+
+        이력이 없으면 빈 것을 준다 - 칸을 비워 두면 열이 들쭉날쭉해 보이고,
+        "이 계정만 뭔가 잘못됐나" 로 읽힌다."""
+
+        from .trend_view import Sparkline
+
+        spark = Sparkline()
+        spark.set_series(self._trends.get(account_id), tier)
+        return spark
+
+    def _open_trend_dialog(self) -> None:
+        """지금 고른 계정의 용량 추세.
+
+        표의 작은 선은 모양만 말한다 - 숫자와 축이 필요하면 여기로 온다."""
+
+        from .trend_dialog import TrendDialog
+
+        TrendDialog(
+            self._data_dir, self._config,
+            account_id=self._account_id_at_row(self.table.currentRow()) or "",
+            parent=self,
+        ).exec_()
 
     def _open_load_dialog(self) -> None:
         """서버 부하 이력 창.

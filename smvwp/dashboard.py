@@ -40,6 +40,8 @@ class DashboardData:
     # "그래서 오늘 뭘 먼저 하지" 한 줄. 여기서 함께 읽는 이유는 재료가 이미
     # 손에 있기 때문이다 - 표본은 방금 읽었고, 나머지는 스캔 DB 한 번이다.
     plan: object = None
+    # 계정별 추세선 `{계정id: trend.Series}`. 표 칸에 그린다.
+    trends: dict = field(default_factory=dict)
 
 
 def read_dashboard(data_dir: Path, config) -> DashboardData:
@@ -52,6 +54,7 @@ def read_dashboard(data_dir: Path, config) -> DashboardData:
     conn = store.connect(data_dir)
     try:
         samples = store.latest_samples(conn)
+        trends = _read_trends(conn, config)
     finally:
         conn.close()
 
@@ -70,7 +73,42 @@ def read_dashboard(data_dir: Path, config) -> DashboardData:
         forecasts=forecasts,
         forecast_failed=failed,
         plan=_read_plan(data_dir, config, samples),
+        trends=trends,
     )
+
+
+# 표 칸에 그릴 추세의 기간.
+#
+# 30일이면 "이번 달에 어떻게 왔나"가 보인다. 90일까지 넣으면 칸이 좁아 최근
+# 변화가 뭉개지고, 7일이면 주말 하나에 모양이 흔들린다.
+TREND_DAYS = 30
+
+# 칸 하나에 그릴 점의 수. 폭이 110픽셀이라 이보다 촘촘히 그려 봐야 안 보인다.
+TREND_BUCKETS = 60
+
+
+def _read_trends(conn, config) -> dict:
+    """계정별 추세선. 실패해도 표는 떠야 하므로 통째로 감싼다."""
+
+    from datetime import datetime, timedelta, timezone
+
+    from . import trend
+
+    result = {}
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=TREND_DAYS)
+        now = datetime.now(timezone.utc)
+        for account in config.accounts:
+            samples = store.samples_since(conn, account.account_id, since)
+            # 창을 명시한다. 안 그러면 표본이 하루치뿐인 계정의 하루가 칸을
+            # 꽉 채워, 옆 계정의 30일과 나란히 놓였을 때 축이 서로 다른
+            # 그래프를 같은 것처럼 보게 된다.
+            result[account.account_id] = trend.build(
+                samples, since=since, until=now, buckets=TREND_BUCKETS
+            )
+    except Exception:
+        logger.exception("추세 읽기 실패 (대시보드는 계속합니다)")
+    return result
 
 
 def _read_plan(data_dir, config, samples):

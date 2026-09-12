@@ -42,6 +42,26 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "저장",
         "common.cancel": "취소",
         "common.close": "닫기",
+        "trend.title": "용량 추세",
+        "trend.btn.open": "추세 보기",
+        "trend.col": "추세",
+        "trend.range_label": "기간",
+        "trend.range_days": "최근 {days}일",
+        "trend.loading": "불러오는 중...",
+        "trend.failed": "불러오지 못했습니다: {error}",
+        "trend.no_account": "계정을 고르면 추세가 표시됩니다.",
+        "trend.no_data": "이력이 없습니다",
+        "trend.no_data_in_range": "이 기간에는 표본이 없습니다. 수집기가 돌아야 쌓입니다.",
+        "trend.summary": "지금 {now}% · 이 기간 최저 {low}% / 최고 {high}%",
+        "trend.range": "최저 {low}% / 최고 {high}%",
+        "trend.change": "기간 동안 {delta}%p",
+        "trend.gaps": "표본이 없는 구간 {count}칸 (선이 끊긴 곳)",
+        "trend.note": (
+            "세로축은 0~100%로 고정입니다. 데이터에 맞춰 늘이면 78%에서 80%로 간 것이 "
+            "화면을 꽉 채워 큰일이 난 것처럼 보입니다. 점선은 주의(90%)와 경고(95%)입니다.\n"
+            "선이 끊긴 곳은 그때 수집기가 돌지 않은 것입니다 - 이어 그으면 없는 값을 "
+            "있는 것처럼 보여주게 되므로 끊어 둡니다."
+        ),
         "priority.heading": "무엇부터 할까",
         "priority.summary": "할 일 {count}건 · 지금 조치 {critical}건 · 정리하면 {freeable} 빕니다",
         "priority.nothing": "지금 먼저 손댈 것이 없습니다.",
@@ -712,6 +732,27 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "Save",
         "common.cancel": "Cancel",
         "common.close": "Close",
+        "trend.title": "Capacity trend",
+        "trend.btn.open": "Trend",
+        "trend.col": "Trend",
+        "trend.range_label": "Range",
+        "trend.range_days": "last {days} days",
+        "trend.loading": "Loading...",
+        "trend.failed": "Could not load: {error}",
+        "trend.no_account": "Pick an account to see its trend.",
+        "trend.no_data": "no history",
+        "trend.no_data_in_range": "No samples in this range. They build up once the collector runs.",
+        "trend.summary": "now {now}% - low {low}% / high {high}% over this range",
+        "trend.range": "low {low}% / high {high}%",
+        "trend.change": "{delta}%p over the range",
+        "trend.gaps": "{count} buckets with no samples (where the line breaks)",
+        "trend.note": (
+            "The vertical axis is fixed at 0-100%. Stretching it to the data would make "
+            "78% to 80% fill the screen and look like a crisis. The dashed lines are "
+            "warning (90%) and alert (95%).\n"
+            "A break in the line means the collector was not running then - joining it "
+            "up would show values we do not have."
+        ),
         "priority.heading": "What to do first",
         "priority.summary": "{count} things - {critical} need action now - {freeable} could be freed",
         "priority.nothing": "Nothing needs attention first right now.",
