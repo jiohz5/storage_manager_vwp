@@ -45,6 +45,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, scan_store, tiers, tree_view, usage_log
+from ..scheduler import emit_safely
 from . import theme
 from .treemap_view import TreemapView
 
@@ -96,7 +97,7 @@ class _TreeLoader(QObject):
             state = scan_store.get_account_state(conn, account_id)
             generation = state.last_completed_generation
             if not generation:
-                self.empty.emit()
+                emit_safely(self, "empty")
                 return
             previous = generation - 1 if generation > 1 else None
 
@@ -105,7 +106,7 @@ class _TreeLoader(QObject):
                 for row in scan_store.tree_entries(conn, account_id, generation)
             ]
             if not entries:
-                self.empty.emit()
+                emit_safely(self, "empty")
                 return
             # 이전 세대가 없으면 **None** 을 넘긴다. 빈 목록으로 넘기면 모든
             # 경로가 "지난 스캔에 없던 것"으로 표시된다 - 비교할 스캔이 아예
@@ -121,7 +122,7 @@ class _TreeLoader(QObject):
             )
             total = scan_store.measured_total_kb(conn, account_id, generation)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            emit_safely(self, "failed", str(exc))
             return
         finally:
             if conn is not None:
@@ -135,7 +136,7 @@ class _TreeLoader(QObject):
             large_files=large,
             account_total_kb=total,
         )
-        self.finished.emit(roots, total)
+        emit_safely(self, "finished", roots, total)
 
 
 class TreeDialog(QDialog):

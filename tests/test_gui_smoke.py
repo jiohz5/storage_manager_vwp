@@ -664,3 +664,54 @@ class PriorityPanelTests(_GuiCase):
         ))
         text = " ".join(self.lines() + [self.window.priority_summary.text()])
         self.assertNotIn("priority.", text)
+
+
+class ScanTabHeightTests(_GuiCase):
+    """1080 세로에서 눌리지 않는가.
+
+    반입 장비의 화면이 1080 이 최대다. 작업 표시줄과 창 테두리를 빼면 쓸 수
+    있는 세로가 1000px 남짓인데, 세부 표 넷을 쌓았더니 창 최소 높이가 791px 이
+    되어 남는 여유를 넷이 나눠 갖느라 표마다 서너 줄만 보였다.
+
+    세부를 하위 탭으로 나눈 뒤의 예산을 못박는다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def test_the_window_fits_a_1080_screen_with_room_to_spare(self):
+        needed = self.window.minimumSizeHint().height()
+        # 1080 - 작업 표시줄 - 창 테두리 ~= 1000. 세부 표가 실제로 보이려면
+        # 최소치가 그보다 한참 낮아야 한다.
+        self.assertLess(needed, 760, f"창 최소 세로 {needed}px")
+
+    def test_the_detail_areas_are_tabs_not_a_stack(self):
+        tabs = self.window._scan_tab.detail_tabs
+        self.assertEqual(tabs.count(), 3)
+
+    def test_each_detail_tab_has_a_name(self):
+        tabs = self.window._scan_tab.detail_tabs
+        for index in range(tabs.count()):
+            text = tabs.tabText(index)
+            self.assertTrue(text)
+            self.assertNotIn("scan.tab.", text)
+
+    def test_the_findings_list_is_no_longer_capped(self):
+        """탭 하나를 통째로 쓰므로 남는 만큼 보여 준다."""
+
+        listing = self.window._scan_tab.findings_list
+        self.assertGreater(listing.maximumHeight(), 1000)
+
+    def test_the_summary_cards_stay_visible_above_the_tabs(self):
+        """세부를 탭으로 나눠도 요약은 늘 보여야 한다 - 그게 결론이다."""
+
+        tab = self.window._scan_tab
+        for card in (tab.card_run, tab.card_delta, tab.card_biggest,
+                     tab.card_findings):
+            self.assertTrue(card.isVisibleTo(tab))

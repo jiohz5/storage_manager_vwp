@@ -454,3 +454,94 @@ class RepolishTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+HINT = (
+    "작업 스레드에서 직접 emit 하면 창을 닫을 때 터진다. "
+    "scheduler.emit_safely(self, 신호이름, ...) 를 쓸 것: "
+)
+
+
+class ThreadEmitTests(unittest.TestCase):
+    """작업 스레드에서 신호를 그냥 쏘지 않는가.
+
+    ## 왜 이 검사가 있나
+
+    창을 닫는 순간에도 daemon 스레드는 아직 돌고 있다. 그때 위젯의 C++ 쪽은
+    이미 지워졌으므로 `signal.emit()` 이 `RuntimeError: wrapped C/C++ object
+    has been deleted` 로 터지고, 사용자에게는 "닫았더니 뭔가 터졌다" 로 보인다.
+
+    `scheduler.emit_safely` 가 그것을 막는다. 그런데 **새 창을 만들 때마다 그
+    통로를 잊었다.** 사람이 기억하는 것으로는 안 되므로 구조로 막는다.
+
+    ## 무엇을 보는가
+
+    `threading.Thread(target=self.X)` 로 넘겨진 **그 메서드 X 안**만 본다.
+    클래스 단위로 보면 스레드를 띄우기만 하고 신호는 GUI 스레드에서 쏘는
+    위젯(`ScanTab` 이 그렇다)까지 걸려 검사가 못 쓰게 된다.
+
+    한 겹만 본다 - X 가 부른 다른 메서드에서 쏘는 것은 못 잡는다. 지금 구조가
+    전부 X 안에서 쏘는 모양이라 이 정도로 충분하고, 더 좇으면 검사 자체가
+    틀리기 쉬워진다.
+    """
+
+    def _thread_targets(self, tree):
+        """`threading.Thread(target=self.X)` 로 넘어간 메서드 이름들."""
+
+        names = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            is_thread = (
+                isinstance(func, ast.Attribute) and func.attr == "Thread"
+            ) or (isinstance(func, ast.Name) and func.id == "Thread")
+            if not is_thread:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != "target":
+                    continue
+                value = keyword.value
+                if (isinstance(value, ast.Attribute)
+                        and isinstance(value.value, ast.Name)
+                        and value.value.id == "self"):
+                    names.add(value.attr)
+        return names
+
+    def _bare_emits(self, node):
+        """`self.<무엇>.emit(...)` - 안전한 통로를 안 거친 것."""
+
+        found = []
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+            func = child.func
+            if not isinstance(func, ast.Attribute) or func.attr != "emit":
+                continue
+            owner = func.value
+            if (isinstance(owner, ast.Attribute)
+                    and isinstance(owner.value, ast.Name)
+                    and owner.value.id == "self"):
+                found.append("self." + owner.attr + ".emit")
+        return found
+
+    def test_thread_targets_do_not_emit_directly(self):
+        paths = sorted(GUI.glob("*.py")) + [GUI.parent / "scheduler.py"]
+        offenders = []
+        checked = 0
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            targets = self._thread_targets(tree)
+            if not targets:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                if node.name not in targets:
+                    continue
+                checked += 1
+                for call in self._bare_emits(node):
+                    offenders.append(path.name + ":" + node.name + " -> " + call)
+
+        # 검사가 아무것도 못 찾으면 통과해도 뜻이 없다.
+        self.assertGreater(checked, 3, "스레드로 도는 메서드를 못 찾았다")
+        self.assertEqual(offenders, [], HINT + "  ".join(offenders))

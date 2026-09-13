@@ -32,6 +32,7 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QListWidget,
+    QTabWidget,
     QListWidgetItem,
     QComboBox,
     QFrame,
@@ -248,6 +249,10 @@ class ScanTab(QFrame):
         )
         self.tree_btn.setText(i18n.t("tree.btn.open"))
         self.findings_caption.setText(i18n.t("digest.findings_heading"))
+        for index, key in enumerate(
+            ("scan.tab.findings", "scan.tab.accounts", "scan.tab.detail")
+        ):
+            self.detail_tabs.setTabText(index, i18n.t(key))
 
     def _build(self) -> None:
         """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
@@ -350,22 +355,44 @@ class ScanTab(QFrame):
         # 실패·권한 부족·튀는 파일·크게 는 계정을 한 목록으로 모은다. 지금까지는
         # 이것들이 표 셋에 흩어져 있어서, 급한 것이 표 밑으로 밀리면 아무도
         # 못 봤다.
+        # 세부는 하위 탭으로 나눈다.
+        #
+        # 넷(살펴볼 것·계정별·증가 경로·큰 파일)을 세로로 쌓으면 창 최소 높이가
+        # 791px 이 되어, 화면이 1080 인 곳에서는 남는 여유가 200px 남짓뿐이다.
+        # 그것을 넷이 나눠 가지면 표마다 서너 줄씩만 보인다.
+        #
+        # 위쪽 요약(카드·상태)은 늘 보이게 두고 세부만 하나씩 본다 - 어차피
+        # 한 번에 하나를 파고드는 것들이다.
+        self.detail_tabs = QTabWidget()
+        box.addWidget(self.detail_tabs, 1)
+
+        findings_page = QWidget()
+        findings_box = QVBoxLayout(findings_page)
+        findings_box.setContentsMargins(0, 8, 0, 0)
+        findings_box.setSpacing(6)
         self.findings_caption = QLabel()
-        self.findings_caption.setObjectName("sectionTitle")
-        box.addWidget(self.findings_caption)
+        self.findings_caption.setObjectName("muted")
+        self.findings_caption.setWordWrap(True)
+        findings_box.addWidget(self.findings_caption)
 
         self.findings_list = QListWidget()
         self.findings_list.setObjectName("findings")
         self.findings_list.setFrameShape(QListWidget.NoFrame)
         self.findings_list.setSelectionMode(QListWidget.NoSelection)
         self.findings_list.setFocusPolicy(Qt.NoFocus)
-        self.findings_list.setMaximumHeight(150)
-        box.addWidget(self.findings_list)
+        # 높이를 묶지 않는다 - 탭 하나를 통째로 쓰므로 남는 만큼 보여 준다.
+        findings_box.addWidget(self.findings_list, 1)
+        self.detail_tabs.addTab(findings_page, i18n.t("scan.tab.findings"))
 
         # -- 계정별 현황 ------------------------------------------------
+        accounts_page = QWidget()
+        accounts_box = QVBoxLayout(accounts_page)
+        accounts_box.setContentsMargins(0, 8, 0, 0)
+        accounts_box.setSpacing(6)
         self.scan_accounts_caption = QLabel()
-        self.scan_accounts_caption.setObjectName("sectionTitle")
-        box.addWidget(self.scan_accounts_caption)
+        self.scan_accounts_caption.setObjectName("muted")
+        self.scan_accounts_caption.setWordWrap(True)
+        accounts_box.addWidget(self.scan_accounts_caption)
 
         self.scan_accounts_table = QTableWidget(0, len(SCAN_ACCOUNT_COLUMN_KEYS))
         accounts_header = self.scan_accounts_table.horizontalHeader()
@@ -386,12 +413,18 @@ class ScanTab(QFrame):
             self._on_scan_account_row_selected
         )
         self.scan_accounts_table.setMinimumHeight(120)
-        box.addWidget(self.scan_accounts_table)
+        accounts_box.addWidget(self.scan_accounts_table, 1)
+        self.detail_tabs.addTab(accounts_page, i18n.t("scan.tab.accounts"))
 
         # -- 세부 (한 계정) ----------------------------------------------
         #
         # 증가 경로와 큰 파일은 **같은 계정에 대한 두 관점**이라 나란히 두는
         # 편이 읽힌다. 세로로 쌓으면 둘을 견주려고 스크롤을 오가야 한다.
+        detail_page = QWidget()
+        detail_box = QVBoxLayout(detail_page)
+        detail_box.setContentsMargins(0, 8, 0, 0)
+        detail_box.setSpacing(6)
+
         detail_head = QHBoxLayout()
         detail_head.setSpacing(8)
         self.scan_account_label = QLabel()
@@ -402,7 +435,7 @@ class ScanTab(QFrame):
         detail_head.addWidget(self.scan_account_label)
         detail_head.addWidget(self.scan_account_combo)
         detail_head.addStretch(1)
-        box.addLayout(detail_head)
+        detail_box.addLayout(detail_head)
 
         detail_row = QHBoxLayout()
         detail_row.setSpacing(12)
@@ -412,7 +445,8 @@ class ScanTab(QFrame):
         large_side.setSpacing(6)
         detail_row.addLayout(growth_side, 1)
         detail_row.addLayout(large_side, 1)
-        box.addLayout(detail_row, 1)
+        detail_box.addLayout(detail_row, 1)
+        self.detail_tabs.addTab(detail_page, i18n.t("scan.tab.detail"))
 
         self.growth_caption = QLabel()
         self.growth_caption.setObjectName("muted")

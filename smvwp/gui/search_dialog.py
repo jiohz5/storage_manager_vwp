@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 from .. import admin_auth, config as config_module
 from .. import formatting
 from .. import i18n, search_index, tiers
+from ..scheduler import emit_safely
 from .pin_dialog import PinChangeDialog
 
 
@@ -72,9 +73,9 @@ class _IndexWorker(QObject):
             count = search_index.index_account(
                 conn, account_id, account_path, should_stop=lambda: self._stop
             )
-            self.finished.emit(count)
+            emit_safely(self, "finished", count)
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            emit_safely(self, "failed", str(exc))
         finally:
             if conn is not None:
                 conn.close()

@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, loadreport, scan_store, tiers, usage_log
+from ..scheduler import emit_safely
 from . import theme, widgets
 
 HOUR_COLUMNS = (
@@ -106,14 +107,14 @@ class _LoadReader(QObject):
                 "mounts": scan_store.mount_activity(conn, since=since),
             }
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            emit_safely(self, "failed", str(exc))
             return
         finally:
             if conn is not None:
                 conn.close()
             with self._lock:
                 self._running = False
-        self.finished.emit(payload)
+        emit_safely(self, "finished", payload)
 
 
 def _table(column_keys, height: int) -> QTableWidget:

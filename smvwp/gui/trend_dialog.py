@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, store, tiers, trend
+from ..scheduler import emit_safely
 from .trend_view import TrendChart
 
 # 고를 수 있는 기간. 90일은 표본 보존 기간(`sample_retention_days`)과 맞춘다 -
@@ -76,14 +77,14 @@ class _HistoryReader(QObject):
                     tier = sample.overall_tier
                     break
         except Exception as exc:  # pragma: no cover - 방어적 처리
-            self.failed.emit(str(exc))
+            emit_safely(self, "failed", str(exc))
             return
         finally:
             if conn is not None:
                 conn.close()
             with self._lock:
                 self._running = False
-        self.finished.emit(series, tier)
+        emit_safely(self, "finished", series, tier)
 
 
 class TrendDialog(QDialog):
