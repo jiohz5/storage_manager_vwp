@@ -66,6 +66,9 @@ class Finding:
     count: int = 0
     # 눈에 띄게 칠할지. 실패처럼 사람이 반드시 봐야 하는 것만 참이다.
     urgent: bool = False
+    # 화면이 이 줄에서 그 계정의 세부로 곧장 가려면 이름이 아니라 id 가
+    # 있어야 한다 (이름은 바뀌고, 겹칠 수도 있다).
+    account_id: str = ""
 
 
 @dataclass
@@ -201,7 +204,7 @@ def _findings(accounts) -> List[Finding]:
         if entry.failed_count:
             urgent.append(
                 Finding(
-                    kind=FINDING_FAILED, account=name,
+                    kind=FINDING_FAILED, account=name, account_id=entry.account_id,
                     count=entry.failed_count, urgent=True,
                 )
             )
@@ -210,7 +213,7 @@ def _findings(accounts) -> List[Finding]:
             # 읽으므로 반드시 알려야 한다.
             urgent.append(
                 Finding(
-                    kind=FINDING_PARTIAL, account=name,
+                    kind=FINDING_PARTIAL, account=name, account_id=entry.account_id,
                     count=len(entry.partial_paths), urgent=True,
                 )
             )
@@ -221,6 +224,7 @@ def _findings(accounts) -> List[Finding]:
             normal.append(
                 Finding(
                     kind=FINDING_LARGE_FILE, account=name, path=item.path,
+                    account_id=entry.account_id,
                     size_kb=item.size_kb, delta_kb=item.delta_kb,
                 )
             )
@@ -231,7 +235,7 @@ def _findings(accounts) -> List[Finding]:
             if delta >= GROWTH_NOTICE_KB:
                 normal.append(
                     Finding(
-                        kind=FINDING_GROWTH, account=name,
+                        kind=FINDING_GROWTH, account=name, account_id=entry.account_id,
                         size_kb=entry.measured_kb, delta_kb=delta,
                     )
                 )

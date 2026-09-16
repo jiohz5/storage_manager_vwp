@@ -175,7 +175,8 @@ QLabel#statLabel {{ color: {TEXT_MUTED}; font-size: {FONT_CAPTION}px; }}
 QLabel#statValue {{ font-size: {FONT_TITLE}px; font-weight: {WEIGHT_HEAVY}; }}
 /* 살펴볼 것 목록: 카드 위에 얹히므로 자기 배경과 테두리를 갖지 않는다. */
 QListWidget#findings {{ background: transparent; border: none; }}
-QListWidget#findings::item {{ padding: 3px 2px; }}
+QListWidget#findings::item {{ padding: 9px 4px; border-bottom: 1px solid {BORDER}; }}
+QListWidget#findings::item:hover {{ background: {SURFACE_SUNKEN}; }}
 
 /* ---------- 버튼 ---------- */
 QPushButton {{
@@ -288,6 +289,28 @@ QTabBar::tab {{
 }}
 QTabBar::tab:selected {{ background: {BG}; color: {ACCENT}; }}
 QTabBar::tab:hover:!selected {{ color: {TEXT}; }}
+
+/* 카드 안의 하위 탭. 바깥 탭처럼 면을 띄우면 흰 카드 위에 회색 덩어리가
+   생겨 어수선하다 - 밑줄 하나로 지금 어디인지만 알린다. */
+QTabBar#subTabs::tab {{
+    background: transparent;
+    color: {TEXT_MUTED};
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0px;
+    padding: 8px 14px;
+    margin-right: 6px;
+}}
+QTabBar#subTabs::tab:selected {{
+    background: transparent;
+    color: {ACCENT};
+    border-bottom: 2px solid {ACCENT};
+}}
+QTabBar#subTabs::tab:hover:!selected {{ color: {TEXT}; }}
+QFrame#subTabsRule {{ background: {BORDER}; border: none; }}
+/* 하위 탭의 쪽들은 카드의 흰 면을 그대로 쓴다. 전역 `QWidget` 규칙을 두면
+   쪽마다 창 배경색이 깔려 카드 안에 회색 판이 하나 더 생긴다. */
+QStackedWidget#subPages, QWidget#subPage {{ background: transparent; }}
 
 /* ---------- 펼침 버튼 ---------- */
 /* 접힌 설정을 여는 버튼. 일반 버튼처럼 보이면 "눌러야 하는 것"으로 읽히므로,

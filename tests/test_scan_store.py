@@ -79,6 +79,52 @@ class AccountScanStateTests(ScanStoreTestCase):
         state = scan_store.get_account_state(self.conn, "acct-1")
         self.assertEqual(state.working_generation, 1)
 
+    def test_two_threads_creating_the_same_row_do_not_collide(self):
+        """읽고 나서 넣기 사이에 다른 연결이 먼저 넣는 경우.
+
+        창을 열면 헬스체크(대시보드)와 스캔 상태 조회가 새 계정에 대해 동시에
+        여기로 온다. 늦은 쪽이 UNIQUE 위반으로 죽어 홈의 우선순위 카드가
+        "계산하지 못했습니다" 로 떴다."""
+
+        # addCleanup 으로 닫으면 tearDown 의 임시 디렉터리 삭제보다 늦어,
+        # 윈도우에서는 열린 DB 파일을 못 지워 실패한다.
+        other = scan_store.connect(self.data_dir)
+
+        class Cursor:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+        class Racing:
+            """첫 SELECT 가 '없다' 를 돌려준 직후에 다른 연결이 끼어든다."""
+
+            def __init__(self, conn):
+                self.conn = conn
+                self.raced = False
+
+            def execute(self, sql, params=()):
+                cursor = self.conn.execute(sql, params)
+                if self.raced or not sql.lstrip().upper().startswith("SELECT"):
+                    return cursor
+                self.raced = True
+                rows = cursor.fetchall()
+                other.execute(
+                    "INSERT INTO account_scan_state (account_id) VALUES (?)", ("acct-1",)
+                )
+                other.commit()
+                return Cursor(rows)
+
+            def commit(self):
+                self.conn.commit()
+
+        try:
+            state = scan_store.get_account_state(Racing(self.conn), "acct-1")
+        finally:
+            other.close()
+        self.assertEqual(state.working_generation, 1)
+
     def test_working_generation_advances_after_completion(self):
         conn = self.conn
         scan_store.mark_generation_completed(conn, "acct-1", 1)

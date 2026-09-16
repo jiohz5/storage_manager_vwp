@@ -413,9 +413,14 @@ class LargeFilesTableTests(_GuiCase):
 
         from smvwp.gui.scan_tab import LARGE_PATH
 
+        from smvwp import tiers
+        from PyQt5.QtGui import QColor
+
         self._snapshot_with([("/a/ok", 1_000, 1_000)], measured_kb=10_000_000)
         item = self.tab.large_table.item(0, LARGE_PATH)
-        self.assertFalse(item.toolTip())
+        self.assertNotEqual(
+            item.foreground().color().name(), QColor(tiers.color(tiers.WARN)).name()
+        )
 
     def test_a_file_missing_from_the_previous_list_says_so(self):
         from smvwp import i18n
@@ -443,10 +448,6 @@ class LargeFilesTableTests(_GuiCase):
         self.assertEqual(
             self.tab.large_table.item(0, LARGE_SHARE).text(), i18n.t("common.none")
         )
-
-
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
 
 
 class ScanDigestSmokeTests(_GuiCase):
@@ -673,7 +674,8 @@ class ScanTabHeightTests(_GuiCase):
     있는 세로가 1000px 남짓인데, 세부 표 넷을 쌓았더니 창 최소 높이가 791px 이
     되어 남는 여유를 넷이 나눠 갖느라 표마다 서너 줄만 보였다.
 
-    세부를 하위 탭으로 나눈 뒤의 예산을 못박는다."""
+    세부를 하위 탭으로 나눈 뒤의 예산을 못박는다. 칸마다 자리가 충분한지는
+    `ScanTabLayoutTests` 가 실제 크기로 띄워 잰다."""
 
     def setUp(self):
         super().setUp()
@@ -692,8 +694,10 @@ class ScanTabHeightTests(_GuiCase):
         self.assertLess(needed, 760, f"창 최소 세로 {needed}px")
 
     def test_the_detail_areas_are_tabs_not_a_stack(self):
+        """요약·계정별·증가 경로·큰 파일 - 한 범주가 한 탭."""
+
         tabs = self.window._scan_tab.detail_tabs
-        self.assertEqual(tabs.count(), 3)
+        self.assertEqual(tabs.count(), 4)
 
     def test_each_detail_tab_has_a_name(self):
         tabs = self.window._scan_tab.detail_tabs
@@ -708,10 +712,199 @@ class ScanTabHeightTests(_GuiCase):
         listing = self.window._scan_tab.findings_list
         self.assertGreater(listing.maximumHeight(), 1000)
 
-    def test_the_summary_cards_stay_visible_above_the_tabs(self):
-        """세부를 탭으로 나눠도 요약은 늘 보여야 한다 - 그게 결론이다."""
+    def test_the_summary_tab_opens_first(self):
+        """카드는 늘 보이던 자리에서 첫 탭으로 내려왔다 - 위에 늘 떠 있으면
+        세부 탭마다 300px 씩 빼앗았다. 대신 창을 열면 요약이 먼저 보인다."""
+
+        from smvwp.gui.scan_tab import TAB_SUMMARY
 
         tab = self.window._scan_tab
+        self.assertEqual(tab.detail_tabs.currentIndex(), TAB_SUMMARY)
         for card in (tab.card_run, tab.card_delta, tab.card_biggest,
                      tab.card_findings):
             self.assertTrue(card.isVisibleTo(tab))
+
+
+class ScanTabLayoutTests(_GuiCase):
+    """상세 스캔 탭이 범주마다 자리를 **충분히** 주는가 - 실제 크기로 띄워 잰다.
+
+    탭으로 나누기만 해서는 모자랐다. 위에 카드와 상태가 300px 을 먹고, 증가
+    경로와 큰 파일은 반폭씩 나눠 경로 뒤쪽(정작 다른 부분)이 잘렸다. "여러
+    칸이 한눈에 보이되 칸마다 몇 줄 안 보이고, 전부 가로·세로 스크롤" 이라는
+    말을 들었다. 소스를 읽어서는 알 수 없는 것들이라 재는 수밖에 없다.
+    """
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        # 창이 스스로 읽어 온 빈 스냅샷이 우리 것을 덮어쓰지 않게.
+        patcher = patch(
+            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.tab = self.window._scan_tab
+        self.tab.retranslate()
+        self.window.tabs.setCurrentIndex(self.window.tabs.indexOf(self.window._scan_page))
+        self.tab._on_scan_status_ready(self._snapshot())
+        self.show(1200, 820)
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    # -- 준비 ------------------------------------------------------------
+    def _entry(self, account, big_file_kb):
+        from smvwp.nightly_scan import AccountScanSnapshot
+
+        root = account.path
+        growth = [
+            {"path": f"{root}/LAYOUT/run_{i:02d}_postlayout_extract/BACKUP/lvs_{i}",
+             "current_kb": (400 - i) * self.GB, "previous_kb": (300 - i) * self.GB}
+            for i in range(30)
+        ]
+        large = [(f"{root}/LAYOUT/run_00/SIM/psf/tran_0.tr0", big_file_kb, None)]
+        return AccountScanSnapshot(
+            account_id=account.account_id, account_name=account.name,
+            last_completed_generation=2, top_paths=[], growth=growth,
+            pending_baseline_count=120, baseline_done=900, baseline_total=1000,
+            current_scan_at="2026-09-15T15:10:00+00:00",
+            previous_scan_at="2026-09-14T15:05:00+00:00",
+            large_files=large, measured_kb=1000 * self.GB,
+            previous_measured_kb=900 * self.GB, eta_seconds=5400,
+        )
+
+    def _snapshot(self):
+        from smvwp.nightly_scan import StatusSnapshot
+
+        proj, bak = self.config.accounts
+        return StatusSnapshot(
+            is_running=True,
+            window_description="22:00~06:00",
+            latest_run={
+                "status": "running", "started_at": "2026-09-15T13:00:00+00:00",
+                "current_path": proj.path + "/LAYOUT", "current_account_id": proj.account_id,
+            },
+            # bak 쪽 파일만 계정의 60% 라 눈에 띈다 - 살펴볼 것에 오른다.
+            accounts=[self._entry(proj, 1 * self.GB), self._entry(bak, 600 * self.GB)],
+        )
+
+    def show(self, width, height):
+        self.window.resize(width, height)
+        self.window.show()
+        for _ in range(3):
+            _app().processEvents()
+
+    def page(self, index):
+        self.tab.detail_tabs.setCurrentIndex(index)
+        for _ in range(3):
+            _app().processEvents()
+
+    # -- 자리 ------------------------------------------------------------
+    def test_growth_and_large_files_each_get_the_full_width(self):
+        """반폭씩 나누면 경로 뒤쪽이 잘린다."""
+
+        from smvwp.gui.scan_tab import TAB_GROWTH, TAB_LARGE
+
+        full = self.tab.detail_stack.width()
+        for index, table in ((TAB_GROWTH, self.tab.growth_table),
+                             (TAB_LARGE, self.tab.large_table)):
+            self.page(index)
+            self.assertGreater(table.width(), full * 0.9, table)
+
+    def test_the_fixed_header_leaves_most_of_the_height_to_the_tabs(self):
+        """늘 떠 있는 부분이 크면 어느 탭을 열어도 몇 줄만 보인다.
+
+        예전에는 카드·두 줄 상태·진행 막대가 820px 창에서 절반을 먹었다."""
+
+        ratio = self.tab.detail_stack.height() / self.tab.height()
+        self.assertGreater(ratio, 0.65, f"탭 자리 {ratio:.0%}")
+
+    def test_no_sideways_scrolling_even_at_the_minimum_window(self):
+        from PyQt5.QtWidgets import QAbstractScrollArea
+
+        minimum = self.window.minimumSize()
+        self.show(minimum.width(), max(minimum.height(), 700))
+        offenders = []
+        for index in range(self.tab.detail_tabs.count()):
+            self.page(index)
+            for view in self.tab.detail_stack.currentWidget().findChildren(
+                QAbstractScrollArea
+            ):
+                if view.isVisible() and view.horizontalScrollBar().isVisible():
+                    offenders.append(f"{index}:{view.__class__.__name__}")
+        self.assertEqual(offenders, [])
+
+    def test_the_account_picker_is_not_clipped(self):
+        """콤보가 세로로 잘리는 사고가 세 번 있었다. 탭 줄에 올리면서 다시 잰다."""
+
+        combo = self.tab.scan_account_combo
+        self.assertGreaterEqual(combo.height(), combo.sizeHint().height())
+
+    def test_a_long_finding_wraps_instead_of_scrolling_sideways(self):
+        from smvwp.gui.scan_tab import TAB_SUMMARY
+
+        self.show(self.window.minimumSize().width(), 760)
+        self.page(TAB_SUMMARY)
+        listing = self.tab.findings_list
+        listing.addItem("아주 긴 문장 " * 40)
+        for _ in range(3):
+            _app().processEvents()
+        short = listing.visualItemRect(listing.item(0)).height()
+        long_ = listing.visualItemRect(listing.item(listing.count() - 1)).height()
+        self.assertGreater(long_, short * 1.5)
+        self.assertFalse(listing.horizontalScrollBar().isVisible())
+
+    # -- 경로 ------------------------------------------------------------
+    def test_paths_are_shown_under_the_account_with_the_full_path_on_hover(self):
+        from smvwp.gui.scan_tab import TAB_GROWTH
+
+        self.page(TAB_GROWTH)
+        account = self.tab._selected_account()
+        cell = self.tab.growth_table.item(0, 0)
+        self.assertTrue(cell.text().startswith("LAYOUT/"), cell.text())
+        self.assertTrue(cell.toolTip().startswith(account.path), cell.toolTip())
+        # 무엇을 기준으로 줄였는지는 설명 줄에 한 번 적는다.
+        self.assertIn(account.path, self.tab.growth_caption.text())
+
+    # -- 오가기 ------------------------------------------------------------
+    def test_clicking_a_finding_opens_that_accounts_tab(self):
+        """요약에서 근거로 곧장 가는 길이 없으면 계정 이름을 외워 다시 찾아야 한다."""
+
+        from smvwp.gui.scan_tab import FINDING_ACCOUNT_ROLE, FINDING_TAB_ROLE, TAB_LARGE
+
+        bak = self.config.accounts[1]
+        listing = self.tab.findings_list
+        target = next(
+            listing.item(row) for row in range(listing.count())
+            if listing.item(row).data(FINDING_ACCOUNT_ROLE) == bak.account_id
+            and listing.item(row).data(FINDING_TAB_ROLE) == TAB_LARGE
+        )
+        listing.itemClicked.emit(target)
+        self.assertEqual(self.tab.detail_tabs.currentIndex(), TAB_LARGE)
+        self.assertEqual(self.tab.scan_account_combo.currentData(), bak.account_id)
+        self.assertIn(bak.name, self.tab.large_caption.text())
+
+    def test_double_clicking_an_account_row_opens_its_growth_paths(self):
+        from smvwp.gui.scan_tab import TAB_ACCOUNTS, TAB_GROWTH
+
+        bak = self.config.accounts[1]
+        self.page(TAB_ACCOUNTS)
+        table = self.tab.scan_accounts_table
+        table.selectRow(1)
+        table.cellDoubleClicked.emit(1, 0)
+        self.assertEqual(self.tab.detail_tabs.currentIndex(), TAB_GROWTH)
+        self.assertEqual(self.tab.scan_account_combo.currentData(), bak.account_id)
+
+    def test_the_headline_says_running_with_the_percentage(self):
+        self.assertIn("90%", self.tab.scan_headline_label.text())
+        self.assertNotIn("scan.", self.tab.scan_headline_label.text())
+        self.assertNotIn("scan.", self.tab.scan_status_label.text())
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

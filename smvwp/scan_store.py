@@ -552,8 +552,12 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
         "SELECT * FROM account_scan_state WHERE account_id = ?", (account_id,)
     ).fetchone()
     if row is None:
+        # `OR IGNORE` - 읽고 나서 넣기 사이에 다른 스레드가 먼저 넣을 수 있다.
+        # 창을 열면 대시보드(헬스체크)와 스캔 상태 조회가 같은 새 계정에 대해
+        # 동시에 여기로 와서, 늦은 쪽이 UNIQUE 위반으로 죽었다. 그러면 홈의
+        # 우선순위 카드가 "계산하지 못했습니다" 로 떴다.
         conn.execute(
-            "INSERT INTO account_scan_state (account_id) VALUES (?)",
+            "INSERT OR IGNORE INTO account_scan_state (account_id) VALUES (?)",
             (account_id,),
         )
         conn.commit()

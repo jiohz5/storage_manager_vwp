@@ -42,9 +42,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "저장",
         "common.cancel": "취소",
         "common.close": "닫기",
-        "scan.tab.findings": "살펴볼 것",
+        "scan.tab.summary": "요약",
         "scan.tab.accounts": "계정별",
-        "scan.tab.detail": "계정 상세",
+        "scan.tab.growth": "증가 경로",
+        "scan.tab.large": "큰 파일",
         "trend.title": "용량 추세",
         "trend.btn.open": "추세 보기",
         "trend.col": "추세",
@@ -110,7 +111,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "digest.findings_none": "지금은 눈에 띄는 것이 없습니다",
         "digest.findings_detail": "그중 급한 것 {urgent}건",
         "digest.findings_heading": "살펴볼 것",
-        "digest.findings_empty": "눈에 띄는 것이 없습니다. 아래 표에서 자세히 볼 수 있습니다.",
+        "digest.findings_empty": "눈에 띄는 것이 없습니다. 다른 탭에서 자세히 볼 수 있습니다.",
+        "digest.findings_hint": "줄을 누르면 그 계정의 해당 탭으로 갑니다.",
         "digest.item.failed": "{account}: 재지 못한 경로 {count}곳 - 권한이나 오류를 확인하세요",
         "digest.item.partial": "{account}: 권한이 없어 덜 세어진 경로 {count}곳 - 실제 크기는 이보다 큽니다",
         "digest.item.large_file": "{account}: {name} - {size} ({change})",
@@ -259,7 +261,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "menu.language": "언어",
         "menu.file": "파일",
         # -- 상세 스캔 ---------------------------------------------
-        "scan.section_title": "상세 스캔 - 밤마다 계정 안 어디가 얼마인지",
+        "scan.headline.running": "실행 중",
+        "scan.headline.running_pct": "실행 중 · {percent}%",
+        "scan.headline.idle": "대기 중 · 지난 실행: {status}",
+        "scan.headline.never": "대기 중 · 아직 실행한 적 없음",
         "scan.status_loading": "스캔 상태 확인 중...",
         "scan.btn.run_now": "지금 상세 스캔 실행",
         "scan.btn.run_now_tooltip": (
@@ -271,13 +276,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "실행 중인 스캔에 중지를 요청합니다. 강제 종료가 아니라 다음 "
             "체크포인트에서 스스로 멈추고, 완료한 작업은 그대로 보존됩니다."
         ),
-        "scan.running": "실행 중",
-        "scan.not_running": "실행 중 아님",
-        "scan.latest_run": "최근 실행: {status} ({started_at})",
-        "scan.pending_tasks": "남은 디렉터리 작업 {count}개",
-        "scan.progress_counts": (
-            "디렉터리 {done:,}/{total:,} 완료 ({percent}%) · 분할되면 총계가 늘 수 있습니다"
+        "scan.latest_started": "시작 {started_at}",
+        "scan.pending_tasks": "남은 작업 {count:,}개",
+        "scan.progress_counts": "디렉터리 {done:,}/{total:,} 완료 ({percent}%)",
+        "scan.progress_tip": (
+            "시간 초과로 디렉터리를 쪼개면 작업이 더해져 총계가 늘어납니다. "
+            "그래서 진행률이 잠깐 뒤로 갈 수 있습니다 - 고장이 아닙니다."
         ),
+        "scan.paths_under": "경로는 {root} 기준",
         "scan.status_error": "스캔 상태를 읽을 수 없습니다: {message}",
         "scan.account_label": "계정",
         "scan.col.path": "경로",
@@ -308,12 +314,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.failed_more": "  … 외 {count}곳 (전체 목록은 주간 보고서에서)",
         "reports.scan_progress_heading": "[상세 스캔 진행 상황]",
         # -- 상세 스캔 탭: 계정별 현황 표 --------------------------
-        "scan.acct.heading": "계정별 현황  ·  행을 누르면 아래 증가 경로가 그 계정으로 바뀝니다",
+        "scan.acct.heading": (
+            "행을 고르면 오른쪽 위 계정 선택이 따라오고, 두 번 누르면 그 계정의 증가 경로로 갑니다."
+        ),
         "scan.acct.name": "계정",
         "scan.acct.kind": "성격",
         "scan.acct.progress": "진행",
         "scan.acct.pending": "남은 작업",
-        "scan.acct.measured": "지금까지 찾은 용량",
+        "scan.acct.measured": "찾은 용량",
         "scan.acct.eta": "예상 남은 시간",
         "scan.acct.last_scan": "최근 스캔",
         "scan.acct.note": "비고",
@@ -344,7 +352,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "'목록에 없던 파일'은 새로 생겼다는 뜻이 아닙니다 - 그때는 작았을 "
             "수도 있습니다."
         ),
-        "large.heading": "가장 큰 파일  ·  파일 하나가 유난히 크면 여기서 보입니다",
+        "large.heading": "{account}: 큰 순서로 {count}개  ·  주황색은 계정 안에서 혼자 두드러지는 파일",
         "large.col.path": "파일",
         "large.col.size": "크기",
         "large.col.share": "계정 비중",
@@ -735,9 +743,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "common.save": "Save",
         "common.cancel": "Cancel",
         "common.close": "Close",
-        "scan.tab.findings": "Worth a look",
+        "scan.tab.summary": "Summary",
         "scan.tab.accounts": "By account",
-        "scan.tab.detail": "Account detail",
+        "scan.tab.growth": "Growth paths",
+        "scan.tab.large": "Large files",
         "trend.title": "Capacity trend",
         "trend.btn.open": "Trend",
         "trend.col": "Trend",
@@ -804,7 +813,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "digest.findings_none": "nothing stands out right now",
         "digest.findings_detail": "{urgent} of them need attention",
         "digest.findings_heading": "Worth a look",
-        "digest.findings_empty": "Nothing stands out. The tables below have the detail.",
+        "digest.findings_empty": "Nothing stands out. The other tabs have the detail.",
+        "digest.findings_hint": "Click a line to open that account's tab.",
         "digest.item.failed": "{account}: {count} paths could not be measured - check permissions or errors",
         "digest.item.partial": "{account}: {count} paths were read only partly - the real size is larger",
         "digest.item.large_file": "{account}: {name} is {size} ({change})",
@@ -955,7 +965,10 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "menu.language": "Language",
         "menu.file": "File",
         # -- Detail scan -------------------------------------------
-        "scan.section_title": "Detail scan - what is where inside each account, night by night",
+        "scan.headline.running": "Running",
+        "scan.headline.running_pct": "Running · {percent}%",
+        "scan.headline.idle": "Idle · last run: {status}",
+        "scan.headline.never": "Idle · never run",
         "scan.status_loading": "Checking scan status...",
         "scan.btn.run_now": "Run detail scan now",
         "scan.btn.run_now_tooltip": (
@@ -967,13 +980,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "Requests a stop for the running scan. This is not a forced kill - the "
             "scan stops at its next checkpoint and completed work is preserved."
         ),
-        "scan.running": "Running",
-        "scan.not_running": "Not running",
-        "scan.latest_run": "Last run: {status} ({started_at})",
-        "scan.pending_tasks": "{count} directory task(s) remaining",
-        "scan.progress_counts": (
-            "{done:,}/{total:,} directories done ({percent}%) - the total can grow when directories are split"
+        "scan.latest_started": "started {started_at}",
+        "scan.pending_tasks": "{count:,} task(s) remaining",
+        "scan.progress_counts": "{done:,}/{total:,} directories done ({percent}%)",
+        "scan.progress_tip": (
+            "When a directory times out it is split, which adds tasks and grows the total. "
+            "Progress can therefore step back for a moment - that is expected."
         ),
+        "scan.paths_under": "paths relative to {root}",
         "scan.status_error": "Cannot read scan status: {message}",
         "scan.account_label": "Account",
         "scan.col.path": "Path",
@@ -1004,12 +1018,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.failed_more": "  ... and {count} more (see the weekly report for the full list)",
         "reports.scan_progress_heading": "[Detail scan progress]",
         # -- Detail scan tab: per-account status --------------------
-        "scan.acct.heading": "Accounts  ·  click a row to switch the growth list below",
+        "scan.acct.heading": (
+            "Select a row to pick that account (top right); double-click to open its growth paths."
+        ),
         "scan.acct.name": "Account",
         "scan.acct.kind": "Kind",
         "scan.acct.progress": "Progress",
         "scan.acct.pending": "Pending",
-        "scan.acct.measured": "Measured so far",
+        "scan.acct.measured": "Measured",
         "scan.acct.eta": "Est. remaining",
         "scan.acct.last_scan": "Last scan",
         "scan.acct.note": "Notes",
@@ -1042,7 +1058,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "previous scan's top list. Absent does not mean new - it may have "
             "been smaller then."
         ),
-        "large.heading": "Largest files  ·  a single oversized file shows up here",
+        "large.heading": "{account}: {count} largest files  ·  orange ones stand out within the account",
         "large.col.path": "File",
         "large.col.size": "Size",
         "large.col.share": "Share of account",

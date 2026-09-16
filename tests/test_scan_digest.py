@@ -192,6 +192,19 @@ class FindingTests(unittest.TestCase):
         kinds = [item.kind for item in digest.findings]
         self.assertIn(scan_digest.FINDING_LARGE_FILE, kinds)
 
+    def test_every_finding_knows_its_account_id(self):
+        """화면은 한 줄을 누르면 그 계정의 세부 탭으로 간다. 이름으로 찾으면
+        이름을 바꾼 계정이나 이름이 겹치는 계정에서 엉뚱한 곳으로 간다."""
+
+        digest = scan_digest.build(snapshot(FakeAccount(
+            account_id="acct-9",
+            measured_kb=1000 * GB, previous_measured_kb=100 * GB,
+            large_files=[("/a/movie.iso", 300 * GB, 50 * GB)],
+            failed_count=1, partial_paths=["/a/x"],
+        )))
+        self.assertEqual(len(digest.findings), 4)
+        self.assertEqual({item.account_id for item in digest.findings}, {"acct-9"})
+
     def test_an_ordinary_file_does_not(self):
         """전부 올리면 목록이 표가 되고, 표가 되면 원래 문제로 돌아간다."""
 

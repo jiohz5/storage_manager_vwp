@@ -176,6 +176,47 @@ class TooltipTests(unittest.TestCase):
         self.assertEqual(len(text.splitlines()), 3)
 
 
+class RelativePathTests(unittest.TestCase):
+    """한 계정의 표에서 모든 행이 같은 앞머리로 시작하면, 그 앞머리가 칸을
+    다 먹어 정작 다른 뒤쪽이 잘린다. 줄이되 **거짓말은 하지 않는다**."""
+
+    ROOT = "/ifs/proj/design/layout_a"
+
+    def test_a_path_inside_the_account_loses_the_account_prefix(self):
+        self.assertEqual(
+            formatting.relative_path(self.ROOT + "/LAYOUT/run_03/BACKUP", self.ROOT),
+            "LAYOUT/run_03/BACKUP",
+        )
+
+    def test_the_account_root_itself_gets_the_label(self):
+        self.assertEqual(formatting.relative_path(self.ROOT, self.ROOT), ".")
+        self.assertEqual(
+            formatting.relative_path(self.ROOT + "/", self.ROOT, root_label="(top)"),
+            "(top)",
+        )
+
+    def test_a_sibling_that_merely_shares_the_prefix_is_left_whole(self):
+        """`/ifs/a` 계정에서 `/ifs/ab/x` 가 `b/x` 로 줄면 다른 곳으로 읽힌다."""
+
+        sibling = "/ifs/proj/design/layout_ab/x"
+        self.assertEqual(formatting.relative_path(sibling, self.ROOT), sibling)
+
+    def test_a_path_outside_the_account_is_left_whole(self):
+        self.assertEqual(formatting.relative_path("/tmp/x", self.ROOT), "/tmp/x")
+
+    def test_a_trailing_slash_on_the_root_does_not_matter(self):
+        self.assertEqual(
+            formatting.relative_path(self.ROOT + "/a", self.ROOT + "/"), "a"
+        )
+
+    def test_missing_values_do_not_raise(self):
+        self.assertEqual(formatting.relative_path("/x", None), "/x")
+        self.assertEqual(formatting.relative_path("/x", ""), "/x")
+        self.assertEqual(formatting.relative_path(None, self.ROOT), "")
+        # 루트가 `/` 뿐이면 줄일 것이 없다 - 전부를 "." 로 만들면 안 된다.
+        self.assertEqual(formatting.relative_path("/x", "/"), "/x")
+
+
 class LanguageTests(unittest.TestCase):
     def tearDown(self):
         i18n.set_language("ko")

@@ -60,6 +60,28 @@ def to_local(iso_text, tz=None) -> Optional[datetime]:
         return parsed
 
 
+def relative_path(path, root, root_label: str = ".") -> str:
+    """계정 폴더 아래 경로를 **계정 기준**으로 줄인다.
+
+    한 계정의 표에서는 모든 행이 같은 `/ifs/proj/design/<계정>/` 으로 시작한다.
+    그 앞머리가 칸 폭을 다 먹어서 정작 다른 부분(뒤쪽)이 `...` 으로 잘렸다.
+    앞머리는 표 위 설명에 한 번만 적고, 칸에는 달라지는 부분만 둔다.
+
+    계정 밖의 경로는 그대로 둔다 - 줄였다가 다른 곳으로 읽히면 안 된다.
+    `/ifs/a` 계정에서 `/ifs/ab/x` 가 `b/x` 로 줄면 거짓말이므로 경계는 `/` 로
+    가른다."""
+
+    text = "" if path is None else str(path)
+    base = "" if root is None else str(root).rstrip("/")
+    if not text or not base:
+        return text
+    if text.rstrip("/") == base:
+        return root_label
+    if text.startswith(base + "/"):
+        return text[len(base) + 1:]
+    return text
+
+
 def local_datetime_text(iso_text, fallback: str = "-", tz=None) -> str:
     """`2026-09-10 09:00:00` (지역시간)."""
 

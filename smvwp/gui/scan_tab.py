@@ -31,17 +31,18 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
-    QListWidget,
-    QTabWidget,
-    QListWidgetItem,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QStackedWidget,
+    QTabBar,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -73,6 +74,21 @@ AUTO_SCAN_CHECK_MS = 60_000
 CRON_RECHECK_MS = 3 * 60_000
 
 
+# 세부 탭. 순서가 곧 화면 순서다 - 요약이 먼저 열린다.
+TAB_KEYS = ["scan.tab.summary", "scan.tab.accounts", "scan.tab.growth", "scan.tab.large"]
+(TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE) = range(4)
+
+# 살펴볼 것 한 줄을 누르면 어느 탭으로 가나. 못 잰 것·덜 센 것은 증가 경로
+# 탭 설명에 사유가 나오므로 그쪽이다.
+FINDING_TABS = {
+    scan_digest.FINDING_LARGE_FILE: TAB_LARGE,
+    scan_digest.FINDING_GROWTH: TAB_GROWTH,
+    scan_digest.FINDING_FAILED: TAB_GROWTH,
+    scan_digest.FINDING_PARTIAL: TAB_GROWTH,
+}
+FINDING_ACCOUNT_ROLE = Qt.UserRole
+FINDING_TAB_ROLE = Qt.UserRole + 1
+
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
 
 # 가장 큰 파일 표. 디렉터리 합계만 보면 "파일 하나가 유난히 크다"를 놓친다 -
@@ -86,8 +102,10 @@ LARGE_COLUMN_KEYS = [
 ]
 (LARGE_PATH, LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE) = range(4)
 
-# 화면에 띄우는 줄 수. 표는 훑어보는 것이지 뒤지는 것이 아니다.
-LARGE_ROWS_SHOWN = 12
+# 화면에 띄우는 줄 수. 반쪽 폭을 나눠 쓸 때는 12 줄로 묶었는데, 탭을 통째로
+# 쓰게 된 뒤로는 묶을 까닭이 없다. 저장소가 계정마다 20 개쯤 남기므로 사실상
+# 전부 보인다.
+LARGE_ROWS_SHOWN = 50
 
 # 상세 스캔 탭 위쪽의 계정별 현황 표.
 #
@@ -232,7 +250,6 @@ class ScanTab(QFrame):
             self._stop_scan_for_shutdown()
 
     def retranslate(self) -> None:
-        self.scan_title_label.setText(i18n.t("scan.section_title"))
         self.scan_account_label.setText(i18n.t("scan.account_label"))
         self._sync_scan_account_combo()
         self.scan_run_btn.setText(i18n.t("scan.btn.run_now"))
@@ -247,56 +264,90 @@ class ScanTab(QFrame):
         self.large_table.setHorizontalHeaderLabels(
             [i18n.t(key) for key in LARGE_COLUMN_KEYS]
         )
+        self.scan_accounts_table.setHorizontalHeaderLabels(
+            [i18n.t(key) for key in SCAN_ACCOUNT_COLUMN_KEYS]
+        )
         self.tree_btn.setText(i18n.t("tree.btn.open"))
         self.findings_caption.setText(i18n.t("digest.findings_heading"))
-        for index, key in enumerate(
-            ("scan.tab.findings", "scan.tab.accounts", "scan.tab.detail")
-        ):
+        self.findings_hint.setText(i18n.t("digest.findings_hint"))
+        self.scan_accounts_caption.setText(i18n.t("scan.acct.heading"))
+        for index, key in enumerate(TAB_KEYS):
             self.detail_tabs.setTabText(index, i18n.t(key))
 
     def _build(self) -> None:
-        """야간 상세 스캔 영역 - 탭을 새로 만들지 않고 같은 화면 아래쪽에
-        붙인다 (DESIGN.md 2부 6절 "대시보드 단일 화면" 결정 유지)."""
+        """상세 스캔 화면.
+
+        ## 한 범주가 한 탭을 통째로 쓴다
+
+        처음에는 표 넷을 세로로 쌓았고, 다음에는 세부만 탭으로 나눴다. 둘 다
+        "여러 칸이 한눈에 보이되 칸마다 몇 줄 안 보이는" 화면이었다 - 위에
+        카드와 상태가 300px 을 먹고, 증가 경로와 큰 파일은 반씩 나눠 경로
+        뒤쪽(정작 다른 부분)이 잘렸다.
+
+        그래서 **늘 보이는 것은 지금 상태 몇 줄뿐**이고, 나머지는 범주마다
+        한 탭씩 전폭·전고를 쓴다:
+
+        - 요약: 카드 넷과 살펴볼 것. 누르면 해당 계정의 세부 탭으로 간다.
+        - 계정별: 진행·측정량·남은 시간.
+        - 증가 경로 / 큰 파일: 고른 계정 하나.
+
+        ## 계정 선택은 탭 줄 오른쪽에
+
+        증가 경로·큰 파일·폴더 펼쳐 보기가 모두 "고른 계정" 을 쓴다. 그 선택이
+        어느 한 탭 안에 있으면 다른 탭에서 무엇을 보고 있는지 모른다.
+
+        `QTabWidget` 의 모서리 위젯으로 두지 않는다. 모서리 위젯의 높이는 탭
+        높이로 잘리는데, 콤보가 세로로 잘리는 사고가 이미 세 번 있었다. 탭 띠
+        (`QTabBar`)와 쪽 묶음(`QStackedWidget`)을 따로 두고 한 줄에 놓으면 줄
+        높이가 둘 중 큰 쪽을 따른다.
+        """
 
         # 예전 `_build_scan_section` 이 만들던 QFrame 과 같은 모양.
         self.setFrameShape(QFrame.StyledPanel)
         self.setObjectName("card")
 
         box = QVBoxLayout(self)
-        box.setContentsMargins(16, 14, 16, 14)
-        box.setSpacing(9)
+        box.setContentsMargins(16, 14, 16, 12)
+        box.setSpacing(4)
 
-        # 제목과 동작 버튼을 한 줄에 둔다. 따로 두면 그것만으로 두 줄이
-        # 나가는데, 이 화면은 세로가 모자란 쪽이다.
-        title_row = QHBoxLayout()
-        title_row.setSpacing(8)
-        self.scan_title_label = QLabel()
-        self.scan_title_label.setObjectName("sectionTitle")
-        title_row.addWidget(self.scan_title_label)
-        title_row.addStretch(1)
-        box.addLayout(title_row)
-        self._title_row = title_row
-
-        # -- 요약 카드 --------------------------------------------------
+        # -- 머리: 지금 상태 한 줄 + 동작 --------------------------------
         #
-        # 표 셋을 읽고 스스로 요약을 만들라고 하면 대부분 안 읽는다. 아침에
-        # 사람이 실제로 묻는 넷을 카드 하나씩으로 세운다: 잘 돌았나, 얼마나
-        # 늘었나, 어느 계정이, 손댈 것이 있나. 근거는 아래 표에 그대로 있다.
-        cards = QHBoxLayout()
-        cards.setSpacing(10)
-        self.card_run = widgets.StatCard()
-        self.card_delta = widgets.StatCard()
-        self.card_biggest = widgets.StatCard()
-        self.card_findings = widgets.StatCard()
-        for card in (
-            self.card_run, self.card_delta, self.card_biggest, self.card_findings
-        ):
-            cards.addWidget(card, 1)
-        box.addLayout(cards)
+        # 예전에는 "상세 스캔 - 밤마다 ..." 제목을 세웠는데 바깥 탭 이름과 같은
+        # 말이었다. 그 자리에 **지금 상태**를 세운다 - 이 화면을 열면 가장
+        # 먼저 묻는 것이다.
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.scan_headline_label = QLabel()
+        self.scan_headline_label.setObjectName("sectionTitle")
+        head.addWidget(self.scan_headline_label)
+        head.addStretch(1)
 
+        self.scan_detail_btn = QPushButton()
+        self.scan_detail_btn.clicked.connect(self._open_scan_progress)
+        self.scan_run_btn = QPushButton()
+        self.scan_run_btn.clicked.connect(self._trigger_scan_now)
+        self.scan_stop_btn = QPushButton()
+        # 중지는 되돌릴 수 없는 성격의 동작이라 색으로 구분해 둔다 (강제 종료는
+        # 아니지만, 실수로 누르면 진행 중인 밤을 날린다).
+        self.scan_stop_btn.setObjectName("danger")
+        self.scan_stop_btn.clicked.connect(self._request_scan_stop)
+        for button in (self.scan_detail_btn, self.scan_run_btn, self.scan_stop_btn):
+            head.addWidget(button)
+        box.addLayout(head)
+
+        # 숫자들. 한 줄에 모자라면 접힌다 - 잘라 버리면 뒤쪽 CPU 가 안 보인다.
         self.scan_status_label = QLabel()
+        self.scan_status_label.setObjectName("muted")
         self.scan_status_label.setWordWrap(True)
         box.addWidget(self.scan_status_label)
+
+        # 지금 어느 경로를 훑고 있는지. 한 디렉터리가 몇 분씩 걸릴 수 있어서
+        # "실행 중"만 떠 있으면 멈춘 것인지 진행 중인지 구분되지 않는다.
+        self.scan_current_label = QLabel()
+        self.scan_current_label.setObjectName("caption")
+        self.scan_current_label.setWordWrap(True)
+        self.scan_current_label.setVisible(False)
+        box.addWidget(self.scan_current_label)
 
         # cron 등록 여부. 야간 스캔이 안 도는 가장 흔한 이유가 "등록이 안 된
         # 것"인데, 그 사실은 아무 데도 드러나지 않아 사람은 프로그램이 고장 난
@@ -307,19 +358,8 @@ class ScanTab(QFrame):
         self.cron_status_label.setWordWrap(True)
         box.addWidget(self.cron_status_label)
 
-        # 스캔이 도는 동안 좌우로 오가는 막대.
-        #
-        # 일부러 **불확정(indeterminate)** 막대를 쓴다. 남은 체크포인트 수는
-        # 알지만 전체 분모는 모른다 - 디렉터리를 분할하면 작업이 늘어나서
-        # 진행률이 뒤로 갈 수도 있다. 그럴 바에는 퍼센트를 지어내지 않고
-        # "지금 일하는 중"만 정직하게 보여준다 (DESIGN.md 1부 "과장하지 않는
-        # UI"). 남은 작업 수는 옆 상태 줄에 숫자 그대로 나온다.
-        self.scan_current_label = QLabel()
-        self.scan_current_label.setObjectName("caption")
-        self.scan_current_label.setWordWrap(True)
-        self.scan_current_label.setVisible(False)
-        box.addWidget(self.scan_current_label)
-
+        # 도는 동안만 보이는 진행 막대. 분모가 도중에 늘 수 있다는 사실은
+        # 상태 줄 툴팁에 적는다 (DESIGN.md 1부 "과장하지 않는 UI").
         self.scan_progress = QProgressBar()
         self.scan_progress.setRange(0, 0)
         self.scan_progress.setTextVisible(False)
@@ -327,176 +367,193 @@ class ScanTab(QFrame):
         self.scan_progress.setVisible(False)
         box.addWidget(self.scan_progress)
 
-        scan_buttons = QHBoxLayout()
-        scan_buttons.setSpacing(8)
-        self.scan_run_btn = QPushButton()
-        self.scan_run_btn.clicked.connect(self._trigger_scan_now)
-        self.scan_stop_btn = QPushButton()
-        # 중지는 되돌릴 수 없는 성격의 동작이라 색으로 구분해 둔다 (강제 종료는
-        # 아니지만, 실수로 누르면 진행 중인 밤을 날린다).
-        self.scan_stop_btn.setObjectName("danger")
-        self.scan_stop_btn.clicked.connect(self._request_scan_stop)
-        self.scan_detail_btn = QPushButton()
-        self.scan_detail_btn.clicked.connect(self._open_scan_progress)
-        # 계정 안을 파고드는 화면. 여기까지 와서 "그래서 그 300GB 가 어디야"를
-        # 묻게 되는데, 지금까지는 답할 자리가 없었다.
+        box.addSpacing(8)
+
+        # -- 탭 줄: 탭 + 계정 선택 ----------------------------------------
+        strip = QHBoxLayout()
+        strip.setSpacing(8)
+        self.detail_tabs = QTabBar()
+        self.detail_tabs.setObjectName("subTabs")
+        self.detail_tabs.setDrawBase(False)
+        self.detail_tabs.setExpanding(False)
+        strip.addWidget(self.detail_tabs, 0, Qt.AlignBottom)
+        strip.addStretch(1)
+
+        self.scan_account_label = QLabel()
+        self.scan_account_label.setObjectName("muted")
+        self.scan_account_combo = QComboBox()
+        self.scan_account_combo.setMinimumWidth(220)
+        self.scan_account_combo.currentIndexChanged.connect(self._on_scan_account_chosen)
+        # 계정 안을 파고드는 화면. 증가 경로를 보다가 "그래서 그 300GB 가
+        # 어디야" 를 묻게 되므로 계정 선택 바로 옆에 둔다.
         self.tree_btn = QPushButton(i18n.t("tree.btn.open"))
         self.tree_btn.clicked.connect(self._open_tree)
-        # 동작 버튼은 제목 줄 오른쪽에 붙인다.
-        for button in (
-            self.scan_run_btn, self.scan_stop_btn,
-            self.scan_detail_btn, self.tree_btn,
+        strip.addWidget(self.scan_account_label, 0, Qt.AlignVCenter)
+        strip.addWidget(self.scan_account_combo, 0, Qt.AlignVCenter)
+        strip.addWidget(self.tree_btn, 0, Qt.AlignVCenter)
+        box.addLayout(strip)
+
+        rule = QFrame()
+        rule.setObjectName("subTabsRule")
+        rule.setFixedHeight(1)
+        box.addWidget(rule)
+
+        self.detail_stack = QStackedWidget()
+        self.detail_stack.setObjectName("subPages")
+        box.addWidget(self.detail_stack, 1)
+        self.detail_tabs.currentChanged.connect(self.detail_stack.setCurrentIndex)
+
+        self._build_summary_page()
+        self._build_accounts_page()
+        self._build_growth_page()
+        self._build_large_page()
+        self.detail_tabs.setCurrentIndex(TAB_SUMMARY)
+
+    def _add_page(self, key: str):
+        """탭 하나. 위쪽 설명 한 줄 + 나머지 전부를 쓰는 내용."""
+
+        page = QWidget()
+        page.setObjectName("subPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(8)
+        self.detail_stack.addWidget(page)
+        self.detail_tabs.addTab(i18n.t(key))
+        return layout
+
+    @staticmethod
+    def _caption() -> QLabel:
+        label = QLabel()
+        label.setObjectName("muted")
+        label.setWordWrap(True)
+        return label
+
+    @staticmethod
+    def _plain_table(columns: int) -> QTableWidget:
+        """세부 표들의 공통 모양.
+
+        - 경로는 **가운데를** 줄인다. 오른쪽을 자르면 `run_03/BACKUP` 같은
+          정작 다른 부분이 사라진다.
+        - 줄바꿈을 끈다. 켜 두면 줄임 대신 행 안에서 접히려다 잘린다.
+        """
+
+        table = QTableWidget(0, columns)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.setShowGrid(False)
+        table.setWordWrap(False)
+        table.setTextElideMode(Qt.ElideMiddle)
+        table.horizontalHeader().setHighlightSections(False)
+        return table
+
+    # -- 1. 요약 ---------------------------------------------------------
+    def _build_summary_page(self) -> None:
+        layout = self._add_page(TAB_KEYS[TAB_SUMMARY])
+
+        # 표를 읽고 스스로 요약을 만들라고 하면 대부분 안 읽는다. 아침에
+        # 사람이 실제로 묻는 넷을 카드 하나씩으로 세운다: 잘 돌았나, 얼마나
+        # 늘었나, 어느 계정이, 손댈 것이 있나. 근거는 다른 탭에 그대로 있다.
+        cards = QHBoxLayout()
+        cards.setSpacing(10)
+        self.card_run = widgets.StatCard()
+        self.card_delta = widgets.StatCard()
+        self.card_biggest = widgets.StatCard()
+        self.card_findings = widgets.StatCard()
+        for card in (
+            self.card_run, self.card_delta, self.card_biggest, self.card_findings
         ):
-            self._title_row.addWidget(button)
-        del scan_buttons
+            cards.addWidget(card, 1)
+        layout.addLayout(cards)
 
-        # -- 살펴볼 것 ---------------------------------------------------
-        #
-        # 실패·권한 부족·튀는 파일·크게 는 계정을 한 목록으로 모은다. 지금까지는
-        # 이것들이 표 셋에 흩어져 있어서, 급한 것이 표 밑으로 밀리면 아무도
-        # 못 봤다.
-        # 세부는 하위 탭으로 나눈다.
-        #
-        # 넷(살펴볼 것·계정별·증가 경로·큰 파일)을 세로로 쌓으면 창 최소 높이가
-        # 791px 이 되어, 화면이 1080 인 곳에서는 남는 여유가 200px 남짓뿐이다.
-        # 그것을 넷이 나눠 가지면 표마다 서너 줄씩만 보인다.
-        #
-        # 위쪽 요약(카드·상태)은 늘 보이게 두고 세부만 하나씩 본다 - 어차피
-        # 한 번에 하나를 파고드는 것들이다.
-        self.detail_tabs = QTabWidget()
-        box.addWidget(self.detail_tabs, 1)
-
-        findings_page = QWidget()
-        findings_box = QVBoxLayout(findings_page)
-        findings_box.setContentsMargins(0, 8, 0, 0)
-        findings_box.setSpacing(6)
+        layout.addSpacing(6)
         self.findings_caption = QLabel()
-        self.findings_caption.setObjectName("muted")
-        self.findings_caption.setWordWrap(True)
-        findings_box.addWidget(self.findings_caption)
+        self.findings_caption.setObjectName("sectionTitle")
+        layout.addWidget(self.findings_caption)
+        self.findings_hint = QLabel()
+        self.findings_hint.setObjectName("caption")
+        self.findings_hint.setWordWrap(True)
+        layout.addWidget(self.findings_hint)
 
+        # 실패·권한 부족·튀는 파일·크게 는 계정을 한 목록으로 모은다. 한 줄을
+        # 누르면 그 계정의 해당 탭으로 간다 - 요약이 근거로 가는 입구다.
         self.findings_list = QListWidget()
         self.findings_list.setObjectName("findings")
         self.findings_list.setFrameShape(QListWidget.NoFrame)
         self.findings_list.setSelectionMode(QListWidget.NoSelection)
         self.findings_list.setFocusPolicy(Qt.NoFocus)
-        # 높이를 묶지 않는다 - 탭 하나를 통째로 쓰므로 남는 만큼 보여 준다.
-        findings_box.addWidget(self.findings_list, 1)
-        self.detail_tabs.addTab(findings_page, i18n.t("scan.tab.findings"))
+        # 문장이 폭을 넘으면 옆으로 밀지 않고 접는다.
+        self.findings_list.setWordWrap(True)
+        self.findings_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.findings_list.setResizeMode(QListWidget.Adjust)
+        self.findings_list.viewport().setCursor(Qt.PointingHandCursor)
+        self.findings_list.itemClicked.connect(self._on_finding_clicked)
+        layout.addWidget(self.findings_list, 1)
 
-        # -- 계정별 현황 ------------------------------------------------
-        accounts_page = QWidget()
-        accounts_box = QVBoxLayout(accounts_page)
-        accounts_box.setContentsMargins(0, 8, 0, 0)
-        accounts_box.setSpacing(6)
-        self.scan_accounts_caption = QLabel()
-        self.scan_accounts_caption.setObjectName("muted")
-        self.scan_accounts_caption.setWordWrap(True)
-        accounts_box.addWidget(self.scan_accounts_caption)
+    # -- 2. 계정별 -------------------------------------------------------
+    def _build_accounts_page(self) -> None:
+        layout = self._add_page(TAB_KEYS[TAB_ACCOUNTS])
+        self.scan_accounts_caption = self._caption()
+        layout.addWidget(self.scan_accounts_caption)
 
-        self.scan_accounts_table = QTableWidget(0, len(SCAN_ACCOUNT_COLUMN_KEYS))
-        accounts_header = self.scan_accounts_table.horizontalHeader()
-        accounts_header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        accounts_header.setSectionResizeMode(SCAN_ACCT_NOTE, QHeaderView.Stretch)
-        accounts_header.setHighlightSections(False)
+        table = self._plain_table(len(SCAN_ACCOUNT_COLUMN_KEYS))
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(SCAN_ACCT_NOTE, QHeaderView.Stretch)
         # 격자선을 끈 표라, 열이 내용 폭에 딱 붙으면 옆 칸 값과 한 덩어리로
         # 읽힌다 ("약 21분 아직 없음"). 최소 폭으로 숨 쉴 자리를 만든다.
-        accounts_header.setMinimumSectionSize(96)
-        self.scan_accounts_table.verticalHeader().setVisible(False)
-        self.scan_accounts_table.setShowGrid(False)
-        self.scan_accounts_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.scan_accounts_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.scan_accounts_table.verticalHeader().setDefaultSectionSize(30)
-        # 이 표에서 행을 고르면 아래 증가 경로도 그 계정으로 바뀐다. 표를 보고
-        # "이 계정이 이상한데" 싶을 때 곧바로 파고들 수 있어야 한다.
-        self.scan_accounts_table.itemSelectionChanged.connect(
-            self._on_scan_account_row_selected
+        header.setMinimumSectionSize(80)
+        table.verticalHeader().setDefaultSectionSize(34)
+        # 행을 고르면 탭 줄의 계정 선택이 따라온다. 두 번 누르면 그 계정의
+        # 증가 경로로 간다 - "이 계정이 이상한데" 에서 곧장 파고들 수 있게.
+        table.itemSelectionChanged.connect(self._on_scan_account_row_selected)
+        table.cellDoubleClicked.connect(
+            lambda _row, _column: self.detail_tabs.setCurrentIndex(TAB_GROWTH)
         )
-        self.scan_accounts_table.setMinimumHeight(120)
-        accounts_box.addWidget(self.scan_accounts_table, 1)
-        self.detail_tabs.addTab(accounts_page, i18n.t("scan.tab.accounts"))
+        self.scan_accounts_table = table
+        layout.addWidget(table, 1)
 
-        # -- 세부 (한 계정) ----------------------------------------------
-        #
-        # 증가 경로와 큰 파일은 **같은 계정에 대한 두 관점**이라 나란히 두는
-        # 편이 읽힌다. 세로로 쌓으면 둘을 견주려고 스크롤을 오가야 한다.
-        detail_page = QWidget()
-        detail_box = QVBoxLayout(detail_page)
-        detail_box.setContentsMargins(0, 8, 0, 0)
-        detail_box.setSpacing(6)
+    # -- 3. 증가 경로 -----------------------------------------------------
+    def _build_growth_page(self) -> None:
+        layout = self._add_page(TAB_KEYS[TAB_GROWTH])
+        self.growth_caption = self._caption()
+        layout.addWidget(self.growth_caption)
 
-        detail_head = QHBoxLayout()
-        detail_head.setSpacing(8)
-        self.scan_account_label = QLabel()
-        self.scan_account_label.setObjectName("muted")
-        self.scan_account_combo = QComboBox()
-        self.scan_account_combo.setMinimumWidth(200)
-        self.scan_account_combo.currentIndexChanged.connect(self._on_scan_account_chosen)
-        detail_head.addWidget(self.scan_account_label)
-        detail_head.addWidget(self.scan_account_combo)
-        detail_head.addStretch(1)
-        detail_box.addLayout(detail_head)
-
-        detail_row = QHBoxLayout()
-        detail_row.setSpacing(12)
-        growth_side = QVBoxLayout()
-        growth_side.setSpacing(6)
-        large_side = QVBoxLayout()
-        large_side.setSpacing(6)
-        detail_row.addLayout(growth_side, 1)
-        detail_row.addLayout(large_side, 1)
-        detail_box.addLayout(detail_row, 1)
-        self.detail_tabs.addTab(detail_page, i18n.t("scan.tab.detail"))
-
-        self.growth_caption = QLabel()
-        self.growth_caption.setObjectName("muted")
-        self.growth_caption.setWordWrap(True)
-        growth_side.addWidget(self.growth_caption)
-
-        self.growth_table = QTableWidget(0, len(GROWTH_COLUMN_KEYS))
-        growth_header = self.growth_table.horizontalHeader()
-        growth_header.setSectionResizeMode(0, QHeaderView.Stretch)
-        growth_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        growth_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        growth_header.setHighlightSections(False)
-        self.growth_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.growth_table.verticalHeader().setVisible(False)
-        self.growth_table.verticalHeader().setDefaultSectionSize(34)
-        self.growth_table.setShowGrid(False)
+        table = self._plain_table(len(GROWTH_COLUMN_KEYS))
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.verticalHeader().setDefaultSectionSize(34)
         # 이 표에는 칸 위젯이 없어 Qt 내장 정렬을 그대로 쓸 수 있다.
         # (계정 표는 막대·배지가 칸 위젯이라 Qt 정렬을 켜면 위젯이 행을 따라
         #  움직이지 않아 어긋난다 - 그쪽은 직접 정렬해 다시 그린다.)
-        self.growth_table.setSortingEnabled(True)
-        self.growth_table.horizontalHeader().setSortIndicatorShown(True)
+        table.setSortingEnabled(True)
+        header.setSortIndicatorShown(True)
         # 사용자가 한 번이라도 헤더를 누르면 그 정렬을 존중한다 - 갱신할
         # 때마다 기본값으로 되돌리면 정렬을 바꾼 의미가 없다.
         self._growth_sort_touched = False
-        self.growth_table.horizontalHeader().sectionClicked.connect(
-            lambda _index: setattr(self, '_growth_sort_touched', True)
+        header.sectionClicked.connect(
+            lambda _index: setattr(self, "_growth_sort_touched", True)
         )
-        # 이 표는 보조 정보다. 최소 높이를 낮게 잡아 두지 않으면 계정 표(이
-        # 화면의 주인공)를 아래에서 밀어 올려 행이 잘린다.
-        self.growth_table.setMinimumHeight(120)
-        growth_side.addWidget(self.growth_table, 1)
+        self.growth_table = table
+        layout.addWidget(table, 1)
 
-        self.large_caption = QLabel()
-        self.large_caption.setObjectName("muted")
-        self.large_caption.setWordWrap(True)
+    # -- 4. 큰 파일 -------------------------------------------------------
+    def _build_large_page(self) -> None:
+        layout = self._add_page(TAB_KEYS[TAB_LARGE])
+        self.large_caption = self._caption()
         self.large_caption.setToolTip(i18n.t("large.tip"))
-        large_side.addWidget(self.large_caption)
+        layout.addWidget(self.large_caption)
 
-        self.large_table = QTableWidget(0, len(LARGE_COLUMN_KEYS))
-        large_header = self.large_table.horizontalHeader()
-        large_header.setSectionResizeMode(LARGE_PATH, QHeaderView.Stretch)
+        table = self._plain_table(len(LARGE_COLUMN_KEYS))
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(LARGE_PATH, QHeaderView.Stretch)
         for column in (LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE):
-            large_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
-        large_header.setHighlightSections(False)
-        self.large_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.large_table.verticalHeader().setVisible(False)
-        self.large_table.verticalHeader().setDefaultSectionSize(30)
-        self.large_table.setShowGrid(False)
-        self.large_table.setMinimumHeight(120)
-        large_side.addWidget(self.large_table, 1)
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        table.verticalHeader().setDefaultSectionSize(34)
+        self.large_table = table
+        layout.addWidget(table, 1)
 
     def _current_target_text(self, latest_run) -> str:
         """지금 훑고 있는 경로 한 줄."""
@@ -604,49 +661,67 @@ class ScanTab(QFrame):
         self._scan_snapshot = snapshot
         running = snapshot.is_running or self._scan_worker.is_running()
 
-        parts = [snapshot.window_description]
-        parts.append(i18n.t("scan.running") if running else i18n.t("scan.not_running"))
         latest = snapshot.latest_run
-        if latest:
-            parts.append(
-                i18n.t(
-                    "scan.latest_run",
-                    status=latest["status"],
-                    started_at=formatting.local_datetime_text(latest["started_at"]),
-                )
-            )
         pending_total = sum(
             item.pending_baseline_count for item in snapshot.accounts
         )
         done_total = sum(item.baseline_done for item in snapshot.accounts)
         total_total = sum(item.baseline_total for item in snapshot.accounts)
-        if pending_total:
-            parts.append(i18n.t("scan.pending_tasks", count=pending_total))
+        percent = int(done_total * 100 / total_total) if total_total else None
 
-        # 진행률을 숫자와 막대로 함께 보여준다.
+        # 머리 한 줄 - 지금 도는가, 안 돈다면 지난번은 어떻게 끝났나.
+        if running:
+            headline = (
+                i18n.t("scan.headline.running_pct", percent=percent)
+                if percent is not None
+                else i18n.t("scan.headline.running")
+            )
+        elif latest:
+            headline = i18n.t(
+                "scan.headline.idle", status=self._status_text(latest["status"])
+            )
+        else:
+            headline = i18n.t("scan.headline.never")
+        self.scan_headline_label.setText(headline)
+
+        # 그 밑의 숫자들.
         #
-        # 예전에는 남은 개수만 적고 막대는 불확정으로 뒀는데, 그러면 "얼마나
-        # 남았나"에 답이 안 된다. 분모(total)는 진행 중 늘어날 수 있지만
-        # (시간 초과로 디렉터리를 쪼개면 작업이 추가된다) 그 사실을 **문구에
-        # 적어 두면** 숫자를 지어내는 것이 아니다. 아무것도 안 보여 주는 것보다
-        # 낫다.
+        # 진행률을 숫자와 막대로 함께 보여준다. 분모(total)는 진행 중 늘어날
+        # 수 있지만 (시간 초과로 디렉터리를 쪼개면 작업이 추가된다) 그 사실을
+        # **툴팁에 적어 두면** 숫자를 지어내는 것이 아니다. 문장에 매번 붙여
+        # 두었더니 상태 줄이 두 줄로 접혀 탭 자리를 먹었다.
+        parts = []
         if total_total:
             self.scan_progress.setRange(0, total_total)
             self.scan_progress.setValue(done_total)
             parts.append(
                 i18n.t(
                     "scan.progress_counts",
-                    done=done_total,
-                    total=total_total,
-                    percent=int(done_total * 100 / total_total),
+                    done=done_total, total=total_total, percent=percent,
                 )
             )
         else:
             self.scan_progress.setRange(0, 0)
+        # 멈춰 있어도 남은 작업은 보여 준다 - 아침에 멈춘 밤은 다음 밤에
+        # 이어서 돈다는 뜻이다.
+        if pending_total:
+            parts.append(i18n.t("scan.pending_tasks", count=pending_total))
+        if latest:
+            parts.append(
+                i18n.t(
+                    "scan.latest_started",
+                    started_at=formatting.local_minute_text(latest["started_at"]),
+                )
+            )
+        if snapshot.window_description:
+            parts.append(snapshot.window_description)
         cpu_text = formatting.scan_cpu_text(latest)
         if cpu_text:
             parts.append(cpu_text)
-        self.scan_status_label.setText("  |  ".join(parts))
+        self.scan_status_label.setText("  ·  ".join(parts))
+        self.scan_status_label.setToolTip(
+            i18n.t("scan.progress_tip") if total_total else ""
+        )
 
         # 지금 어느 경로를 훑고 있는지. `du` 하나가 몇 분씩 걸릴 수 있어서,
         # "실행 중"만 떠 있으면 멈춘 것인지 진행 중인지 구분되지 않는다.
@@ -756,6 +831,7 @@ class ScanTab(QFrame):
 
     def _refresh_findings(self, digest) -> None:
         self.findings_caption.setText(i18n.t("digest.findings_heading"))
+        self.findings_hint.setText(i18n.t("digest.findings_hint"))
         self.findings_list.clear()
         if not digest.findings:
             item = QListWidgetItem(i18n.t("digest.findings_empty"))
@@ -768,7 +844,21 @@ class ScanTab(QFrame):
                 item.setForeground(QColor(tiers.color(tiers.ALERT)))
             if finding.path:
                 item.setToolTip(finding.path)
+            item.setData(FINDING_ACCOUNT_ROLE, finding.account_id)
+            item.setData(FINDING_TAB_ROLE, FINDING_TABS.get(finding.kind, TAB_GROWTH))
             self.findings_list.addItem(item)
+
+    def _on_finding_clicked(self, item) -> None:
+        """살펴볼 것 한 줄에서 그 계정의 해당 탭으로 간다.
+
+        요약만 있고 근거로 가는 길이 없으면, 사람이 계정 이름을 외워 콤보에서
+        다시 찾아야 한다. 그러면 요약은 읽고 끝나는 글이 된다."""
+
+        account_id = item.data(FINDING_ACCOUNT_ROLE)
+        if not account_id:
+            return
+        self.select_account(account_id)
+        self.detail_tabs.setCurrentIndex(item.data(FINDING_TAB_ROLE) or TAB_GROWTH)
 
     def _finding_text(self, finding) -> str:
         """살펴볼 것 한 줄을 사람 문장으로.
@@ -952,12 +1042,17 @@ class ScanTab(QFrame):
             )
             return
 
-        self.large_caption.setText(i18n.t("large.heading"))
+        account = self._selected_account()
+        root = account.path if account else ""
         shown = files[:LARGE_ROWS_SHOWN]
+        self.large_caption.setText(
+            i18n.t("large.heading", account=entry.account_name, count=len(shown))
+            + self._root_note(root)
+        )
         table.setRowCount(len(shown))
         dash = i18n.t("common.none")
         for row, item in enumerate(shown):
-            path_item = QTableWidgetItem(item.path)
+            path_item = QTableWidgetItem(formatting.relative_path(item.path, root))
             reasons = [
                 i18n.t(
                     key,
@@ -969,8 +1064,10 @@ class ScanTab(QFrame):
                 )
                 for key in item.reasons()
             ]
-            if reasons:
-                path_item.setToolTip("\n".join(reasons))
+            # 줄여 보여 준 경로는 전체를 툴팁에 둔다 - 사람이 그 경로로 가야 한다.
+            tip = reasons + ([item.path] if path_item.text() != item.path else [])
+            if tip:
+                path_item.setToolTip("\n".join(tip))
             table.setItem(row, LARGE_PATH, path_item)
 
             table.setItem(
@@ -1036,6 +1133,21 @@ class ScanTab(QFrame):
         if index >= 0 and index != self.scan_account_combo.currentIndex():
             self.scan_account_combo.setCurrentIndex(index)
 
+    @staticmethod
+    def _root_note(root) -> str:
+        """설명 끝에 붙이는 "경로는 어디 기준" 한 마디."""
+
+        return "  ·  " + i18n.t("scan.paths_under", root=root) if root else ""
+
+    @staticmethod
+    def _path_item(path, root) -> QTableWidgetItem:
+        """계정 기준으로 줄인 경로 칸. 줄였으면 전체 경로를 툴팁에 둔다."""
+
+        item = QTableWidgetItem(formatting.relative_path(path, root))
+        if item.text() != path:
+            item.setToolTip(path)
+        return item
+
     def _refresh_growth_table(self) -> None:
         snapshot = self._scan_snapshot
         account = self._selected_account()
@@ -1060,7 +1172,9 @@ class ScanTab(QFrame):
 
         # 권한 부족으로 축소 측정된 경로가 있으면 반드시 알린다 - 모르고 보면
         # "안 늘었네"로 잘못 읽는다.
-        notice = ""
+        # 표의 경로는 계정 기준으로 줄여 보여 준다. 무엇을 기준으로 줄였는지는
+        # 여기 한 번만 적는다.
+        notice = self._root_note(account.path)
         if entry.partial_paths:
             notice += "\n" + i18n.t(
                 "scan.partial_warning", count=len(entry.partial_paths)
@@ -1104,7 +1218,7 @@ class ScanTab(QFrame):
             for index, row in enumerate(entry.growth):
                 current_kb = row["current_kb"]
                 previous_kb = row["previous_kb"]
-                self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
+                self.growth_table.setItem(index, 0, self._path_item(row["path"], account.path))
                 self.growth_table.setItem(
                     index, 1, widgets.NumericItem(formatting.format_kb(current_kb), current_kb)
                 )
@@ -1134,7 +1248,7 @@ class ScanTab(QFrame):
         self.growth_table.setRowCount(len(entry.top_paths))
         dash = i18n.t("common.none")
         for index, row in enumerate(entry.top_paths):
-            self.growth_table.setItem(index, 0, QTableWidgetItem(row["path"]))
+            self.growth_table.setItem(index, 0, self._path_item(row["path"], account.path))
             self.growth_table.setItem(
                 index, 1, widgets.NumericItem(formatting.format_kb(row["size_kb"]), row["size_kb"])
             )
