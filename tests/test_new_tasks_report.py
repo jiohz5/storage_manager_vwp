@@ -122,6 +122,47 @@ class NewTaskSectionTests(unittest.TestCase):
         text = self._report()
         self.assertIn(i18n.t("reports.new_tasks_count", count=1), text)
 
+    def test_a_place_the_previous_scan_never_opened_is_not_called_new(self):
+        """옛날 과제가 새로 생긴 것으로 뜨던 원인.
+
+        스캔이 남기는 경로는 "파일시스템에 있는 것" 이 아니라 그 밤에 실제로
+        걸어 들어간 곳이다. 시간 초과로 쪼개지면 그 밤만 더 깊이 기록되므로,
+        단순 차집합으로 보면 예전부터 있던 run 디렉터리가 새것이 된다."""
+
+        self._store_generation(1, ["과제A", "과제A/LAYOUT"])
+        self._store_generation(
+            2, ["과제A", "과제A/LAYOUT", "과제A/LAYOUT/00_run_0811"]
+        )
+        text = self._report()
+        self.assertIn(i18n.t("reports.new_tasks_none"), text)
+        self.assertNotIn("00_run_0811", text)
+
+    def test_undecided_places_are_counted_out_loud(self):
+        """조용히 버리면 '새 과제 없음' 과 '못 봤음' 이 구분되지 않는다."""
+
+        self._store_generation(1, ["과제A", "과제A/LAYOUT"])
+        self._store_generation(
+            2, ["과제A", "과제A/LAYOUT", "과제A/LAYOUT/00_run_0811"]
+        )
+        self.assertIn(i18n.t("reports.new_tasks_unverified", count=1), self._report())
+
+    def test_a_whole_new_project_folder_is_still_reported(self):
+        """조심스러워진 기준이 진짜 신규까지 삼키면 안 된다."""
+
+        self._store_generation(
+            1, ["과제A", "과제A/LAYOUT", "과제A/LAYOUT/00_run_0811"]
+        )
+        self._store_generation(
+            2,
+            [
+                "과제A", "과제A/LAYOUT", "과제A/LAYOUT/00_run_0811",
+                "과제B", "과제B/LAYOUT", "과제B/LAYOUT/00_run_0902",
+            ],
+        )
+        text = self._report()
+        self.assertIn("과제B / 00_run_0902", text)
+        self.assertIn(i18n.t("reports.new_tasks_count", count=1), text)
+
     def test_backup_accounts_are_not_scanned_for_new_tasks(self):
         """백업 계정에는 프로젝트의 사본이 들어와 같은 과제가 한 번 더 잡힌다."""
 
@@ -168,14 +209,53 @@ class RunDirLikePatternTests(unittest.TestCase):
     def test_escaped_underscore_does_not_match_arbitrary_characters(self):
         self._save(1, ["/root/keep"])
         self._save(2, ["/root/keep", "/root/xrunY", "/root/00_run_0811"])
-        rows = scan_store.new_paths(
+        found = scan_store.new_paths(
             self.conn, "acct", 2, 1, like_pattern="%\\_run\\_%"
         )
-        self.assertEqual([row["path"] for row in rows], ["/root/00_run_0811"])
+        self.assertEqual(
+            [row["path"] for row in found.confident], ["/root/00_run_0811"]
+        )
 
     def test_empty_previous_generation_yields_nothing(self):
         self._save(5, ["/root/00_run_0811"])
-        self.assertEqual(scan_store.new_paths(self.conn, "acct", 5, 4), [])
+        found = scan_store.new_paths(self.conn, "acct", 5, 4)
+        self.assertEqual(found.confident, [])
+        self.assertEqual(found.unverified, [])
+
+
+class ConfidenceRuleTests(unittest.TestCase):
+    """무엇을 근거로 "새로 생겼다" 고 말하는가 (경로 문자열만 보는 순수 함수)."""
+
+    PREV = {
+        "/acct/과제A",
+        "/acct/과제A/LAYOUT",
+        "/acct/과제A/LAYOUT/00_run_0811",
+        "/acct/과제B",
+    }
+    PARENTS = {"/acct", "/acct/과제A", "/acct/과제A/LAYOUT"}
+
+    def check(self, path):
+        return scan_store.is_confidently_new(path, self.PREV, self.PARENTS)
+
+    def test_a_sibling_of_something_the_previous_scan_recorded_is_new(self):
+        self.assertTrue(self.check("/acct/과제A/LAYOUT/01_run_0902"))
+
+    def test_a_brand_new_top_level_project_is_new(self):
+        """계정 바로 아래는 직전 스캔도 반드시 훑는 자리다."""
+
+        self.assertTrue(self.check("/acct/과제C"))
+        self.assertTrue(self.check("/acct/과제C/LAYOUT/00_run_0902"))
+
+    def test_below_a_directory_the_previous_scan_did_not_open_we_say_nothing(self):
+        """`과제B` 는 기록됐지만 그 **안**은 들여다보지 않았다."""
+
+        self.assertFalse(self.check("/acct/과제B/LAYOUT"))
+        self.assertFalse(self.check("/acct/과제B/LAYOUT/00_run_0902"))
+
+    def test_a_path_with_no_evidence_at_all_is_not_claimed(self):
+        self.assertFalse(scan_store.is_confidently_new("/other/thing", set(), set()))
+        self.assertFalse(self.check("/"))
+        self.assertFalse(self.check(""))
 
 
 if __name__ == "__main__":  # pragma: no cover

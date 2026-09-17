@@ -644,34 +644,42 @@ NEW_TASKS_IN_REPORT = 30
 _RUN_LIKE_PATTERN = "%\\_run\\_%"
 
 
-def _new_run_dirs_for(conn, account: config_module.Account) -> List["tuple"]:
+def _new_run_dirs_for(conn, account: config_module.Account) -> "tuple":
     """이 계정에서 직전 세대 이후 새로 생긴 과제 실행 디렉터리.
 
-    `(표시이름, 경로, 크기KB, 단계디렉터리목록)` 목록을 준다. 비교 대상 세대가
-    없으면(첫 스캔) 빈 목록 - `scan_store.new_paths`가 그렇게 판정한다.
+    `([(표시이름, 경로, 크기KB, 단계디렉터리목록), ...], 판단보류수)` 를 준다.
+    비교 대상 세대가 없으면(첫 스캔) 빈 목록 - `scan_store.new_paths`가 그렇게
+    판정한다.
+
+    **직전 스캔이 그 자리를 들여다본 경우만** 새것이라고 부른다. 스캔이 남기는
+    경로는 그 밤에 실제로 걸어 들어간 곳이고 그 범위는 밤마다 다르다 (쪼개짐·
+    권한·시간 초과). 단순 차집합으로 보면 옛날 과제가 새로 생긴 것으로 올라온다
+    - 실제로 그렇게 보였다. 판단을 보류한 수는 함께 돌려주어 섹션에 적는다.
     """
 
     state = scan_store.get_account_state(conn, account.account_id)
     generation = state.last_completed_generation
     if generation is None:
-        return []
+        return [], 0
 
-    rows = scan_store.new_paths(
+    found = scan_store.new_paths(
         conn,
         account.account_id,
         generation,
         generation - 1,
         like_pattern=_RUN_LIKE_PATTERN,
     )
+    rows = found.confident
+    unverified = sum(1 for row in found.unverified if workflow.is_run_path(row["path"]))
     if not rows:
-        return []
+        return [], unverified
 
     # LIKE는 경로 어디에든 `_run_`이 있으면 걸리므로, 실제로 **디렉터리 이름**이
     # run 디렉터리인 것만 남긴다. 상위에 run 디렉터리가 있으면 그 아래 전부가
     # 걸리는데, 그것은 과제 생성이 아니라 과제 안의 작업이다.
     run_rows = [row for row in rows if workflow.is_run_path(row["path"])]
     if not run_rows:
-        return []
+        return [], unverified
 
     all_paths = scan_store.generation_paths(conn, account.account_id, generation)
     result = []
@@ -685,7 +693,7 @@ def _new_run_dirs_for(conn, account: config_module.Account) -> List["tuple"]:
                 workflow.stage_dirs_in(all_paths, path),
             )
         )
-    return result
+    return result, unverified
 
 
 def _append_new_tasks_section(
@@ -717,8 +725,10 @@ def _append_new_tasks_section(
     try:
         body: List[str] = []
         total = 0
+        unverified = 0
         for account in projects:
-            found = _new_run_dirs_for(conn, account)
+            found, unknown = _new_run_dirs_for(conn, account)
+            unverified += unknown
             if not found:
                 continue
             total += len(found)
@@ -736,11 +746,16 @@ def _append_new_tasks_section(
     lines.append("-" * 72)
     if not body:
         lines.append(i18n.t("reports.new_tasks_none"))
-        return
-    lines.append(i18n.t("reports.new_tasks_count", count=total))
-    lines.extend(body)
-    if total > NEW_TASKS_IN_REPORT:
-        lines.append(i18n.t("reports.new_tasks_truncated", shown=NEW_TASKS_IN_REPORT))
+    else:
+        lines.append(i18n.t("reports.new_tasks_count", count=total))
+        lines.append(i18n.t("reports.new_tasks_basis"))
+        lines.extend(body)
+        if total > NEW_TASKS_IN_REPORT:
+            lines.append(i18n.t("reports.new_tasks_truncated", shown=NEW_TASKS_IN_REPORT))
+    # 판단을 보류한 자리는 조용히 버리지 않는다. 그 수가 많으면 "새 과제가
+    # 없다" 가 아니라 **스캔 범위가 밤마다 흔들린다**는 뜻이기 때문이다.
+    if unverified:
+        lines.append(i18n.t("reports.new_tasks_unverified", count=unverified))
 
 
 # -- 스캔 중 리소스 변화 ----------------------------------------------------

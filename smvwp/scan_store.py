@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1572,18 +1572,69 @@ def prune_load_samples(conn: sqlite3.Connection, retention_days: int) -> int:
 
 # -- 과제(run) 디렉터리 감지 ------------------------------------------------
 
+@dataclass
+class NewPaths:
+    """이번 세대에만 있는 경로를 **확신할 수 있는 것과 아닌 것**으로 가른다.
+
+    `confident` 만 "새로 생겼다" 고 말할 수 있다. `unverified` 는 직전 스캔이
+    그 자리를 아예 안 들여다본 것이라 새것인지 옛것인지 알 수 없다."""
+
+    confident: List[sqlite3.Row] = field(default_factory=list)
+    unverified: List[sqlite3.Row] = field(default_factory=list)
+
+
+def is_confidently_new(path: str, previous_paths, previous_parents) -> bool:
+    """직전 세대가 **그 자리를 열어 봤는데 없었나**.
+
+    ## 왜 단순 비교로는 안 되는가
+
+    `baseline_results` 에 남는 경로는 "파일시스템에 있는 것" 이 아니라 **그
+    밤에 스캔이 실제로 걸어 들어간 곳**이다. 그리고 그 범위는 밤마다 다르다:
+
+    - 시간 초과로 쪼개진 서브트리는 자기 루트에서 깊이를 다시 0 부터 세므로,
+      쪼개진 밤에만 더 깊은 곳까지 기록된다. 쪼개짐은 그날의 속도에 달렸다.
+    - 권한 오류나 시간 초과로 통째로 못 잰 서브트리는 그 밤 기록이 없다.
+
+    그래서 "이번엔 있고 지난번엔 없다" 만 보면 **옛날 과제가 새로 생긴 것으로
+    올라온다.** 실제로 그렇게 보였다.
+
+    ## 무엇을 근거로 삼는가
+
+    직전 세대가 어떤 디렉터리의 **자식을 하나라도 기록했다면**, 그 디렉터리의
+    내용을 열어 본 것이다. 그때 없었던 것은 그 뒤에 생긴 것이 맞다.
+
+    후보에서 위로 올라가며 직전 세대가 열어 본 부모를 처음 만나는 지점을
+    찾는다. 그 지점이 직전 세대에 없었으면 그 아래는 전부 새것이고, 있었으면
+    (또는 끝까지 근거를 못 찾으면) 모르는 것이다.
+    """
+
+    current = (path or "").rstrip("/")
+    while current:
+        parent = current.rsplit("/", 1)[0] if "/" in current else ""
+        if not parent or parent == current:
+            return False
+        if parent in previous_parents:
+            return current not in previous_paths
+        current = parent
+    return False
+
+
 def new_paths(
     conn: sqlite3.Connection,
     account_id: str,
     generation: int,
     previous_generation: int,
     like_pattern: Optional[str] = None,
-) -> List[sqlite3.Row]:
+) -> NewPaths:
     """직전 세대에는 없고 이번 세대에만 있는 경로들.
 
     **비교 대상 세대가 비어 있으면 빈 목록을 준다.** 첫 스캔이면 모든 경로가
     "새로 생긴 것"이 되는데, 그것을 그대로 보고하면 첫 보고서가 수천 줄로
     뒤덮이고 진짜 신규와 구분이 안 된다. 모를 때는 말하지 않는 쪽이 맞다.
+
+    같은 이유로 **직전 스캔이 들여다보지 않은 자리**는 `unverified` 로 따로
+    담는다 (`is_confidently_new` 참고). 조용히 버리지 않는 것은, 그 수가 많으면
+    스캔 범위 자체가 밤마다 흔들린다는 뜻이라 사람이 알아야 하기 때문이다.
 
     `like_pattern`을 주면 SQL 단계에서 먼저 거른다. `_`는 LIKE에서 한 글자
     와일드카드라 반드시 ESCAPE와 함께 써야 한다 - 안 그러면 `_run_`이
@@ -1591,13 +1642,21 @@ def new_paths(
     """
 
     if previous_generation < 0:
-        return []
-    previous_count = conn.execute(
-        "SELECT COUNT(*) FROM baseline_results WHERE account_id = ? AND generation = ?",
-        (account_id, previous_generation),
-    ).fetchone()[0]
-    if not previous_count:
-        return []
+        return NewPaths()
+    previous = [
+        row["path"]
+        for row in conn.execute(
+            "SELECT path FROM baseline_results WHERE account_id = ? AND generation = ?",
+            (account_id, previous_generation),
+        ).fetchall()
+    ]
+    if not previous:
+        return NewPaths()
+    previous_paths = {path.rstrip("/") for path in previous}
+    # 직전 세대가 **내용을 열어 본** 디렉터리들 = 기록된 경로들의 부모.
+    previous_parents = {
+        path.rsplit("/", 1)[0] for path in previous_paths if "/" in path
+    }
 
     sql = (
         "SELECT path, size_kb, depth FROM baseline_results "
@@ -1613,7 +1672,14 @@ def new_paths(
         ") ORDER BY path"
     )
     params += [account_id, previous_generation]
-    return conn.execute(sql, params).fetchall()
+
+    found = NewPaths()
+    for row in conn.execute(sql, params).fetchall():
+        if is_confidently_new(row["path"], previous_paths, previous_parents):
+            found.confident.append(row)
+        else:
+            found.unverified.append(row)
+    return found
 
 
 def generation_paths(

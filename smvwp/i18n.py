@@ -382,6 +382,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(계정 관리 화면에서 성격을 지정하면 다음 보고서부터 나옵니다)."
         ),
         "reports.new_tasks_count": "새로 생긴 과제 {count}건",
+        "reports.new_tasks_basis": (
+            "  기준: 직전 스캔이 그 폴더의 내용을 봤는데 없었고, 이번 스캔에 나타난 "
+            "`*_run_*` 디렉터리"
+        ),
+        "reports.new_tasks_unverified": (
+            "직전 스캔이 들여다보지 않은 자리 {count}곳은 판단을 보류했습니다 "
+            "(권한 오류이거나, 시간 초과로 쪼개져 스캔이 닿은 깊이가 밤마다 달랐던 곳입니다)."
+        ),
         "reports.new_task_stages": "단계: {stages}",
         "reports.new_tasks_truncated": "  … 계정당 {shown}건까지만 표시했습니다",
         # -- 스캔 중 리소스 변화 ------------------------------------
@@ -1091,6 +1099,14 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "appear from the next report)."
         ),
         "reports.new_tasks_count": "{count} new task(s)",
+        "reports.new_tasks_basis": (
+            "  Rule: a `*_run_*` directory the previous scan looked for and did not find, "
+            "present in this scan"
+        ),
+        "reports.new_tasks_unverified": (
+            "{count} place(s) the previous scan never opened are left undecided "
+            "(permission errors, or split subtrees where the scan reached a different depth)."
+        ),
         "reports.new_task_stages": "Stages: {stages}",
         "reports.new_tasks_truncated": "  ... showing at most {shown} per account",
         # -- Resource change during the scan ------------------------
