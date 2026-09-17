@@ -85,5 +85,50 @@ class StoreTests(unittest.TestCase):
                 conn.close()
 
 
+class ConcurrentConnectTests(unittest.TestCase):
+    """새 데이터 디렉터리에 여러 스레드가 동시에 붙는 경우.
+
+    창을 처음 열면 작업 스레드 몇(대시보드·스캔 상태·계정 상세)이 거의 같은
+    순간에 연결한다. 예전에는 "내가 만들겠다" 표시만 먼저 해 두고 잠금을
+    놓았기 때문에, 그 사이에 들어온 스레드가 **표가 하나도 없는 DB** 를 그대로
+    받아 `no such table` 로 죽었다."""
+
+    def test_every_thread_gets_a_usable_schema(self):
+        import tempfile
+        import threading
+
+        from smvwp import store
+
+        with tempfile.TemporaryDirectory() as name:
+            data_dir = Path(name) / "data"
+            # 이 경로는 이 프로세스에서 처음이다 - 그래야 만드는 경로를 탄다.
+            store._INITIALIZED.discard(str(store.db_path(data_dir)))
+
+            start = threading.Barrier(6)
+            errors = []
+            lock = threading.Lock()
+
+            def worker():
+                # 연결은 만든 스레드에서만 쓸 수 있으므로 여기서 닫는다.
+                start.wait()
+                conn = None
+                try:
+                    conn = store.connect(data_dir)
+                    conn.execute("SELECT COUNT(*) FROM samples").fetchone()
+                except Exception as exc:  # pragma: no cover - 실패를 모아 본다
+                    with lock:
+                        errors.append(repr(exc))
+                finally:
+                    if conn is not None:
+                        conn.close()
+
+            threads = [threading.Thread(target=worker) for _ in range(6)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -906,5 +906,328 @@ class ScanTabLayoutTests(_GuiCase):
         self.assertNotIn("scan.", self.tab.scan_status_label.text())
 
 
+class HomeLayoutTests(_GuiCase):
+    """홈은 두 칸이다 - 왼쪽에 요약, 오른쪽에 계정 목록.
+
+    예전에는 히어로·우선순위·버튼·표를 세로로 쌓아 위 셋이 세로의 절반을
+    먹었고, 열이 열둘인 표는 1,200 창에서 그것만으로 가로 스크롤이 났다.
+    소스를 읽어서는 알 수 없는 것들이라 실제 크기로 띄워 잰다.
+    """
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch(
+            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self._fill_samples()
+        self.window.resize(1200, 820)
+        self.window.show()
+        for _ in range(4):
+            _app().processEvents()
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def _fill_samples(self):
+        """표에 실제로 행이 그려진 상태로 만든다 (수집을 기다리지 않는다)."""
+
+        from datetime import datetime, timezone
+
+        from smvwp import store
+
+        samples = {}
+        for index, account in enumerate(self.config.accounts):
+            total = (20 + index * 5) * 1024 * self.GB
+            pct = 75.0 + index * 8
+            samples[account.account_id] = store.SampleRecord(
+                account_id=account.account_id,
+                collected_at=datetime.now(timezone.utc).isoformat(),
+                ok=True, filesystem="nfs4", mount_point="/ifs",
+                total_kb=total, used_kb=int(total * pct / 100), avail_kb=1,
+                byte_pct=pct, byte_tier="warn", overall_tier="warn",
+            )
+        self.window._render_table(samples)
+        for _ in range(3):
+            _app().processEvents()
+
+    # -- 배치 ------------------------------------------------------------
+    def test_the_account_list_sits_beside_the_summary_not_below_it(self):
+        table = self.window.table
+        hero = self.window._hero_card
+        self.assertGreaterEqual(
+            table.mapTo(self.window, table.rect().topLeft()).x(),
+            hero.mapTo(self.window, hero.rect().topRight()).x(),
+            "계정 목록이 요약 오른쪽에 있어야 한다",
+        )
+
+    def test_the_summary_cards_are_stacked_in_the_left_column(self):
+        hero = self.window._hero_card
+        priority = self.window.priority_card
+        self.assertGreater(
+            priority.mapTo(self.window, priority.rect().topLeft()).y(),
+            hero.mapTo(self.window, hero.rect().topLeft()).y(),
+            "우선순위 카드는 히어로 아래에 있어야 한다",
+        )
+        self.assertEqual(hero.width(), priority.width())
+
+    def test_the_list_gets_most_of_the_height(self):
+        """표가 세로를 거의 다 써야 한 화면에 계정이 다 들어온다."""
+
+        page = self.window.tabs.widget(0)
+        ratio = self.window.table.height() / page.height()
+        self.assertGreater(ratio, 0.7, f"표 자리 {ratio:.0%}")
+
+    def test_the_refresh_button_is_with_the_list(self):
+        """목록을 보다가 누르는 버튼이라, 목록에서 멀면 찾지 못한다."""
+
+        button = self.window.collect_btn
+        table = self.window.table
+        self.assertGreaterEqual(
+            button.mapTo(self.window, button.rect().center()).x(),
+            table.mapTo(self.window, table.rect().topLeft()).x(),
+        )
+
+    # -- 가로 스크롤 ------------------------------------------------------
+    def test_the_list_does_not_scroll_sideways_at_the_default_size(self):
+        self.assertFalse(self.window.table.horizontalScrollBar().isVisible())
+
+    def test_nothing_in_the_left_column_scrolls_sideways(self):
+        self.assertFalse(self.window.priority_list.horizontalScrollBar().isVisible())
+
+    def test_the_forecast_column_is_not_squeezed_to_nothing(self):
+        """예측 칸이 `예측 ...` 으로 줄면 그 열은 자리만 차지한다."""
+
+        from smvwp.gui.main_window import COL_FORECAST
+
+        width = self.window.table.horizontalHeader().sectionSize(COL_FORECAST)
+        self.assertGreater(width, 120, f"FULL 예상 열 {width}px")
+
+    def test_the_name_is_never_the_column_that_gets_squeezed(self):
+        """이름을 Stretch 로 뒀더니 오히려 반대가 됐다 - Stretch 는 남은 것을
+        받는 열이라, 옆 열들이 내용대로 가져간 뒤 이름만 최소 폭으로 찌그러져
+        `tc_layout...` 이 됐다. 이름은 계정을 가리키는 유일한 말이다."""
+
+        from smvwp.gui.main_window import COL_NAME
+
+        table = self.window.table
+        self.assertGreaterEqual(
+            table.horizontalHeader().sectionSize(COL_NAME),
+            table.sizeHintForColumn(COL_NAME),
+        )
+
+    # -- 옮겨 간 값들 ------------------------------------------------------
+    def test_the_path_moved_to_the_name_tooltip(self):
+        """경로 열을 뺐다고 경로를 못 보게 되면 안 된다."""
+
+        from smvwp.gui.main_window import COL_NAME
+
+        item = self.window.table.item(0, COL_NAME)
+        self.assertIn(self.config.accounts[0].path, item.toolTip())
+
+    def test_a_collection_failure_still_shows_up_somewhere(self):
+        """상태 열을 뺐다 - 실패를 아무 데서도 못 보면 숫자를 믿게 된다."""
+
+        from datetime import datetime, timezone
+
+        from smvwp import i18n, store
+        from smvwp.gui.main_window import COL_TIME
+
+        account = self.config.accounts[0]
+        self.window._render_table({account.account_id: store.SampleRecord(
+            account_id=account.account_id,
+            collected_at=datetime.now(timezone.utc).isoformat(),
+            ok=False, error_message="df: permission denied",
+            total_kb=None, used_kb=None,
+        )})
+        item = self.window.table.item(0, COL_TIME)
+        self.assertEqual(item.text(), i18n.t("dashboard.collect_error_short"))
+        self.assertIn("permission denied", item.toolTip())
+
+
+class AccountDetailDialogTests(_GuiCase):
+    """계정 하나에 대한 것을 한 창에 모은다 (홈에서 두 번 누르면)."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        # 읽기는 스레드에서 돈다 - 시험에서는 우리가 값을 직접 넣는다.
+        patcher = patch(
+            "smvwp.gui.account_detail_dialog._DetailReader.run_async",
+            lambda self, account_id: True,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from smvwp.gui.account_detail_dialog import AccountDetailDialog
+
+        self.account = self.config.accounts[0]
+        self.dialog = AccountDetailDialog(
+            self.data_dir, lambda: self.config, self.account.account_id
+        )
+        self.addCleanup(self.dialog.close)
+
+    def detail(self, **kwargs):
+        from datetime import datetime, timezone
+
+        from smvwp import account_detail, health, store
+
+        made = account_detail.AccountDetail(
+            account_id=self.account.account_id, name=self.account.name,
+            path=self.account.path, kind=self.account.kind,
+        )
+        made.sample = store.SampleRecord(
+            account_id=self.account.account_id,
+            collected_at=datetime.now(timezone.utc).isoformat(), ok=True,
+            filesystem="nfs4", mount_point="/ifs",
+            total_kb=1000 * self.GB, used_kb=910 * self.GB, avail_kb=90 * self.GB,
+            byte_pct=91.0, inode_pct=12.0, byte_tier="alert", overall_tier="alert",
+        )
+        made.health = [
+            health.RunHealth(
+                self.account.account_id, self.account.name,
+                self.account.path + "/task/01_run_0908", "task / 01_run_0908",
+                run_size_kb=300 * self.GB, backup_size_kb=300 * self.GB,
+                mirror_size_kb=300 * self.GB, status=health.BACKED_UP,
+            ),
+        ]
+        for key, value in kwargs.items():
+            setattr(made, key, value)
+        return made
+
+    def load(self, **kwargs):
+        self.dialog._on_loaded(self.detail(**kwargs))
+        _app().processEvents()
+
+    # -- 채워지는가 --------------------------------------------------------
+    def test_the_numbers_land_in_the_left_column(self):
+        self.load()
+        self.assertIn("91", self.dialog.usage_label.text())
+        self.assertIn("910.0", self.dialog._fact_rows["capacity"][1].text())
+        self.assertIn("12", self.dialog._fact_rows["inode"][1].text())
+
+    def test_the_backup_summary_says_what_can_be_cleaned(self):
+        self.load()
+        text = self.dialog.health_label.text()
+        self.assertIn("300", text)
+
+    def test_the_tables_say_so_when_there_is_nothing_yet(self):
+        """빈 표는 고장으로 읽힌다."""
+
+        from smvwp import i18n
+
+        self.load()
+        self.assertEqual(self.dialog.large_table.rowCount(), 1)
+        self.assertEqual(
+            self.dialog.large_table.item(0, 0).text(), i18n.t("detail.no_rows")
+        )
+
+    def test_a_missing_account_is_said_out_loud(self):
+        from smvwp import i18n
+
+        self.dialog._on_loaded(None)
+        self.assertEqual(self.dialog.status_label.text(), i18n.t("detail.gone"))
+
+    def test_what_could_not_be_read_is_named(self):
+        """조용히 비우면 "없다"로 읽힌다."""
+
+        from smvwp import account_detail, i18n
+
+        self.load(failures=[account_detail.PART_HEALTH])
+        self.assertIn(
+            i18n.t("detail.part.health"), self.dialog.status_label.text()
+        )
+
+    def test_paths_are_shown_under_the_account(self):
+        from smvwp import large_files
+
+        rows = large_files.build(
+            [(self.account.path + "/task/01_run/psf/tran.tr0", 500 * self.GB, None)],
+            1000 * self.GB,
+        )
+        self.load(large_files=rows)
+        cell = self.dialog.large_table.item(0, 0)
+        self.assertTrue(cell.text().startswith("task/"), cell.text())
+        self.assertIn(self.account.path, cell.toolTip())
+
+    def test_no_translation_keys_leak(self):
+        self.load()
+        text = " ".join([
+            self.dialog.health_label.text(), self.dialog.scan_label.text(),
+            self.dialog.forecast_label.text(), self.dialog.trend_summary.text(),
+            self.dialog.path_label.text(),
+        ])
+        self.assertNotIn("detail.", text)
+        self.assertNotIn("health.status.", text)
+
+    def test_it_fits_a_1080_screen(self):
+        needed = self.dialog.minimumSizeHint().height()
+        self.assertLess(needed, 700, f"창 최소 세로 {needed}px")
+
+    # -- 창과의 경계 --------------------------------------------------------
+    def test_going_to_the_scan_tab_is_the_windows_job(self):
+        """대화상자가 창의 탭을 직접 만지면 둘을 따로 옮길 수 없게 된다."""
+
+        seen = []
+        self.dialog.open_scan_requested.connect(seen.append)
+        self.dialog._go_to_scan()
+        self.assertEqual(seen, [self.account.account_id])
+
+
+class HomeToDetailTests(_GuiCase):
+    """홈 표에서 두 번 누르면 그 계정의 창이 열린다."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch(
+            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.window._render_table({})
+        _app().processEvents()
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def test_double_clicking_a_row_opens_that_account(self):
+        opened = []
+
+        def fake_exec(dialog):
+            opened.append(dialog._account_id)
+            return 0
+
+        with patch(
+            "smvwp.gui.account_detail_dialog.AccountDetailDialog.exec_", fake_exec
+        ), patch(
+            "smvwp.gui.account_detail_dialog._DetailReader.run_async",
+            lambda self, account_id: True,
+        ):
+            self.window.table.cellDoubleClicked.emit(0, 0)
+        self.assertEqual(opened, [self.config.accounts[0].account_id])
+
+    def test_the_window_moves_to_the_scan_tab_when_asked(self):
+        account = self.config.accounts[1]
+        self.window._show_account_in_scan_tab(account.account_id)
+        self.assertEqual(
+            self.window.tabs.currentIndex(),
+            self.window.tabs.indexOf(self.window._scan_page),
+        )
+        self.assertEqual(
+            self.window._scan_tab.scan_account_combo.currentData(), account.account_id
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -52,6 +52,9 @@ ACCOUNTS_OPENED = "accounts.open"
 ACCOUNT_CHANGED = "accounts.change"
 TREE_VIEWED = "tree.open"
 LOAD_VIEWED = "load.open"
+# 계정 하나를 파고든 것. "몇 명이 쓰는가" 만큼이나 "무엇을 보러 오는가" 가
+# 궁금하므로, 목록을 훑고 마는 것과 계정을 열어 보는 것을 갈라 센다.
+ACCOUNT_VIEWED = "account.detail"
 
 # 기록을 얼마나 보관하는가.
 #

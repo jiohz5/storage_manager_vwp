@@ -28,7 +28,10 @@ from .. import formatting, i18n, tiers, trend
 from . import theme
 
 # 작은 그래프의 기본 크기. 표 칸에 들어가는 것이라 행 높이를 넘지 않는다.
-SPARK_WIDTH = 110
+# 표 칸 하나의 폭. 110 이었는데, 홈을 두 칸으로 나눈 뒤로는 표가 쓸 수 있는
+# 가로가 줄어 그 20px 이 FULL 예상 열을 잘라먹었다. 90 에서도 모양은 읽히고,
+# 숫자가 필요하면 추세 창이 있다.
+SPARK_WIDTH = 90
 SPARK_HEIGHT = 26
 
 # 큰 그래프의 안쪽 여백 (왼쪽은 축 글자 자리).

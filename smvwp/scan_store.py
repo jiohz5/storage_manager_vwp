@@ -398,18 +398,19 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
     conn.row_factory = sqlite3.Row
     # 스키마 확인은 프로세스당 한 번이면 된다 (_INITIALIZED 주석 참고).
+    #
+    # **만드는 동안 잠금을 쥐고 있어야 한다.** 예전에는 표시만 먼저 해 두고
+    # 잠금을 놓았는데, 그 사이에 들어온 다른 스레드는 "이미 됐다"고 보고 빈
+    # DB 를 그대로 받아 갔다 - 새 데이터 디렉터리에서 창을 처음 열면 작업
+    # 스레드 몇이 동시에 들어오므로 실제로 `no such table` 이 났다.
     key = str(db_path(data_dir))
     with _INIT_LOCK:
-        first_time = key not in _INITIALIZED
-        if first_time:
+        if key not in _INITIALIZED:
+            _apply_journal_mode(conn, data_dir)
+            conn.executescript(SCHEMA)
+            _migrate(conn)
+            conn.commit()
             _INITIALIZED.add(key)
-    if not first_time:
-        return conn
-
-    _apply_journal_mode(conn, data_dir)
-    conn.executescript(SCHEMA)
-    _migrate(conn)
-    conn.commit()
     return conn
 
 

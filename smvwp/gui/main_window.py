@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -51,7 +52,6 @@ from .. import (
     forecast_notify,
     freshness,
     i18n,
-    quota,
     store,
     tiers,
 )
@@ -63,49 +63,46 @@ from .first_run import FirstRunDialog
 from .reports_dialog import ReportsDialog
 from .search_dialog import SearchDialog
 
+# 홈 왼쪽 칸(요약·동작)의 폭. 표가 열둘이라 남는 가로는 전부 표에 준다.
+HOME_LEFT_WIDTH = 300
+
 COLUMN_KEYS = [
     "dashboard.col.name",
     # 성격(프로젝트/백업)을 이름 바로 옆에 둔다. 이 열이 없으면 백업 계정이
     # 계속 느는 것을 보고 매번 놀라게 된다 - 백업은 단조 증가가 정상이고
     # 프로젝트는 과제가 끝나면 줄어야 정상이라, 같은 숫자를 다르게 읽어야 한다.
     "dashboard.col.kind",
-    "dashboard.col.path",
     "dashboard.col.size",
     "dashboard.col.byte_pct",
     # 사용률 옆에 추세선을 둔다. "지금 82%" 보다 "두 주 만에 60%에서 82%로
     # 왔다" 가 훨씬 많은 것을 말하는데, 그 둘은 붙어 있어야 한 번에 읽힌다.
     "trend.col",
-    "dashboard.col.inode_pct",
-    "dashboard.col.quota",
-    "dashboard.col.tier",
     "forecast.column",
     "dashboard.col.collected_at",
-    "dashboard.col.status",
 ]
 (
     COL_NAME,
     COL_KIND,
-    COL_PATH,
     COL_SIZE,
     COL_BYTE,
     COL_TREND,
-    COL_INODE,
-    COL_QUOTA,
-    COL_TIER,
     COL_FORECAST,
     COL_TIME,
-    COL_STATUS,
-) = range(12)
+) = range(7)
+
+# 이 표는 **훑어보는 목록**이다.
+#
+# 예전에는 열이 열둘이라 폭이 1,400px 필요했고, 창이 1,200 이면 그것만으로
+# 가로 스크롤이 났다. 홈을 두 칸으로 나눈 뒤로는 표가 쓸 수 있는 폭이 더
+# 줄어 더 심해졌다.
+#
+# 그래서 "어느 계정을 지금 봐야 하나"에 답하는 것만 남겼다. 나머지(경로,
+# inode, quota, 수집 상태, 등급 글자)는 **계정을 두 번 누르면 열리는 상세
+# 창**에 전부 있다 - 그것들은 한 계정을 정한 다음에 보는 값이다.
 
 # `파일시스템` 열은 뺐다. 값이 거의 항상 같아서(계정 대부분이 같은 파일시스템에
 # 있다) 열 하나를 통째로 쓰면서 정보는 거의 주지 않았다. 대신 경로 툴팁에
 # 넣는다 - 필요한 순간(어느 파일시스템인지 확인할 때)에만 보면 되는 값이다.
-
-# 경로 열의 최저 폭. 칸 좌우 여백(QSS `::item` padding 8px씩)을 빼고도 실제
-# 운영 경로(`/user/project_a` 계열, 실측 약 110px)가 넉넉히 들어간다.
-# 이보다 긴 경로는 잘리지만 툴팁에 전체가 남는다 - 열 하나가 표를 다 먹는
-# 것보다는 낫다.
-PATH_MIN_WIDTH = 240
 
 # 히어로 - 창을 열자마자 시선이 먼저 닿는 자리. "지금 가장 급한 것 하나"를
 # 큰 숫자로 못박고, 나머지는 그 아래 작은 글씨로 둔다. 표를 훑기 전에 판단이
@@ -216,7 +213,24 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD)
         layout.setSpacing(theme.GAP_SECTION)
 
-        layout.addWidget(self._build_hero())
+        # 홈은 두 칸이다.
+        #
+        # 예전에는 히어로·우선순위·버튼·표를 세로로 쌓았다. 위 셋이 세로의
+        # 절반 가까이를 먹어서 정작 매일 보는 계정 표가 몇 줄만 남았다 -
+        # 화면 세로가 1080 이 최대인 곳에서는 더 심했다.
+        #
+        # 요약(히어로 + 우선순위)은 폭이 좁아도 읽히지만 표는 가로가 필요하다.
+        # 그래서 요약은 왼쪽 한 칸에 쌓고, 표는 오른쪽에서 **세로를 전부**
+        # 쓴다. 스캔 배너만 두 칸 위에 걸친다 - 밤새 무엇이 도는지는 어느
+        # 쪽을 보고 있든 눈에 들어와야 한다.
+        columns = QHBoxLayout()
+        columns.setSpacing(theme.GAP_SECTION)
+        left = QVBoxLayout()
+        left.setSpacing(theme.GAP_SECTION)
+        right = QVBoxLayout()
+        right.setSpacing(8)
+
+        left.addWidget(self._build_hero())
 
         # 스캔이 도는 동안에는 홈에서도 보이게 한다. 탭을 나눈 뒤로 상세 스캔
         # 탭을 열지 않으면 밤새 뭐가 도는지 알 수 없어졌기 때문이다. 여기서는
@@ -243,6 +257,7 @@ class MainWindow(QMainWindow):
         banner_box.addWidget(self.home_scan_label, 1)
         banner_box.addWidget(self.home_scan_link)
         layout.addWidget(self.home_scan_banner)
+        layout.addLayout(columns, 1)
 
         # -- 처리 우선순위 -----------------------------------------------
         #
@@ -266,12 +281,19 @@ class MainWindow(QMainWindow):
         self.priority_list.setFrameShape(QListWidget.NoFrame)
         self.priority_list.setSelectionMode(QListWidget.NoSelection)
         self.priority_list.setFocusPolicy(Qt.NoFocus)
-        self.priority_list.setMaximumHeight(150)
+        # 문장이 폭을 넘으면 옆으로 밀지 않고 접는다. 왼쪽 칸은 폭이 330px 라
+        # 대부분의 줄이 넘치는데, 가로 스크롤로 두면 문장 뒤쪽("정리하면 800GB
+        # 빕니다")이 통째로 안 보인다.
+        self.priority_list.setWordWrap(True)
+        self.priority_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.priority_list.setResizeMode(QListWidget.Adjust)
         priority_box.addWidget(self.priority_list)
-        layout.addWidget(self.priority_card)
+        left.addWidget(self.priority_card, 1)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
+        # 동작 버튼은 왼쪽 칸 아래에 두 줄로 놓는다. 한 줄로 늘어놓으면 칸
+        # 폭을 넘어 창 최소 폭을 버튼 일곱 개가 정하게 된다.
+        button_grid = QGridLayout()
+        button_grid.setSpacing(8)
         self.collect_btn = QPushButton()
         # 가장 자주 쓰는 동작 하나만 강조한다 - 전부 강조하면 아무것도 강조되지
         # 않는다.
@@ -292,18 +314,32 @@ class MainWindow(QMainWindow):
         self.load_btn.clicked.connect(self._open_load_dialog)
         self.trend_btn = QPushButton()
         self.trend_btn.clicked.connect(self._open_trend_dialog)
-        for button in (
-            self.collect_btn,
+        for index, button in enumerate((
             self.accounts_btn,
             self.reports_btn,
             self.search_btn,
             self.trend_btn,
             self.load_btn,
             self.diagnose_btn,
-        ):
-            button_row.addWidget(button)
-        button_row.addStretch(1)
-        layout.addLayout(button_row)
+        )):
+            button_grid.addWidget(button, index // 2, index % 2)
+        left.addLayout(button_grid)
+        columns.addLayout(left, 0)
+
+        # 계정 목록 머리. **새로고침(지금 수집)을 여기 둔다** - 목록을 보다가
+        # "지금 값이 맞나" 싶을 때 누르는 것이라, 목록에서 멀면 찾지 못한다.
+        list_head = QHBoxLayout()
+        list_head.setSpacing(8)
+        self.list_title = QLabel()
+        self.list_title.setObjectName("sectionTitle")
+        list_head.addWidget(self.list_title)
+        self.list_hint = QLabel()
+        self.list_hint.setObjectName("caption")
+        self.list_hint.setWordWrap(True)
+        list_head.addWidget(self.list_hint, 1)
+        list_head.addStretch(1)
+        list_head.addWidget(self.collect_btn)
+        right.addLayout(list_head)
 
         self.table = QTableWidget(0, len(COLUMN_KEYS))
         self._configure_table_columns()
@@ -314,6 +350,9 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setShowGrid(False)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        # 한 계정에 대한 사실은 네 군데에 흩어져 있다 (사용률·추세·스캔·백업).
+        # 두 번 누르면 그 넷을 한 창에 모아 준다.
+        self.table.cellDoubleClicked.connect(self._open_account_detail)
         # 계정 표는 **Qt 내장 정렬을 쓰지 않는다.** 사용률 막대와 등급 배지가
         # 칸 위젯이라, Qt가 항목만 옮기고 위젯은 제자리에 두어 행과 위젯이
         # 어긋난다. 대신 정렬 키만 기억해 두고 표를 다시 그린다.
@@ -322,7 +361,14 @@ class MainWindow(QMainWindow):
 
         # 홈 탭에서는 계정 표가 세로 공간을 전부 가져간다.
         self.table.setMinimumHeight(140)
-        layout.addWidget(self.table, 1)
+        right.addWidget(self.table, 1)
+        columns.addLayout(right, 1)
+
+        # 왼쪽 칸은 폭을 묶는다. 숫자 몇 개와 문장 몇 줄이라 넓혀도 얻는 것이
+        # 없고, 남는 가로는 열이 열둘인 표가 훨씬 아쉽다.
+        self.home_left_width = HOME_LEFT_WIDTH
+        for widget in (self._hero_card, self.priority_card):
+            widget.setFixedWidth(HOME_LEFT_WIDTH)
         self.tabs.addTab(home, "")
 
         scan_tab = QWidget()
@@ -342,7 +388,7 @@ class MainWindow(QMainWindow):
 
     # 정렬 키를 만들 수 있는 열만 정렬을 허용한다. 막대·배지 열은 옆의 숫자
     # 열(사용량, 사용률)로 정렬하면 되므로 굳이 열지 않는다.
-    SORTABLE_COLUMNS = (COL_NAME, COL_KIND, COL_PATH, COL_SIZE, COL_BYTE, COL_INODE, COL_TIME)
+    SORTABLE_COLUMNS = (COL_NAME, COL_KIND, COL_SIZE, COL_BYTE, COL_TIME)
 
     def _on_header_clicked(self, column: int) -> None:
         if column not in self.SORTABLE_COLUMNS:
@@ -352,7 +398,7 @@ class MainWindow(QMainWindow):
         else:
             self._sort_column = column
             # 숫자 열은 큰 것부터, 글자 열은 가나다순으로 시작하는 것이 자연스럽다.
-            self._sort_desc = column not in (COL_NAME, COL_KIND, COL_PATH)
+            self._sort_desc = column not in (COL_NAME, COL_KIND)
         self.table.horizontalHeader().setSortIndicator(
             column, Qt.DescendingOrder if self._sort_desc else Qt.AscendingOrder
         )
@@ -384,16 +430,12 @@ class MainWindow(QMainWindow):
                 return (0, account.kind)
             if column == COL_NAME:
                 return (0, account.name.lower())
-            if column == COL_PATH:
-                return (0, account.path.lower())
             if sample is None:
                 return (1, 0)
             if column == COL_SIZE:
                 return (0, sample.used_kb or 0)
             if column == COL_BYTE:
                 return (0, sample.byte_pct if sample.byte_pct is not None else -1)
-            if column == COL_INODE:
-                return (0, sample.inode_pct if sample.inode_pct is not None else -1)
             if column == COL_TIME:
                 return (0, sample.collected_at or "")
             return (0, 0)
@@ -406,25 +448,6 @@ class MainWindow(QMainWindow):
             ordered = list(reversed(with_value)) + without
         return ordered
 
-    def _fit_path_column(self) -> None:
-        """경로 열에 남는 폭을 몰아주되 최소 폭은 지킨다.
-
-        다른 열은 내용에 맞춰 잡히므로, 그러고 남은 자리를 경로가 받는다.
-        남은 자리가 최소 폭보다 좁으면 최소 폭을 쓰고 가로 스크롤을 감수한다 -
-        경로가 'C:...'로 잘려 아무것도 안 보이는 것보다 낫다."""
-
-        others = sum(
-            self.table.columnWidth(column)
-            for column in range(self.table.columnCount())
-            if column != COL_PATH
-        )
-        available = self.table.viewport().width() - others
-        self.table.setColumnWidth(COL_PATH, max(PATH_MIN_WIDTH, available))
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 규약
-        super().resizeEvent(event)
-        self._fit_path_column()
-
     def _build_hero(self) -> QWidget:
         """맨 위 요약 카드.
 
@@ -434,6 +457,7 @@ class MainWindow(QMainWindow):
 
         card = QFrame()
         card.setObjectName("hero")
+        self._hero_card = card
         outer = QHBoxLayout(card)
         outer.setContentsMargins(0, 0, theme.PAD_CARD, 0)
         outer.setSpacing(0)
@@ -499,28 +523,25 @@ class MainWindow(QMainWindow):
     def _configure_table_columns(self) -> None:
         """열마다 폭 정책을 따로 준다.
 
-        전부 `Stretch`로 두면 열 개수로 폭이 균등 분배되어, 값이 짧은 열
-        (`파일시스템`='C:', `quota`='-')이 공간을 낭비하는 동안 정작 길이가
-        필요한 `경로`는 'C:...'로 잘려 아무것도 안 보인다. 실제로 재 보면
-        경로에 364px가 필요한데 균등 분배로는 166px밖에 못 받았다."""
+        전부 `Stretch`로 두면 열 개수로 폭이 균등 분배되어, 값이 짧은 열이
+        공간을 낭비하는 동안 정작 긴 이름이 잘린다. 남는 폭은 **이름**이
+        가져간다 - 사람이 계정을 가리킬 때 쓰는 유일한 이름이라 잘리면 곤란한
+        유일한 열이다."""
 
         header = self.table.horizontalHeader()
         # 폭이 모자랄 때 어떤 열도 글자 한 자 폭까지 찌그러지지 않게 한다
         # (그 상태가 되면 가로 스크롤이 생기는데, 아무것도 안 보이는 것보다 낫다).
-        header.setMinimumSectionSize(80)
+        header.setMinimumSectionSize(72)
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        # 경로는 남는 폭을 가져가되 **최소 폭은 보장**한다. Stretch로 두면
-        # 나머지 열이 내용대로 다 가져간 뒤 남은 것만 받아서, 창이 조금만
-        # 좁아도 다시 'C:...'로 잘린다. 여기서는 직접 계산해 넣는다.
-        header.setSectionResizeMode(COL_PATH, QHeaderView.Interactive)
+        # 남는 폭은 **FULL 예상**이 가져간다. 이름을 늘이려고 Stretch 로 뒀더니
+        # 오히려 반대가 됐다 - Stretch 는 '남은 것'을 받는 열이라, 옆 열들이
+        # 내용대로 가져간 뒤 이름만 최소 폭(80px)으로 찌그러져 `tc_layout...`
+        # 이 됐다. 이름은 내용대로 잡고, 길면 줄여도 되는 쪽(예측 문구, 툴팁에
+        # 전체가 있다)에 나머지를 준다.
         # 막대가 들어가는 칸은 내용 기준으로 재면 너무 좁아진다.
         header.setSectionResizeMode(COL_BYTE, QHeaderView.Fixed)
-        self.table.setColumnWidth(COL_BYTE, 168)
-        # 배지는 칸 위젯이라 ResizeToContents가 크기를 계산에 넣지 못한다.
-        header.setSectionResizeMode(COL_TIER, QHeaderView.Fixed)
-        self.table.setColumnWidth(
-            COL_TIER, widgets.badge_column_width(self.table.fontMetrics())
-        )
+        self.table.setColumnWidth(COL_BYTE, 148)
+        header.setSectionResizeMode(COL_FORECAST, QHeaderView.Stretch)
         header.setStretchLastSection(False)
         header.setHighlightSections(False)
         # 헤더를 눌러 정렬한다. Qt 내장 정렬 대신 직접 하는 이유는 위 주석 참고.
@@ -561,6 +582,8 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(0, i18n.t("tab.home"))
         self.tabs.setTabText(1, i18n.t("tab.scan"))
         self.caveat_label.setText(i18n.t("dashboard.df_caveat"))
+        self.list_title.setText(i18n.t("dashboard.list_title"))
+        self.list_hint.setText(i18n.t("dashboard.list_hint"))
         self.collect_btn.setText(i18n.t("dashboard.btn.collect_now"))
         self.collect_btn.setToolTip(i18n.t("dashboard.btn.collect_now_tooltip"))
         self.accounts_btn.setText(i18n.t("dashboard.btn.accounts"))
@@ -790,26 +813,26 @@ class MainWindow(QMainWindow):
             # 정렬을 켜면 행 번호가 설정 순서와 달라진다. 행에서 계정을 찾을 때는
             # 반드시 이 id를 쓴다 (이름은 겹칠 수 있어 식별자가 못 된다).
             name_item.setData(Qt.UserRole, account.account_id)
+            # 경로 열을 뺀 대신 경로·파일시스템·마운트 지점을 여기 붙인다.
+            # 전체는 계정 상세 창에 그대로 있다.
+            name_item.setToolTip(formatting.path_tooltip(account, sample))
             self.table.setItem(row, COL_NAME, name_item)
-            path_item = QTableWidgetItem(account.path)
-            # 폭이 모자라 잘리더라도 전체 경로는 확인할 수 있어야 한다.
-            # 파일시스템/마운트 지점도 여기 붙인다 (열을 없앤 대신).
-            path_item.setToolTip(formatting.path_tooltip(account, sample))
-            self.table.setItem(row, COL_PATH, path_item)
             # 성격은 수집 결과와 무관하므로 표본이 없어도 항상 채운다.
             kind_item = QTableWidgetItem(i18n.t(f"account.kind.{account.kind}"))
             kind_item.setToolTip(i18n.t("accounts.kind_hint"))
             self.table.setItem(row, COL_KIND, kind_item)
 
             if sample is None:
-                for column in (COL_SIZE, COL_INODE, COL_QUOTA, COL_FORECAST, COL_TIME):
+                for column in (COL_SIZE, COL_FORECAST):
                     item = QTableWidgetItem(dash)
                     self._style_value_item(item, column)
                     self.table.setItem(row, column, item)
                 self.table.setCellWidget(row, COL_BYTE, widgets.UsageBar(None, tiers.UNKNOWN))
                 self.table.setCellWidget(row, COL_TREND, self._spark_for(account.account_id))
-                self.table.setCellWidget(row, COL_TIER, widgets.badge_cell(tiers.UNKNOWN, None))
-                self.table.setItem(row, COL_STATUS, QTableWidgetItem(i18n.t("dashboard.not_collected")))
+                # "아직 수집 전"은 '-' 로 두면 고장으로 읽힌다.
+                self.table.setItem(
+                    row, COL_TIME, QTableWidgetItem(i18n.t("dashboard.not_collected"))
+                )
                 continue
 
             # 퍼센트 왼쪽에 실제 크기를 둔다. "95%"만으로는 남은 것이 5GB인지
@@ -821,29 +844,17 @@ class MainWindow(QMainWindow):
             self._style_value_item(size_item, COL_SIZE)
             self.table.setItem(row, COL_SIZE, size_item)
 
-            inode_text = (
-                f"{sample.inode_pct:.1f}%"
-                if sample.inode_pct is not None
-                else i18n.t("common.unknown_value")
-            )
             usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier)
-            usage_bar.setToolTip(formatting.size_tooltip(sample))
+            # 등급 배지 열을 뺀 대신 등급 글자를 여기 붙인다 - 색만으로는
+            # 경계값이 어느 쪽인지 말해 주지 못한다.
+            usage_bar.setToolTip(
+                tiers.display_text(sample.overall_tier, sample.byte_pct)
+                + "\n" + formatting.size_tooltip(sample)
+            )
             self.table.setCellWidget(row, COL_BYTE, usage_bar)
             self.table.setCellWidget(
                 row, COL_TREND, self._spark_for(account.account_id, sample.overall_tier)
             )
-            inode_item = QTableWidgetItem(inode_text)
-            self._style_value_item(inode_item, COL_INODE)
-            self.table.setItem(row, COL_INODE, inode_item)
-
-            quota_item = QTableWidgetItem(quota.format_usage(sample))
-            self._style_value_item(quota_item, COL_QUOTA)
-            self.table.setItem(row, COL_QUOTA, quota_item)
-
-            self.table.setCellWidget(
-                row, COL_TIER, widgets.badge_cell(sample.overall_tier, sample.byte_pct)
-            )
-
             if sample.byte_pct is not None and (
                 self._worst_pct is None or sample.byte_pct > self._worst_pct
             ):
@@ -879,13 +890,15 @@ class MainWindow(QMainWindow):
             time_item.setToolTip(formatting.local_datetime_text(sample.collected_at))
             if status_info is not None and status_info.needs_attention:
                 time_item.setForeground(QColor(tiers.color(tiers.ALERT)))
+            # 수집 실패는 열을 따로 두지 않고 여기서 말한다. 실패하면 숫자가
+            # 낡은 것이므로, 사람이 보는 곳은 결국 "언제 잰 값인가" 다.
+            if not sample.ok:
+                time_item.setText(i18n.t("dashboard.collect_error_short"))
+                time_item.setForeground(QColor(tiers.color(tiers.ALERT)))
+                time_item.setToolTip(
+                    i18n.t("dashboard.collect_failed", message=sample.error_message)
+                )
             self.table.setItem(row, COL_TIME, time_item)
-            status_text = (
-                i18n.t("dashboard.collect_ok")
-                if sample.ok
-                else i18n.t("dashboard.collect_failed", message=sample.error_message)
-            )
-            self.table.setItem(row, COL_STATUS, QTableWidgetItem(status_text))
 
             # 주의 이상인 행만 옅게 칠한다. 정상까지 칠하면 색이 배경 소음이
             # 되어 정작 문제 있는 행이 묻힌다.
@@ -900,13 +913,12 @@ class MainWindow(QMainWindow):
                         f"{account.name} ({tiers.display_text(sample.overall_tier, sample.byte_pct)})"
                     )
 
-        self._fit_path_column()
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
 
     # 숫자 열은 오른쪽으로 붙인다. 여러 계정을 위에서 아래로 훑을 때 자릿수가
     # 맞아야 "어느 쪽이 큰가"가 읽지 않고도 보인다. 왼쪽 정렬이면 `0.8 TB`와
     # `12.4 TB`의 시작점이 같아 매번 숫자를 읽어야 한다.
-    NUMERIC_COLUMNS = (COL_SIZE, COL_INODE, COL_QUOTA)
+    NUMERIC_COLUMNS = (COL_SIZE,)
 
     # 값이 없다는 뜻의 문구들. 실제 값과 같은 색으로 두면 눈이 먼저 가는 곳이
     # 흐려진다 - 대부분의 행이 `확인불가`인 환경(inode 미지원 파일시스템)에서
@@ -1086,6 +1098,27 @@ class MainWindow(QMainWindow):
         box.exec_()
 
 
+
+    def _open_account_detail(self, row: int, _column: int = 0) -> None:
+        """계정 하나에 대해 아는 것 전부를 한 창에 모아 보여 준다."""
+
+        account_id = self._account_id_at_row(row)
+        if not account_id:
+            return
+        from .account_detail_dialog import AccountDetailDialog
+
+        usage_log.record(self._data_dir, usage_log.ACCOUNT_VIEWED)
+        dialog = AccountDetailDialog(
+            self._data_dir, lambda: self._config, account_id, parent=self
+        )
+        # 창의 탭을 옮기는 것은 창의 일이다 - 대화상자가 직접 만지면 둘을
+        # 따로 옮길 수 없게 된다.
+        dialog.open_scan_requested.connect(self._show_account_in_scan_tab)
+        dialog.exec_()
+
+    def _show_account_in_scan_tab(self, account_id: str) -> None:
+        self._scan_tab.select_account(account_id)
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self._scan_page))
 
     def _account_id_at_row(self, row: int):
         """표의 행 번호로 계정 id를 찾는다 (정렬돼 있어도 안전)."""
