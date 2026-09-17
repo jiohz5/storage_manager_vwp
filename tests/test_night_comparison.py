@@ -27,7 +27,11 @@ class NightComparisonTests(unittest.TestCase):
         )
         self._original_language = i18n.get_language()
         i18n.set_language(i18n.KOREAN)
-        self.now = datetime(2026, 8, 22, 7, 0, tzinfo=timezone.utc)
+        # **실제 시계**에 맞춘다. `collect_night_loads` 는 "최근 N일" 을 진짜
+        # 지금으로 재므로, 날짜를 박아 두면 그날이 창 밖으로 밀려나는 날
+        # 시험이 조용히 깨진다 (실제로 그랬다 - 28일째 되는 날 밤 하나가
+        # 빠지면서 중앙값이 바뀌었다).
+        self.now = datetime.now(timezone.utc).replace(microsecond=0)
 
     def tearDown(self):
         i18n.set_language(self._original_language)
