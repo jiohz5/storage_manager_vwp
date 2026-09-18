@@ -62,22 +62,6 @@ def badge_cell(tier: str, pct: Optional[float]) -> QWidget:
     return container
 
 
-def badge_column_width(font_metrics) -> int:
-    """등급 열에 필요한 폭.
-
-    표의 `ResizeToContents`는 칸 위젯(배지)의 크기를 계산에 넣지 않는다.
-    그래서 가장 긴 등급 문구를 기준으로 직접 재서 열 폭을 정해 준다 - 이걸
-    안 하면 배지 글자가 잘린다."""
-
-    widest = 0
-    for tier in tiers.LABELS:
-        text = tier_badge_text(tier, 100.0)
-        widest = max(widest, font_metrics.width(text))
-    # 배지 좌우 padding(10*2) + 컨테이너 여백(6*2) + 여유
-    return widest + 20 + 12 + 10
-
-
-
 class NumericItem(QTableWidgetItem):
     """숫자로 정렬되는 표 항목.
 

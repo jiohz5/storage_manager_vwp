@@ -56,7 +56,10 @@ def check_modules(module_names: Sequence[str] = REQUIRED_MODULES) -> dict:
 
 def check_pyqt5() -> dict:
     try:
-        from PyQt5 import Qt as _qt  # type: ignore
+        import importlib
+
+        # 모듈 전체를 불러 봐야 빠진 조각(.so)까지 드러난다 - 쓰지는 않는다.
+        importlib.import_module("PyQt5.Qt")
         from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR  # type: ignore
     except ImportError as exc:
         return {"available": False, "error": str(exc)}

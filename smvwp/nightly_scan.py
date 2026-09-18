@@ -119,10 +119,6 @@ DEFAULT_LOCK_WAIT_SECONDS = 20 * 60
 LOCK_POLL_SECONDS = 20.0
 
 
-def _iso(dt: datetime) -> str:
-    return dt.isoformat()
-
-
 class _ActiveCounter:
     """지금 몇 개 계정이 동시에 돌고 있는지 세는 카운터.
 

@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 from . import notifications
 
@@ -136,6 +136,15 @@ def mark_all_read(data_dir: Path, max_age_days: int = 7) -> int:
     pending = list_pending(data_dir, max_age_days)
     mark_read(data_dir, [item.event_id for item in pending])
     return len(pending)
+
+
+# outbox 알림 파일을 얼마나 남겨 두는가.
+#
+# 팝업은 7일 넘은 것을 어차피 안 띄운다(`list_pending`). 그 뒤로는 "그때 무슨
+# 알림이 나갔나" 를 볼 때만 쓰이므로 한 달이면 충분하다. 임계값을 넘은 계정은
+# 15분마다 파일이 하나씩 생겨 한 달이면 계정당 3천 개에 가깝다 - 그대로 두면
+# 팝업을 확인할 때마다 NFS 위에서 그 전부를 읽는다.
+EVENT_RETENTION_DAYS = 30
 
 
 def prune_old_events(data_dir: Path, retention_days: int) -> int:

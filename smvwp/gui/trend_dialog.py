@@ -16,11 +16,9 @@
 
 from __future__ import annotations
 
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -32,7 +30,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, store, tiers, trend
-from ..scheduler import emit_safely
+from ..scheduler import ThreadWorker
 from .trend_view import TrendChart
 
 # 고를 수 있는 기간. 90일은 표본 보존 기간(`sample_retention_days`)과 맞춘다 -
@@ -40,51 +38,34 @@ from .trend_view import TrendChart
 RANGE_DAYS = (7, 30, 90)
 
 
-class _HistoryReader(QObject):
-    finished = pyqtSignal(object, object)   # (series, tier)
-    failed = pyqtSignal(str)
+class _HistoryReader(ThreadWorker):
+    """결과는 `(series, tier)`."""
+
+    THREAD_NAME = "smvwp-trend"
 
     def __init__(self, data_dir: Path, parent=None):
         super().__init__(parent)
         self._data_dir = data_dir
-        self._lock = threading.Lock()
-        self._running = False
 
     def run_async(self, account_id: str, days: int) -> bool:
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        threading.Thread(
-            target=self._run, args=(account_id, days), name="smvwp-trend", daemon=True
-        ).start()
-        return True
+        return self.start(account_id, days)
 
-    def _run(self, account_id: str, days: int) -> None:
-        conn = None
+    def _work(self, account_id: str, days: int):
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        conn = store.connect(self._data_dir)
         try:
-            since = datetime.now(timezone.utc) - timedelta(days=days)
-            conn = store.connect(self._data_dir)
             samples = store.samples_since(conn, account_id, since)
-            # 창을 명시해서 넘긴다. 안 그러면 표본이 하루치뿐일 때 그 하루가
-            # 화면을 꽉 채워 "90일 추세" 라며 하루를 보여 준다.
-            series = trend.build(
-                samples, since=since, until=datetime.now(timezone.utc)
-            )
-            tier = tiers.UNKNOWN
-            for sample in reversed(samples):
-                if sample.overall_tier and sample.overall_tier != tiers.UNKNOWN:
-                    tier = sample.overall_tier
-                    break
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-            return
         finally:
-            if conn is not None:
-                conn.close()
-            with self._lock:
-                self._running = False
-        emit_safely(self, "finished", series, tier)
+            conn.close()
+        # 창을 명시해서 넘긴다. 안 그러면 표본이 하루치뿐일 때 그 하루가
+        # 화면을 꽉 채워 "90일 추세" 라며 하루를 보여 준다.
+        series = trend.build(samples, since=since, until=datetime.now(timezone.utc))
+        tier = tiers.UNKNOWN
+        for sample in reversed(samples):
+            if sample.overall_tier and sample.overall_tier != tiers.UNKNOWN:
+                tier = sample.overall_tier
+                break
+        return series, tier
 
 
 class TrendDialog(QDialog):
@@ -97,7 +78,7 @@ class TrendDialog(QDialog):
         self.resize(860, 480)
 
         self._reader = _HistoryReader(data_dir, self)
-        self._reader.finished.connect(self._on_loaded)
+        self._reader.finished.connect(lambda result: self._on_loaded(*result))
         self._reader.failed.connect(self._on_failed)
 
         self._build_ui()

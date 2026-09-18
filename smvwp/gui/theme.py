@@ -77,7 +77,6 @@ FONT_SUBTITLE = 15  # 카드 안 소제목
 FONT_BODY = 14      # 본문·표
 FONT_CAPTION = 12   # 보조 설명·단위
 
-WEIGHT_REGULAR = "normal"
 WEIGHT_BOLD = "bold"
 WEIGHT_HEAVY = "900"  # -> ExtraBold
 

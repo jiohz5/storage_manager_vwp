@@ -247,7 +247,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(df 특성상 계정 단독 사용량이 아닙니다)."
         ),
         "dashboard.col.name": "이름",
-        "dashboard.col.path": "경로",
         "dashboard.col.size": "사용량 / 총 용량",
         "dashboard.tip.filesystem": "파일시스템: {value}",
         "dashboard.tip.mount": "마운트: {value}",
@@ -255,13 +254,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.tip.total": "총 용량: {value}",
         "dashboard.tip.free": "남은 용량: {value}",
         "dashboard.col.byte_pct": "용량 사용률",
-        "dashboard.col.inode_pct": "inode 사용률",
-        "dashboard.col.quota": "quota",
-        "dashboard.col.tier": "종합 등급",
         "dashboard.col.collected_at": "최근 수집",
-        "dashboard.col.status": "상태",
         "dashboard.col.kind": "성격",
-        "dashboard.waiting": "수집 대기 중...",
         "dashboard.collect_error_short": "수집 실패",
         "dashboard.list_title": "계정 목록",
         "dashboard.list_hint": "행을 두 번 누르면 그 계정의 모든 것을 한 창에서 봅니다",
@@ -282,7 +276,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.stat.attention": "주의 이상",
         "dashboard.stat.collected": "마지막 수집",
         "dashboard.not_collected": "아직 수집되지 않음",
-        "dashboard.collect_ok": "정상 수집",
         "dashboard.collect_failed": "수집 실패: {message}",
         "dashboard.collecting": "수집 중...",
         "dashboard.collected": "수집 완료 ({count}개 계정)",
@@ -300,20 +293,15 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "cron이 돌지 않아 GUI를 열 때만 수집되고 있을 수 있습니다 "
             "(확인: crontab -l)"
         ),
-        "freshness.notify_stale": (
-            "[수집 지연] {account} - 마지막 수집이 {age}입니다. 수집기가 멈췄는지 확인하세요."
-        ),
         # -- 메뉴 --------------------------------------------------
         "tab.home": "홈",
         "tab.scan": "상세 스캔",
         "menu.language": "언어",
-        "menu.file": "파일",
         # -- 상세 스캔 ---------------------------------------------
         "scan.headline.running": "실행 중",
         "scan.headline.running_pct": "실행 중 · {percent}%",
         "scan.headline.idle": "대기 중 · 지난 실행: {status}",
         "scan.headline.never": "대기 중 · 아직 실행한 적 없음",
-        "scan.status_loading": "스캔 상태 확인 중...",
         "scan.btn.run_now": "지금 상세 스캔 실행",
         "scan.btn.run_now_tooltip": (
             "시간창(22:00~06:00)과 무관하게 지금 실행합니다. 대상 파일시스템에 "
@@ -535,7 +523,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.current_target": "지금: {account} · {kind} · {path}",
         "scan.scanning_now": "상세 스캔 진행 중 · {path}",
         "progress.title": "상세 스캔 진행 상황",
-        "progress.kind.baseline": "용량 - 디렉터리마다 얼마인지",
         "progress.btn.refresh": "새로고침",
         "progress.summary": (
             "{generation} 스캔 · 완료 {done} / 대기 {pending} / 분할 {split} / "
@@ -549,7 +536,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.status.done": "완료",
         "progress.status.split": "분할됨",
         "progress.status.error": "실패",
-        "progress.changed": "변경 {count:,}개",
         "notify.urgent_prefix": "즉시 확인",
         "scan.new_path": "신규 (이전 스캔에 없음)",
         "scan.no_change": "변화 없음",
@@ -659,7 +645,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.remove_title": "계정 삭제",
         "accounts.remove_body": "'{name}' 계정을 목록에서 삭제할까요? (수집 이력은 남아 있습니다)",
         "accounts.save_failed": "저장 실패",
-        "accounts.global_settings": "전역 설정",
         "accounts.interval": "수집 주기",
         "accounts.cooldown": "알림 재발송 대기(cooldown)",
         "accounts.retention": "표본 보존 기간",
@@ -1006,7 +991,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "(df does not report per-account usage)."
         ),
         "dashboard.col.name": "Name",
-        "dashboard.col.path": "Path",
         "dashboard.col.size": "Used / Total",
         "dashboard.tip.filesystem": "Filesystem: {value}",
         "dashboard.tip.mount": "Mount: {value}",
@@ -1014,13 +998,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.tip.total": "Total: {value}",
         "dashboard.tip.free": "Free: {value}",
         "dashboard.col.byte_pct": "Capacity used",
-        "dashboard.col.inode_pct": "Inode used",
-        "dashboard.col.quota": "Quota",
-        "dashboard.col.tier": "Overall tier",
         "dashboard.col.collected_at": "Last collected",
-        "dashboard.col.status": "Status",
         "dashboard.col.kind": "Kind",
-        "dashboard.waiting": "Waiting for first collection...",
         "dashboard.collect_error_short": "collection failed",
         "dashboard.list_title": "Accounts",
         "dashboard.list_hint": "Double-click a row for everything about that account",
@@ -1041,7 +1020,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.stat.attention": "Warning+",
         "dashboard.stat.collected": "Last collected",
         "dashboard.not_collected": "Not collected yet",
-        "dashboard.collect_ok": "Collected",
         "dashboard.collect_failed": "Collection failed: {message}",
         "dashboard.collecting": "Collecting...",
         "dashboard.collected": "Collection done ({count} accounts)",
@@ -1059,21 +1037,15 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "last {hours}h. cron may not be running, so data is only collected when the "
             "GUI is open (check: crontab -l)"
         ),
-        "freshness.notify_stale": (
-            "[Collection stalled] {account} - last collected {age}. Check whether the "
-            "collector is still running."
-        ),
         # -- Menu --------------------------------------------------
         "tab.home": "Home",
         "tab.scan": "Detail scan",
         "menu.language": "Language",
-        "menu.file": "File",
         # -- Detail scan -------------------------------------------
         "scan.headline.running": "Running",
         "scan.headline.running_pct": "Running · {percent}%",
         "scan.headline.idle": "Idle · last run: {status}",
         "scan.headline.never": "Idle · never run",
-        "scan.status_loading": "Checking scan status...",
         "scan.btn.run_now": "Run detail scan now",
         "scan.btn.run_now_tooltip": (
             "Runs immediately regardless of the 22:00-06:00 window. This can load "
@@ -1303,7 +1275,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "scan.current_target": "Now: {account} - {kind} - {path}",
         "scan.scanning_now": "Detail scan running - {path}",
         "progress.title": "Detail scan progress",
-        "progress.kind.baseline": "Size - how much each directory holds",
         "progress.btn.refresh": "Refresh",
         "progress.summary": (
             "{generation} scan - done {done} / pending {pending} / split {split} / "
@@ -1317,7 +1288,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "progress.status.done": "Done",
         "progress.status.split": "Split",
         "progress.status.error": "Failed",
-        "progress.changed": "{count:,} changed",
         "notify.urgent_prefix": "Act now",
         "scan.new_path": "New (absent in previous scan)",
         "scan.no_change": "No change",
@@ -1432,7 +1402,6 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "accounts.remove_title": "Remove account",
         "accounts.remove_body": "Remove account '{name}' from the list? (collected history is kept)",
         "accounts.save_failed": "Save failed",
-        "accounts.global_settings": "Global settings",
         "accounts.interval": "Collection interval",
         "accounts.cooldown": "Notification cooldown",
         "accounts.retention": "Sample retention",

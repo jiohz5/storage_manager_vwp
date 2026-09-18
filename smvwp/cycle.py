@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List
 
 from . import collector, config as config_module, forecast_notify, notifications, reports
-from . import scan_store, servermon, store, usage_log
+from . import popup_queue, scan_store, servermon, store, usage_log
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,18 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
             immediate_pct=settings.immediate_notify_pct,
         )
     notifications.save_notify_state(data_dir, state)
+
+    # 오래된 알림 파일을 치운다.
+    #
+    # 치우는 함수(`prune_old_events`)는 처음부터 있었는데 **부르는 곳이
+    # 없었다.** 임계값을 넘은 계정은 15분마다 파일이 하나씩 생기므로 outbox 가
+    # 끝없이 자랐고, 팝업을 확인할 때마다 NFS 위에서 그 전부를 읽었다.
+    # 다른 보존 정리와 같은 자리(매 수집)에 둔다 - 치운 뒤에는 남은 것만
+    # 훑으므로 비용이 거의 없다.
+    try:
+        popup_queue.prune_old_events(data_dir, popup_queue.EVENT_RETENTION_DAYS)
+    except Exception:  # pragma: no cover - 정리 실패가 수집을 막으면 안 된다
+        logger.exception("오래된 알림 정리 실패 (수집 결과는 이미 저장됨)")
 
     # 예측/급증 알림은 수집이 끝난 뒤 별도로 처리한다. 여기서 실패해도 이미
     # 저장된 df 표본은 그대로 남아야 하므로 예외를 삼킨다 - 예측은 부가

@@ -452,9 +452,6 @@ class RepolishTests(unittest.TestCase):
         self.assertEqual(empty_calls, [], f"빈 setStyleSheet 호출: 줄 {empty_calls}")
 
 
-if __name__ == "__main__":  # pragma: no cover
-    unittest.main()
-
 HINT = (
     "작업 스레드에서 직접 emit 하면 창을 닫을 때 터진다. "
     "scheduler.emit_safely(self, 신호이름, ...) 를 쓸 것: "
@@ -542,6 +539,48 @@ class ThreadEmitTests(unittest.TestCase):
                 for call in self._bare_emits(node):
                     offenders.append(path.name + ":" + node.name + " -> " + call)
 
-        # 검사가 아무것도 못 찾으면 통과해도 뜻이 없다.
-        self.assertGreater(checked, 3, "스레드로 도는 메서드를 못 찾았다")
+        # 검사가 아무것도 못 찾으면 통과해도 뜻이 없다. 지금은 공통 바탕의
+        # 순환 하나와 스캔 탭의 cron 확인 하나다.
+        self.assertGreaterEqual(checked, 2, "스레드로 도는 메서드를 못 찾았다")
         self.assertEqual(offenders, [], HINT + "  ".join(offenders))
+
+    # 스레드를 직접 띄워도 되는 곳. 늘리려면 이유를 적을 것.
+    THREAD_OWNERS = {
+        # 공통 바탕 - 여기서만 신호가 나간다.
+        "ThreadWorker",
+        # `crontab -l` 결과를 값으로만 담아 두고 신호는 쏘지 않는다.
+        "ScanTab",
+    }
+
+    def test_threads_are_started_only_by_the_shared_worker(self):
+        """같은 스레드 코드가 아홉 군데에 복사돼 있었고, 복사본마다 달랐다.
+
+        그 차이가 두 번 사고가 됐다 (emit_safely 누락, 대시보드 요청 버림).
+        새 작업이 필요하면 `scheduler.ThreadWorker` 를 상속해 `_work` 만 쓴다."""
+
+        paths = sorted(GUI.glob("*.py")) + [GUI.parent / "scheduler.py"]
+        owners = set()
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                for call in ast.walk(node):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    func = call.func
+                    if isinstance(func, ast.Attribute) and func.attr == "Thread":
+                        owners.add(path.name + ":" + node.name)
+        strays = sorted(
+            owner for owner in owners
+            if owner.split(":", 1)[1] not in self.THREAD_OWNERS
+        )
+        self.assertEqual(
+            strays, [],
+            "스레드는 scheduler.ThreadWorker 를 상속해서 쓸 것: " + ", ".join(strays),
+        )
+        self.assertIn("scheduler.py:ThreadWorker", owners)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()

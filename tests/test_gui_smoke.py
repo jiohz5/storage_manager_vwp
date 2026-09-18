@@ -146,6 +146,27 @@ class MainWindowSmokeTests(_GuiCase):
         finally:
             i18n.set_language("ko")
 
+    def test_saving_the_account_dialog_is_recorded(self):
+        """계정 수가 언제 늘었나 - 이 도구가 자리를 잡는지 보여 주는 숫자다.
+
+        이름(`ACCOUNT_CHANGED`)은 정의만 되어 있고 한 번도 기록되지 않았다."""
+
+        from smvwp import usage_log
+
+        recorded = []
+        with patch("smvwp.gui.main_window.AccountDialog") as dialog, patch.object(
+            usage_log, "record", side_effect=lambda *a, **k: recorded.append((a, k))
+        ):
+            dialog.return_value.exec_.return_value = True
+            self.window._open_account_dialog()
+        actions = [args[1] for args, _ in recorded]
+        self.assertIn(usage_log.ACCOUNT_CHANGED, actions)
+        detail = next(
+            kwargs.get("detail") for args, kwargs in recorded
+            if args[1] == usage_log.ACCOUNT_CHANGED
+        )
+        self.assertEqual(detail, "2->2")
+
     def test_selecting_an_account_reaches_the_scan_tab(self):
         account = self.config.accounts[0]
         self.window._scan_tab.select_account(account.account_id)

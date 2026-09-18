@@ -345,10 +345,6 @@ class ProcessLoad:
     is_ours: bool = False
     blkio_percent: Optional[float] = None
 
-    @property
-    def rss_mb(self) -> float:
-        return self.rss_kb / 1024.0
-
 
 def diff(
     before: Dict[int, ProcInfo],

@@ -1034,8 +1034,16 @@ class MainWindow(QMainWindow):
     def _open_account_dialog(self) -> None:
         usage_log.record(self._data_dir, usage_log.ACCOUNTS_OPENED)
         dialog = AccountDialog(self._data_dir, self._config, parent=self)
+        before = len(self._config.accounts)
         if dialog.exec_():
             self._config = config_module.load_config(self._data_dir)
+            # 계정 수가 언제 어떻게 늘었나. "몇 명이 쓰나" 와 함께 이 도구가
+            # 자리를 잡는지 보여 주는 숫자다 - 이름은 정의만 되어 있고 한 번도
+            # 기록되지 않았다.
+            usage_log.record(
+                self._data_dir, usage_log.ACCOUNT_CHANGED,
+                detail=f"{before}->{len(self._config.accounts)}",
+            )
             i18n.set_language(self._config.settings.language)
             for code, action in self._language_actions.items():
                 action.setChecked(code == i18n.get_language())

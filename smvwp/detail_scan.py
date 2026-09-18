@@ -35,10 +35,6 @@ from typing import List, Optional
 from . import procio, scan_store, walker
 
 
-class DetailScanError(Exception):
-    pass
-
-
 _priority_prefix_cache: Optional[List[str]] = None
 
 # 우선순위 낮추기를 아예 끄고 싶을 때 쓰는 환경변수 (반입 장비에서 원인을
@@ -267,9 +263,6 @@ def run_du_tree(path: str, timeout_seconds: int, max_depth: int = 3) -> DuTreeOu
 
 ENGINE_DU = "du"
 ENGINE_PYTHON = "python"
-ENGINES = (ENGINE_DU, ENGINE_PYTHON)
-
-
 def measure_tree(
     path: str,
     timeout_seconds: int,

@@ -30,7 +30,7 @@ mtime에 기대지 않으므로 "안의 파일만 바뀌고 디렉터리 mtime�
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List
 
 # `*_run_*`의 실질적 의미는 "이름 어딘가에 _run_ 이 있다"이다. glob으로 쓰면
 # 양끝의 `*`가 빈 문자열도 받으므로 결국 부분 문자열 검사와 같다 - 그러면

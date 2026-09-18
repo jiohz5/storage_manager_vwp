@@ -59,43 +59,115 @@ def emit_safely(owner, signal_name: str, *payload) -> None:
         pass
 
 
-class CollectorWorker(QObject):
-    """한 번의 수집 사이클을 백그라운드 스레드에서 실행한다."""
+class ThreadWorker(QObject):
+    """작업 스레드에서 일 하나를 돌리고 결과를 신호로 돌려주는 바탕.
 
-    finished = pyqtSignal(list)  # List[store.SampleRecord]
+    ## 왜 한 곳에 모았나
+
+    "잠금 + 도는 중 표시 + daemon 스레드 + 신호" 가 아홉 군데에 복사돼 있었다.
+    복사본마다 조금씩 달랐고 그 차이가 사고가 됐다:
+
+    - 새 창을 만들 때마다 `emit_safely` 를 잊어, 창을 닫으면 터졌다.
+    - 대시보드 워커는 도는 중에 들어온 요청을 **버렸다.** 창을 열면 대시보드
+      읽기와 첫 수집이 함께 시작되는데, 수집이 먼저 끝나면 그 뒤의 새로고침이
+      버려져 표가 다음 수집(15분)까지 옛 값으로 남았다.
+    - 몇은 신호를 먼저 쏘고 표시를 나중에 풀어서, 결과를 받은 쪽이 곧바로
+      다시 요청하면 "아직 도는 중" 으로 버려질 수 있었다.
+
+    이제 스레드에서 신호가 나가는 곳은 **여기 한 군데뿐**이다. 하위 클래스는
+    `_work(*args)` 만 쓰면 된다.
+
+    ## 겹쳐 돌리지 않는다
+
+    도는 중에 들어온 요청은 기본적으로 건너뛴다 - 타이머로 자주 부르는 쪽은
+    쌓아 봐야 더 느려질 뿐이고, 다음 주기가 최신값을 다시 읽는다.
+
+    요청이 드문 쪽(`COALESCE = True`)은 버리지 않고 **마지막 요청 하나를**
+    기억해 두었다가, 지금 것이 끝나면 한 번 더 돈다. 요청이 몇 번 쌓여도 한
+    번만 더 돈다.
+    """
+
+    finished = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, data_dir: Path, get_config, parent: QObject = None):
+    THREAD_NAME = "smvwp-worker"
+    COALESCE = False
+
+    def __init__(self, parent: QObject = None):
         super().__init__(parent)
-        self._data_dir = data_dir
-        self._get_config = get_config
         self._lock = threading.Lock()
         self._running = False
+        self._pending = None
 
     def is_running(self) -> bool:
         with self._lock:
             return self._running
 
-    def run_once_async(self) -> None:
+    def start(self, *args) -> bool:
+        """일을 시작한다. 이미 돌고 있으면 False (COALESCE 면 끝난 뒤 한 번 더)."""
+
         with self._lock:
             if self._running:
-                return  # 이전 수집이 아직 끝나지 않았으면 겹쳐 돌리지 않는다.
+                if self.COALESCE:
+                    self._pending = args
+                return False
             self._running = True
-        thread = threading.Thread(target=self._run, daemon=True)
-        thread.start()
+        threading.Thread(
+            target=self._loop, args=(args,), name=self.THREAD_NAME, daemon=True
+        ).start()
+        return True
 
-    def _run(self) -> None:
+    def _work(self, *args):  # pragma: no cover - 하위 클래스가 채운다
+        raise NotImplementedError
+
+    def _compute(self, args):
         try:
-            records = run_collection_cycle(self._data_dir, self._get_config())
-            emit_safely(self, "finished", records)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-        finally:
+            return ("finished", self._work(*args))
+        except Exception as exc:  # 스레드 밖으로 새면 조용히 죽는다
+            return ("failed", str(exc))
+
+    def _loop(self, args) -> None:
+        while True:
+            outcome = self._compute(args)
+            # 표시를 **먼저** 푼다. 결과를 받은 쪽이 곧바로 다시 요청하면
+            # 받아 줘야 한다.
             with self._lock:
-                self._running = False
+                args, self._pending = self._pending, None
+                if args is None:
+                    self._running = False
+            emit_safely(self, *outcome)
+            if args is None:
+                return
+
+    def _run(self, *args) -> None:
+        """같은 스레드에서 한 번 돌린다.
+
+        시험이 쓴다 - 스레드를 기다리면 장비가 바쁠 때 결과가 들쭉날쭉해진다."""
+
+        emit_safely(self, *self._compute(args))
 
 
-class ScanStatusWorker(QObject):
+class CollectorWorker(ThreadWorker):
+    """한 번의 수집 사이클을 백그라운드 스레드에서 실행한다.
+
+    결과는 `List[store.SampleRecord]`. 이전 수집이 아직 끝나지 않았으면 겹쳐
+    돌리지 않는다."""
+
+    THREAD_NAME = "smvwp-collect"
+
+    def __init__(self, data_dir: Path, get_config, parent: QObject = None):
+        super().__init__(parent)
+        self._data_dir = data_dir
+        self._get_config = get_config
+
+    def run_once_async(self) -> bool:
+        return self.start()
+
+    def _work(self):
+        return run_collection_cycle(self._data_dir, self._get_config())
+
+
+class ScanStatusWorker(ThreadWorker):
     """스캔 상태 스냅샷을 **백그라운드 스레드에서** 읽는다.
 
     ## 왜 스레드로 빼는가
@@ -108,46 +180,27 @@ class ScanStatusWorker(QObject):
     ## 겹쳐 돌리지 않는다
 
     NFS가 느려 한 번이 5초를 넘기면 요청이 계속 쌓여 상황이 더 나빠진다.
-    이전 조회가 끝나지 않았으면 이번 차례는 그냥 건너뛴다 - 어차피 다음
-    주기에 최신값을 다시 읽는다.
+    이전 조회가 끝나지 않았으면 이번 차례는 그냥 건너뛴다 - 타이머가 곧 다시
+    부른다.
     """
 
-    finished = pyqtSignal(object)  # nightly_scan.StatusSnapshot
-    failed = pyqtSignal(str)
+    THREAD_NAME = "smvwp-scan-status"
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
-        self._lock = threading.Lock()
-        self._running = False
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._running
 
     def refresh_async(self) -> bool:
         """조회를 시작한다. 이미 돌고 있으면 False (건너뜀)."""
 
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        threading.Thread(target=self._run, daemon=True).start()
-        return True
+        return self.start()
 
-    def _run(self) -> None:
-        try:
-            snapshot = nightly_scan.get_status_snapshot(self._data_dir, self._get_config())
-            emit_safely(self, "finished", snapshot)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-        finally:
-            with self._lock:
-                self._running = False
+    def _work(self):
+        return nightly_scan.get_status_snapshot(self._data_dir, self._get_config())
 
 
-class DashboardWorker(QObject):
+class DashboardWorker(ThreadWorker):
     """대시보드 데이터를 **백그라운드 스레드에서** 읽는다.
 
     ## 왜 스레드로 빼는가
@@ -156,52 +209,29 @@ class DashboardWorker(QObject):
     쿼리 하나지만 그 뒤의 FULL 예측은 **계정마다 이력을 다시 훑어** 추세를
     맞춘다. 데이터 디렉터리가 NFS 위면 그 시간 동안 창이 통째로 멈춘다.
 
-    수집이 끝날 때마다(15분) 불리므로, 사용자는 15분마다 한 번씩 멈추는 창을
-    보게 된다. 스캔 상태 쪽은 이미 스레드로 뺐는데 여기만 남아 있었다.
+    ## 도는 중에 온 요청을 버리지 않는다
 
-    ## 겹쳐 돌리지 않는다
-
-    이전 계산이 안 끝났으면 이번 차례는 건너뛴다 - 쌓아 봐야 더 느려질 뿐이고,
-    어차피 다음 갱신이 최신값을 다시 읽는다.
+    스캔 상태와 달리 이쪽은 **타이머가 다시 불러 주지 않는다.** 수집이 끝날
+    때(15분)와 사람이 새로고침을 누를 때만 불린다. 그래서 버리면 그 값이 다음
+    수집까지 안 나온다 - 창을 열 때 실제로 그랬다 (대시보드 읽기가 도는 동안
+    첫 수집이 끝나 그 새로고침이 버려졌다).
     """
 
-    finished = pyqtSignal(object)  # DashboardData
-    failed = pyqtSignal(str)
+    THREAD_NAME = "smvwp-dashboard"
+    COALESCE = True
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
-        self._lock = threading.Lock()
-        self._running = False
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._running
 
     def refresh_async(self) -> bool:
-        """읽기를 시작한다. 이미 돌고 있으면 False (건너뜀)."""
+        """읽기를 시작한다. 이미 돌고 있으면 끝난 뒤 한 번 더 읽는다."""
 
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        threading.Thread(target=self._run, name="smvwp-dashboard", daemon=True).start()
-        return True
+        return self.start()
 
-    def _run(self) -> None:
-        try:
-            emit_safely(self, "finished", self._read())
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-        finally:
-            with self._lock:
-                self._running = False
-
-    def _read(self) -> dashboard.DashboardData:
-        # 읽는 방법 자체는 `dashboard` 에 있다 - 개발 PC 에 PyQt5 가 없어
-        # 이 파일은 임포트조차 안 되므로, 로직이 여기 있으면 영원히 시험
-        # 밖에 남는다.
+    def _work(self):
+        # 읽는 방법 자체는 `dashboard` 에 있다 - Qt 없이 시험할 수 있어야 한다.
         return dashboard.read_dashboard(self._data_dir, self._get_config())
 
 
@@ -237,11 +267,11 @@ class CollectorScheduler:
             self._timer.start(interval_seconds * 1000)
 
 
-class NightlyScanWorker(QObject):
-    """야간 상세 스캔(`du`/`find`)을 백그라운드 스레드에서 실행한다.
+class NightlyScanWorker(ThreadWorker):
+    """야간 상세 스캔을 백그라운드 스레드에서 실행한다.
 
     상세 스캔은 15분 수집과 달리 몇 시간까지도 이어질 수 있으므로 GUI 스레드
-    에서 절대 돌리면 안 된다. 중복 실행 방지는 이 클래스의 `_running` 플래그와
+    에서 절대 돌리면 안 된다. 중복 실행 방지는 이 워커의 도는 중 표시와
     `smvwp.scan_lock`의 파일 잠금 두 겹으로 막는다 - 앞의 것은 이 창 안에서,
     뒤의 것은 cron 등 다른 프로세스까지 포함해서.
 
@@ -249,45 +279,25 @@ class NightlyScanWorker(QObject):
     요청만 하고, 스캐너가 다음 체크포인트에서 스스로 멈춘다 (DESIGN.md 1부 2-4).
     """
 
-    finished = pyqtSignal(object)  # nightly_scan.RunSummary
-    failed = pyqtSignal(str)
+    THREAD_NAME = "smvwp-nightly-scan"
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
-        self._lock = threading.Lock()
-        self._running = False
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._running
 
     def run_async(self, bypass_window: bool = False) -> bool:
         """스캔을 시작한다. 이미 이 창에서 돌고 있으면 False."""
 
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        thread = threading.Thread(target=self._run, args=(bypass_window,), daemon=True)
-        thread.start()
-        return True
+        return self.start(bypass_window)
 
-    def _run(self, bypass_window: bool) -> None:
-        try:
-            summary = nightly_scan.run_nightly_scan(
-                self._data_dir,
-                self._get_config(),
-                triggered_by="gui",
-                bypass_window=bypass_window,
-            )
-            emit_safely(self, "finished", summary)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-        finally:
-            with self._lock:
-                self._running = False
+    def _work(self, bypass_window: bool):
+        return nightly_scan.run_nightly_scan(
+            self._data_dir,
+            self._get_config(),
+            triggered_by="gui",
+            bypass_window=bypass_window,
+        )
 
     def request_stop(self) -> bool:
         return nightly_scan.request_stop(self._data_dir)

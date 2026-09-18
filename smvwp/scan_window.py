@@ -13,7 +13,6 @@ DESIGN.md 2부 9절의 열린 질문 - "기존 22:00~06:00 시간창 정책을 �
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 from . import i18n
 

@@ -152,13 +152,11 @@ class ScanProgressDialog(QDialog):
                 status_item.setForeground(QColor(theme.TEXT_FAINT))
             self.table.setItem(index, COL_STATUS, status_item)
 
-            # 기준선은 크기, 활동 스캔은 변경 파일 수가 결과다.
-            if row["size_kb"] is not None:
-                result = formatting.format_kb(row["size_kb"])
-            elif row["changed_count"] is not None:
-                result = i18n.t("progress.changed", count=row["changed_count"])
-            else:
-                result = dash
+            result = (
+                formatting.format_kb(row["size_kb"])
+                if row["size_kb"] is not None
+                else dash
+            )
             result_item = QTableWidgetItem(result)
             result_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if result == dash:

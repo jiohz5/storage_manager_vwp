@@ -568,13 +568,9 @@ class ScanTab(QFrame):
         if not path:
             return ""
         account = config_module.find_account(self._get_config(), account_id) if account_id else None
-        kind_text = i18n.t(
-            "progress.kind.baseline"
-        )
         return i18n.t(
             "scan.current_target",
             account=account.name if account else i18n.t("common.none"),
-            kind=kind_text,
             path=path,
         )
 
@@ -602,7 +598,6 @@ class ScanTab(QFrame):
         )
         dialog.exec_()
     @staticmethod
-
     def _scan_failure_text(entry, account_name: str) -> str:
         """스캔에서 재지 못한 경로를 사유와 함께 몇 개 보여 준다.
 

@@ -9,10 +9,8 @@ PIN을 맞춰야 열린다. 다만 이것은 **화면 노출 제한**이지 보�
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -33,54 +31,36 @@ from PyQt5.QtWidgets import (
 from .. import admin_auth, config as config_module
 from .. import formatting
 from .. import i18n, search_index, tiers
-from ..scheduler import emit_safely
+from ..scheduler import ThreadWorker
 from .pin_dialog import PinChangeDialog
 
 
-class _IndexWorker(QObject):
-    finished = pyqtSignal(int)
-    failed = pyqtSignal(str)
+class _IndexWorker(ThreadWorker):
+    """계정 하나의 이름 색인을 만든다. 결과는 색인한 항목 수."""
+
+    THREAD_NAME = "smvwp-search-index"
 
     def __init__(self, data_dir: Path, parent=None):
         super().__init__(parent)
         self._data_dir = data_dir
-        self._lock = threading.Lock()
-        self._running = False
         self._stop = False
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._running
 
     def request_stop(self) -> None:
         self._stop = True
 
     def run_async(self, account_id: str, account_path: Path) -> bool:
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
+        if not self.is_running():
             self._stop = False
-        threading.Thread(
-            target=self._run, args=(account_id, account_path), daemon=True
-        ).start()
-        return True
+        return self.start(account_id, account_path)
 
-    def _run(self, account_id: str, account_path: Path) -> None:
-        conn = None
+    def _work(self, account_id: str, account_path: Path):
+        conn = search_index.connect(self._data_dir)
         try:
-            conn = search_index.connect(self._data_dir)
-            count = search_index.index_account(
+            return search_index.index_account(
                 conn, account_id, account_path, should_stop=lambda: self._stop
             )
-            emit_safely(self, "finished", count)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
         finally:
-            if conn is not None:
-                conn.close()
-            with self._lock:
-                self._running = False
+            conn.close()
 
 
 class SearchDialog(QDialog):

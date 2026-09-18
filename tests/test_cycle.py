@@ -69,6 +69,42 @@ class RunCollectionCycleTests(unittest.TestCase):
             self.assertEqual(len(called_accounts), 1)
             self.assertEqual(called_accounts[0].name, "enabled_acct")
 
+    @patch("smvwp.cycle.collector.collect_all")
+    def test_old_notification_files_are_cleaned_up(self, mock_collect_all):
+        """치우는 함수는 있었는데 부르는 곳이 없어 outbox 가 끝없이 자랐다.
+
+        임계값을 넘은 계정은 15분마다 파일이 하나씩 생긴다. 한 달이면 계정당
+        3천 개 가까이 되고, 팝업을 확인할 때마다 그 전부를 NFS 위에서 읽는다."""
+
+        from datetime import timedelta
+
+        from smvwp import notifications, popup_queue
+        from smvwp.config import Account
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            config = config_module.load_config(data_dir)
+            config_module.save_config(data_dir, config)
+
+            now = datetime.now(timezone.utc)
+            for name, age_days in (("old", popup_queue.EVENT_RETENTION_DAYS + 5), ("new", 1)):
+                moment = now - timedelta(days=age_days)
+                account = Account(name=name, path="/u/" + name, account_id=name)
+                sample = store.SampleRecord(
+                    account_id=name, collected_at=moment.isoformat(), ok=True,
+                    byte_pct=97.0, overall_tier=tiers.ALERT,
+                )
+                notifications.write_event(
+                    data_dir, notifications.build_event(account, sample, moment)
+                )
+
+            mock_collect_all.return_value = []
+            run_collection_cycle(data_dir, config)
+
+            left = list(notifications.outbox_dir(data_dir).glob("*.json"))
+            self.assertEqual(len(left), 1)
+            self.assertIn("new", left[0].read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

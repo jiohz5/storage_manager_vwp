@@ -19,10 +19,9 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QDialog,
@@ -42,7 +41,7 @@ from PyQt5.QtWidgets import (
 
 from .. import account_detail, config as config_module
 from .. import formatting, i18n, tiers
-from ..scheduler import emit_safely
+from ..scheduler import ThreadWorker
 from . import theme, widgets
 from .trend_view import TrendChart
 
@@ -56,38 +55,19 @@ HEALTH_COLUMN_KEYS = ("detail.health.col.task", "detail.health.col.status",
                       "detail.health.col.size", "detail.health.col.reclaim")
 
 
-class _DetailReader(QObject):
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
+class _DetailReader(ThreadWorker):
+    THREAD_NAME = "smvwp-account-detail"
 
     def __init__(self, data_dir: Path, get_config, parent=None):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
-        self._lock = threading.Lock()
-        self._running = False
 
     def run_async(self, account_id: str) -> bool:
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        threading.Thread(
-            target=self._run, args=(account_id,),
-            name="smvwp-account-detail", daemon=True,
-        ).start()
-        return True
+        return self.start(account_id)
 
-    def _run(self, account_id: str) -> None:
-        try:
-            detail = account_detail.read(self._data_dir, self._get_config(), account_id)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-            return
-        finally:
-            with self._lock:
-                self._running = False
-        emit_safely(self, "finished", detail)
+    def _work(self, account_id: str):
+        return account_detail.read(self._data_dir, self._get_config(), account_id)
 
 
 class AccountDetailDialog(QDialog):

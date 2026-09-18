@@ -22,11 +22,9 @@
 
 from __future__ import annotations
 
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -42,7 +40,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, loadreport, scan_store, tiers, usage_log
-from ..scheduler import emit_safely
+from ..scheduler import ThreadWorker
 from . import theme, widgets
 
 HOUR_COLUMNS = (
@@ -71,50 +69,32 @@ MOUNT_COLUMNS = (
 RANGE_DAYS = (7, 30, 90)
 
 
-class _LoadReader(QObject):
+class _LoadReader(ThreadWorker):
     """DB 읽기를 작업 스레드로 뺀다 (NFS 위라 왕복이 있다)."""
 
-    finished = pyqtSignal(object)
-    failed = pyqtSignal(str)
+    THREAD_NAME = "smvwp-load"
 
     def __init__(self, data_dir: Path, parent=None):
         super().__init__(parent)
         self._data_dir = data_dir
-        self._lock = threading.Lock()
-        self._running = False
 
     def run_async(self, days: int, by: str) -> bool:
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        threading.Thread(
-            target=self._run, args=(days, by), name="smvwp-load", daemon=True
-        ).start()
-        return True
+        return self.start(days, by)
 
-    def _run(self, days: int, by: str) -> None:
-        conn = None
+    def _work(self, days: int, by: str):
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        conn = scan_store.connect(self._data_dir)
         try:
-            since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-            conn = scan_store.connect(self._data_dir)
             samples = scan_store.server_samples(conn, since=since, limit=200000)
-            payload = {
+            return {
                 "samples": len(samples),
                 "split": loadreport.split_by_scan(samples),
                 "hours": loadreport.hourly_profile(samples),
                 "jobs": scan_store.busiest_processes(conn, since=since, by=by, limit=30),
                 "mounts": scan_store.mount_activity(conn, since=since),
             }
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-            return
         finally:
-            if conn is not None:
-                conn.close()
-            with self._lock:
-                self._running = False
-        emit_safely(self, "finished", payload)
+            conn.close()
 
 
 def _table(column_keys, height: int) -> QTableWidget:

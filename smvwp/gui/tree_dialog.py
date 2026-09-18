@@ -25,10 +25,9 @@
 
 from __future__ import annotations
 
-import threading
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -45,7 +44,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, scan_store, tiers, tree_view, usage_log
-from ..scheduler import emit_safely
+from ..scheduler import ThreadWorker
 from . import theme
 from .treemap_view import TreemapView
 
@@ -63,42 +62,28 @@ NODE_ROLE = Qt.UserRole
 LOADED_ROLE = Qt.UserRole + 1
 
 
-class _TreeLoader(QObject):
-    """DB 읽기를 작업 스레드로 뺀다."""
+class _TreeLoader(ThreadWorker):
+    """DB 읽기를 작업 스레드로 뺀다.
 
-    finished = pyqtSignal(object, object)   # (roots, 계정 총량 KB)
-    failed = pyqtSignal(str)
-    empty = pyqtSignal()
+    결과는 `(roots, 계정 총량 KB)`. 아직 끝난 스캔이 없으면 **None** - 빈
+    트리와 "아직 안 쟀다" 는 다른 이야기라 화면이 갈라 말한다."""
+
+    THREAD_NAME = "smvwp-tree"
 
     def __init__(self, data_dir: Path, parent=None):
         super().__init__(parent)
         self._data_dir = data_dir
-        self._lock = threading.Lock()
-        self._running = False
-
-    def is_running(self) -> bool:
-        with self._lock:
-            return self._running
 
     def run_async(self, account_id: str) -> bool:
-        with self._lock:
-            if self._running:
-                return False
-            self._running = True
-        threading.Thread(
-            target=self._run, args=(account_id,), name="smvwp-tree", daemon=True
-        ).start()
-        return True
+        return self.start(account_id)
 
-    def _run(self, account_id: str) -> None:
-        conn = None
+    def _work(self, account_id: str):
+        conn = scan_store.connect(self._data_dir)
         try:
-            conn = scan_store.connect(self._data_dir)
             state = scan_store.get_account_state(conn, account_id)
             generation = state.last_completed_generation
             if not generation:
-                emit_safely(self, "empty")
-                return
+                return None
             previous = generation - 1 if generation > 1 else None
 
             entries = [
@@ -106,8 +91,7 @@ class _TreeLoader(QObject):
                 for row in scan_store.tree_entries(conn, account_id, generation)
             ]
             if not entries:
-                emit_safely(self, "empty")
-                return
+                return None
             # 이전 세대가 없으면 **None** 을 넘긴다. 빈 목록으로 넘기면 모든
             # 경로가 "지난 스캔에 없던 것"으로 표시된다 - 비교할 스캔이 아예
             # 없는 것과 그때 없었던 것은 다른 이야기다.
@@ -121,14 +105,8 @@ class _TreeLoader(QObject):
                 conn, account_id, generation, previous
             )
             total = scan_store.measured_total_kb(conn, account_id, generation)
-        except Exception as exc:  # pragma: no cover - 방어적 처리
-            emit_safely(self, "failed", str(exc))
-            return
         finally:
-            if conn is not None:
-                conn.close()
-            with self._lock:
-                self._running = False
+            conn.close()
 
         roots = tree_view.build_tree(
             entries,
@@ -136,7 +114,7 @@ class _TreeLoader(QObject):
             large_files=large,
             account_total_kb=total,
         )
-        emit_safely(self, "finished", roots, total)
+        return roots, total
 
 
 class TreeDialog(QDialog):
@@ -151,9 +129,8 @@ class TreeDialog(QDialog):
         self.resize(940, 620)
 
         self._loader = _TreeLoader(data_dir, self)
-        self._loader.finished.connect(self._on_loaded)
+        self._loader.finished.connect(self._on_result)
         self._loader.failed.connect(self._on_failed)
-        self._loader.empty.connect(self._on_empty)
 
         self._build_ui()
         if account_id:
@@ -268,6 +245,12 @@ class TreeDialog(QDialog):
 
     def _on_failed(self, message: str) -> None:
         self.caption.setText(i18n.t("tree.failed", error=message))
+
+    def _on_result(self, result) -> None:
+        if result is None:
+            self._on_empty()
+        else:
+            self._on_loaded(*result)
 
     def _on_empty(self) -> None:
         """완료된 스캔이 없다.

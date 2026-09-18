@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS scan_checkpoints (
     depth INTEGER NOT NULL,
     status TEXT NOT NULL,
     size_kb INTEGER,
-    changed_count INTEGER,
+    changed_count INTEGER,   -- 없앤 활동 스캔이 쓰던 열. 기존 DB 호환 때문에 남긴다.
     error_message TEXT,
     scanned_at TEXT
 );
@@ -516,7 +516,7 @@ def recent_checkpoints(
     싶은 것은 "어디까지 했나"이고, 대기 목록은 그 다음이다."""
 
     return conn.execute(
-        "SELECT path, status, size_kb, changed_count, error_message, scanned_at "
+        "SELECT path, status, size_kb, error_message, scanned_at "
         "FROM scan_checkpoints WHERE account_id = ? AND kind = ? AND generation = ? "
         "ORDER BY (scanned_at IS NULL), scanned_at DESC, id LIMIT ?",
         (account_id, kind, generation, limit),
@@ -663,25 +663,20 @@ def next_pending(
     ).fetchone()
 
 
-def has_pending(conn: sqlite3.Connection, account_id: str, kind: str, generation: int) -> bool:
-    return next_pending(conn, account_id, kind, generation) is not None
-
-
 def mark_done(
     conn: sqlite3.Connection,
     checkpoint_id: int,
     *,
     size_kb: int = None,
-    changed_count: int = None,
     error_message: str = None,
 ) -> None:
     """완료 처리. `error_message`는 "값은 얻었지만 일부만 읽었다"는 부분 측정
     사유를 남길 때 쓴다 (권한 없는 하위 디렉터리 등)."""
 
     conn.execute(
-        "UPDATE scan_checkpoints SET status = 'done', size_kb = ?, changed_count = ?, "
+        "UPDATE scan_checkpoints SET status = 'done', size_kb = ?, "
         "error_message = ?, scanned_at = ? WHERE id = ?",
-        (size_kb, changed_count, error_message, utc_now_iso(), checkpoint_id),
+        (size_kb, error_message, utc_now_iso(), checkpoint_id),
     )
     conn.commit()
 
