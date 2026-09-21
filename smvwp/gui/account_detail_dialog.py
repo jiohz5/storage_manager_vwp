@@ -55,7 +55,7 @@ HEALTH_COLUMN_KEYS = ("detail.health.col.task", "detail.health.col.status",
                       "detail.health.col.size", "detail.health.col.reclaim")
 
 
-class _DetailReader(ThreadWorker):
+class DetailReader(ThreadWorker):
     THREAD_NAME = "smvwp-account-detail"
 
     def __init__(self, data_dir: Path, get_config, parent=None):
@@ -85,7 +85,7 @@ class AccountDetailDialog(QDialog):
         # 1080 세로에서도 들어가야 한다.
         self.resize(1000, 660)
 
-        self._reader = _DetailReader(data_dir, get_config, self)
+        self._reader = DetailReader(data_dir, get_config, self)
         self._reader.finished.connect(self._on_loaded)
         self._reader.failed.connect(self._on_failed)
 

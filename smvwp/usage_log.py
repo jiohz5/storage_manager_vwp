@@ -55,6 +55,9 @@ LOAD_VIEWED = "load.open"
 # 계정 하나를 파고든 것. "몇 명이 쓰는가" 만큼이나 "무엇을 보러 오는가" 가
 # 궁금하므로, 목록을 훑고 마는 것과 계정을 열어 보는 것을 갈라 센다.
 ACCOUNT_VIEWED = "account.detail"
+# "무엇부터 할까" 줄을 눌러 안내를 연 것. detail 에 종류(full, no_backup ...)를
+# 남긴다 - 어떤 경고가 실제로 사람을 움직이는지가 여기서 보인다.
+GUIDE_OPENED = "priority.open"
 
 # 기록을 얼마나 보관하는가.
 #

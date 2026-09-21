@@ -140,7 +140,8 @@ def build(
 ) -> Plan:
     """흩어진 사실들을 "무엇부터" 하나로 모은다.
 
-    - `samples` - 계정별 최신 df 표본 (`used_percent` 와 `account_id` 를 읽는다).
+    - `samples` - 계정별 최신 df 표본 (`store.SampleRecord` 의 `byte_pct`,
+      `ok`, `account_id` 를 읽는다).
     - `health_summary` - `health.check_all` 결과.
     - `scan_accounts` - `nightly_scan.StatusSnapshot.accounts`.
     - `accounts_by_id` - 계정 이름을 찾기 위한 `{id: 이름}`.
@@ -165,7 +166,13 @@ def build(
 
     # -- 1. 스토리지가 찼다 --------------------------------------------
     for sample in samples:
-        pct = getattr(sample, "used_percent", None)
+        # 수집이 실패한 표본의 숫자는 옛 값이거나 비어 있다 - 그걸로 "지금
+        # 찼다" 고 말하면 안 된다. 실패 자체는 홈 표의 '최근 수집' 칸이 말한다.
+        if getattr(sample, "ok", True) is False:
+            continue
+        # `store.SampleRecord` 의 이름은 `byte_pct` 다. 예전에는 없는 이름
+        # (`used_percent`)을 읽어서 이 줄이 운영에서 한 번도 뜨지 않았다.
+        pct = getattr(sample, "byte_pct", None)
         level = _usage_level(pct)
         if level is None:
             continue

@@ -1082,7 +1082,7 @@ class AccountDetailDialogTests(_GuiCase):
         super().setUp()
         # 읽기는 스레드에서 돈다 - 시험에서는 우리가 값을 직접 넣는다.
         patcher = patch(
-            "smvwp.gui.account_detail_dialog._DetailReader.run_async",
+            "smvwp.gui.account_detail_dialog.DetailReader.run_async",
             lambda self, account_id: True,
         )
         patcher.start()
@@ -1232,7 +1232,7 @@ class HomeToDetailTests(_GuiCase):
         with patch(
             "smvwp.gui.account_detail_dialog.AccountDetailDialog.exec_", fake_exec
         ), patch(
-            "smvwp.gui.account_detail_dialog._DetailReader.run_async",
+            "smvwp.gui.account_detail_dialog.DetailReader.run_async",
             lambda self, account_id: True,
         ):
             self.window.table.cellDoubleClicked.emit(0, 0)
@@ -1248,6 +1248,214 @@ class HomeToDetailTests(_GuiCase):
         self.assertEqual(
             self.window._scan_tab.scan_account_combo.currentData(), account.account_id
         )
+
+
+class PriorityClickTests(_GuiCase):
+    """'무엇부터 할까' 한 줄을 누르면 상황과 할 일이 뜬다.
+
+    커서를 올리면 줄이 반응하는데 눌러도 아무 일이 없었다 - 반응만 하고 아무
+    일이 없으면 고장으로 읽힌다."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.account = self.config.accounts[0]
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def plan(self):
+        from smvwp import priority
+
+        made = priority.Plan()
+        made.actions = [priority.Action(
+            kind=priority.ACT_FULL, level=priority.LEVEL_CRITICAL,
+            account=self.account.name, account_id=self.account.account_id,
+            pct=96.0, reclaimable_kb=800 * self.GB, count=3,
+        )]
+        made.accounts_without_scan = ["fresh"]
+        made.coarse_count = 2
+        return made
+
+    def click(self, row):
+        opened = []
+
+        def fake_exec(dialog):
+            opened.append(dialog)
+            return 0
+
+        with patch("smvwp.gui.action_dialog.ActionDialog.exec_", fake_exec), patch(
+            "smvwp.gui.account_detail_dialog.DetailReader.run_async",
+            lambda self, account_id: True,
+        ):
+            self.window._refresh_priority(self.plan())
+            item = self.window.priority_list.item(row)
+            self.window.priority_list.itemClicked.emit(item)
+        return opened
+
+    def test_clicking_an_action_opens_its_guide(self):
+        from smvwp import priority
+
+        opened = self.click(0)
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(opened[0].guide.kind, priority.ACT_FULL)
+        self.assertEqual(opened[0].guide.account_id, self.account.account_id)
+
+    def test_the_side_notes_are_clickable_too(self):
+        """'판단에 못 넣었다' 는 줄도 누르면 왜 그런지와 할 일이 나와야 한다."""
+
+        from smvwp import action_guide
+
+        kinds = [self.click(row)[0].guide.kind for row in (1, 2)]
+        self.assertEqual(
+            sorted(kinds), sorted([action_guide.KIND_COARSE, action_guide.KIND_UNSCANNED])
+        )
+
+    def test_the_list_says_its_lines_can_be_clicked(self):
+        from smvwp import i18n
+
+        self.window._refresh_priority(self.plan())
+        self.assertEqual(self.window.priority_hint.text(), i18n.t("priority.hint"))
+
+    def test_opening_a_guide_is_recorded(self):
+        """어떤 경고가 실제로 사람을 움직이는지 알고 싶다."""
+
+        from smvwp import priority, usage_log
+
+        recorded = []
+        with patch.object(
+            usage_log, "record", side_effect=lambda *a, **k: recorded.append((a, k))
+        ):
+            self.click(0)
+        self.assertIn(
+            (usage_log.GUIDE_OPENED, priority.ACT_FULL),
+            [(args[1], kwargs.get("detail")) for args, kwargs in recorded],
+        )
+
+
+class ActionDialogTests(_GuiCase):
+    """안내 창 자체 - 무엇이 보이고, 무엇을 누를 수 있나."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch(
+            "smvwp.gui.account_detail_dialog.DetailReader.run_async",
+            lambda self, account_id: True,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.account = self.config.accounts[0]
+
+    def dialog(self, action=None, guide=None):
+        from smvwp.gui.action_dialog import ActionDialog
+
+        made = ActionDialog(
+            self.data_dir, lambda: self.config, action=action, guide=guide
+        )
+        self.addCleanup(made.close)
+        made.show()
+        _app().processEvents()
+        return made
+
+    def full(self):
+        from smvwp import priority
+
+        return priority.Action(
+            kind=priority.ACT_FULL, level=priority.LEVEL_CRITICAL,
+            account=self.account.name, account_id=self.account.account_id,
+            pct=96.0, reclaimable_kb=300 * self.GB, count=1,
+        )
+
+    def detail(self):
+        from smvwp import account_detail, health
+
+        made = account_detail.AccountDetail(
+            self.account.account_id, self.account.name, self.account.path
+        )
+        made.health = [health.RunHealth(
+            self.account.account_id, self.account.name,
+            self.account.path + "/task/01_run", "task / 01_run",
+            run_size_kb=300 * self.GB, backup_size_kb=300 * self.GB,
+            mirror_path="/backup/task/01_run", mirror_size_kb=300 * self.GB,
+            status=health.BACKED_UP, match_by=health.MATCH_ITEMS,
+        )]
+        return made
+
+    def test_it_shows_the_level_and_the_same_sentence_as_the_list(self):
+        from smvwp import action_guide, i18n
+
+        action = self.full()
+        dialog = self.dialog(action=action)
+        self.assertEqual(dialog.level_chip.text(), i18n.t("guide.level.critical"))
+        self.assertEqual(dialog.headline.text(), action_guide.headline(action))
+
+    def test_steps_are_there_before_the_evidence_arrives(self):
+        from smvwp import i18n
+
+        dialog = self.dialog(action=self.full())
+        self.assertTrue(dialog.steps.text().startswith("1. "))
+        self.assertEqual(dialog.evidence_note.text(), i18n.t("guide.loading"))
+
+    def test_the_evidence_fills_in_when_it_arrives(self):
+        dialog = self.dialog(action=self.full())
+        dialog._on_detail(self.detail())
+        _app().processEvents()
+        self.assertEqual(dialog.evidence.rowCount(), 1)
+        self.assertEqual(dialog.evidence.item(0, 0).text(), "task / 01_run")
+        self.assertIn("du -sh", dialog.commands.toPlainText())
+
+    def test_copy_path_copies_the_selected_row(self):
+        from PyQt5.QtWidgets import QApplication
+
+        dialog = self.dialog(action=self.full())
+        dialog._on_detail(self.detail())
+        self.assertFalse(dialog.copy_path_btn.isEnabled(), "고른 줄이 없으면 복사할 것도 없다")
+        dialog.evidence.selectRow(0)
+        self.assertTrue(dialog.copy_path_btn.isEnabled())
+        dialog.copy_path_btn.click()
+        self.assertEqual(
+            QApplication.clipboard().text(), self.account.path + "/task/01_run"
+        )
+
+    def test_nothing_scrolls_sideways(self):
+        from PyQt5.QtWidgets import QAbstractScrollArea
+
+        dialog = self.dialog(action=self.full())
+        dialog._on_detail(self.detail())
+        _app().processEvents()
+        sideways = [
+            view.__class__.__name__ for view in dialog.findChildren(QAbstractScrollArea)
+            if view.isVisible() and view.horizontalScrollBar().isVisible()
+        ]
+        self.assertEqual(sideways, [])
+
+    def test_a_text_only_guide_folds_the_right_side_away(self):
+        """넓은 창 가운데 글만 떠 있으면 뭔가 빠진 화면으로 읽힌다."""
+
+        from smvwp import action_guide
+
+        dialog = self.dialog(guide=action_guide.for_unscanned(["fresh"]))
+        self.assertFalse(dialog.right_panel.isVisible())
+        self.assertTrue(dialog.scan_btn.isVisible())
+        self.assertFalse(dialog.copy_path_btn.isVisible())
+
+    def test_going_to_the_scan_tab_is_the_windows_job(self):
+        seen = []
+        dialog = self.dialog(action=self.full())
+        dialog.open_scan_requested.connect(seen.append)
+        dialog.scan_btn.click()
+        self.assertEqual(seen, [self.account.account_id])
+
+    def test_it_fits_a_1080_screen(self):
+        dialog = self.dialog(action=self.full())
+        self.assertLess(dialog.minimumSizeHint().height(), 700)
 
 
 if __name__ == "__main__":  # pragma: no cover

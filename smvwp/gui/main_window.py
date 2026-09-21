@@ -45,6 +45,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting
+from .. import action_guide
 from .. import priority
 from .. import usage_log
 from .. import (
@@ -276,6 +277,10 @@ class MainWindow(QMainWindow):
         self.priority_summary.setObjectName("muted")
         self.priority_summary.setWordWrap(True)
         priority_box.addWidget(self.priority_summary)
+        self.priority_hint = QLabel()
+        self.priority_hint.setObjectName("caption")
+        self.priority_hint.setWordWrap(True)
+        priority_box.addWidget(self.priority_hint)
         self.priority_list = QListWidget()
         self.priority_list.setObjectName("findings")
         self.priority_list.setFrameShape(QListWidget.NoFrame)
@@ -287,6 +292,10 @@ class MainWindow(QMainWindow):
         self.priority_list.setWordWrap(True)
         self.priority_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.priority_list.setResizeMode(QListWidget.Adjust)
+        # 줄을 누르면 상황과 할 일이 뜬다. 손 모양 커서와 안내 한 줄로
+        # 누를 수 있다는 것을 알린다 - 반응만 하고 아무 일이 없으면 고장으로 읽힌다.
+        self.priority_list.viewport().setCursor(Qt.PointingHandCursor)
+        self.priority_list.itemClicked.connect(self._on_priority_clicked)
         priority_box.addWidget(self.priority_list)
         left.addWidget(self.priority_card, 1)
 
@@ -622,6 +631,7 @@ class MainWindow(QMainWindow):
         아직 스캔이 안 돈 계정이 있으면 그 사실을 적는다."""
 
         self.priority_title.setText(i18n.t("priority.heading"))
+        self.priority_hint.setText(i18n.t("priority.hint"))
         self.priority_list.clear()
 
         if plan is None:
@@ -649,6 +659,7 @@ class MainWindow(QMainWindow):
                 item.setForeground(QColor(tiers.color(tiers.ALERT)))
             if action.path:
                 item.setToolTip(action.path)
+            item.setData(Qt.UserRole, action)
             self.priority_list.addItem(item)
 
         if getattr(plan, "coarse_count", 0):
@@ -658,6 +669,7 @@ class MainWindow(QMainWindow):
                 i18n.t("priority.coarse", count=plan.coarse_count)
             )
             note.setForeground(QColor(theme.TEXT_MUTED))
+            note.setData(Qt.UserRole, action_guide.for_coarse(plan.coarse_count))
             self.priority_list.addItem(note)
 
         if plan.accounts_without_scan:
@@ -671,53 +683,41 @@ class MainWindow(QMainWindow):
                 )
             )
             note.setForeground(QColor(theme.TEXT_MUTED))
+            note.setData(
+                Qt.UserRole, action_guide.for_unscanned(plan.accounts_without_scan)
+            )
             self.priority_list.addItem(note)
 
     def _priority_text(self, action) -> str:
-        """할 일 한 줄을 사람 문장으로."""
+        """할 일 한 줄을 사람 문장으로. 안내 창과 같은 문장을 쓴다."""
 
-        if action.kind == priority.ACT_FULL:
-            if action.reclaimable_kb:
-                # 문제와 해법을 한 줄에. 따로 두면 사람이 두 화면을 오가며
-                # 스스로 이어 붙여야 하고, 그러면 대개 안 한다.
-                return i18n.t(
-                    "priority.item.full_with_fix",
-                    account=action.account,
-                    pct=f"{action.pct:.0f}",
-                    freeable=formatting.format_kb(action.reclaimable_kb),
-                    count=action.count,
-                )
-            return i18n.t(
-                "priority.item.full",
-                account=action.account, pct=f"{action.pct:.0f}",
+        return action_guide.headline(action)
+
+    def _on_priority_clicked(self, item) -> None:
+        """한 줄을 누르면 그 상황과 할 일을 자세히 보여 준다.
+
+        커서를 올리면 줄이 반응하는데 눌러도 아무 일이 없었다 - 사람은 거기서
+        "그래서 뭘 하라는 거지" 를 묻는다."""
+
+        data = item.data(Qt.UserRole)
+        if data is None:
+            return
+        from .action_dialog import ActionDialog
+
+        if isinstance(data, action_guide.Guide):
+            dialog = ActionDialog(
+                self._data_dir, lambda: self._config, guide=data, parent=self
             )
-        if action.kind == priority.ACT_NO_BACKUP:
-            return i18n.t(
-                "priority.item.no_backup",
-                account=action.account, count=action.count,
-                size=formatting.format_kb(action.size_kb),
+            kind = data.kind
+        else:
+            dialog = ActionDialog(
+                self._data_dir, lambda: self._config, action=data, parent=self
             )
-        if action.kind == priority.ACT_CLEANUP:
-            return i18n.t(
-                "priority.item.cleanup",
-                account=action.account,
-                freeable=formatting.format_kb(action.reclaimable_kb),
-                count=action.count,
-            )
-        if action.kind == priority.ACT_BIG_FILE:
-            return i18n.t(
-                "priority.item.big_file",
-                account=action.account,
-                name=action.path.rsplit("/", 1)[-1],
-                size=formatting.format_kb(action.size_kb),
-                pct=f"{action.pct:.0f}" if action.pct is not None else "-",
-            )
-        return i18n.t(
-            "priority.item.surge",
-            account=action.account,
-            delta=formatting.format_kb_delta(action.delta_kb),
-            total=formatting.format_kb(action.size_kb),
-        )
+            kind = data.kind
+        usage_log.record(self._data_dir, usage_log.GUIDE_OPENED, detail=kind)
+        dialog.open_scan_requested.connect(self._show_account_in_scan_tab)
+        dialog.status_message.connect(self.status_bar_label.setText)
+        dialog.exec_()
 
     def _refresh_table_from_store(self) -> None:
         """대시보드 데이터를 **요청만** 한다. 실제 읽기는 백그라운드에서 돈다.

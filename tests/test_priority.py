@@ -18,15 +18,22 @@ import unittest
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from smvwp import health, priority
+from smvwp import health, priority, store
 
 GB = 1024 * 1024
 
 
-@dataclass
-class FakeSample:
-    account_id: str = "a1"
-    used_percent: Optional[float] = None
+def FakeSample(account_id="a1", used_percent=None, ok=True):  # noqa: N802
+    """**진짜 표본 레코드**를 만든다.
+
+    예전에는 가짜 클래스에 `used_percent` 를 달아 썼는데, 진짜 레코드의 이름은
+    `byte_pct` 다. 코드와 시험이 같은 틀린 이름을 봐서 시험은 통과했고, 운영에서는
+    "스토리지가 찼다" 줄이 **한 번도 뜨지 않았다.** 가짜를 쓰면 같은 일이 또 난다."""
+
+    return store.SampleRecord(
+        account_id=account_id, collected_at="2026-09-20T00:00:00+00:00",
+        ok=ok, byte_pct=used_percent,
+    )
 
 
 @dataclass
@@ -80,6 +87,12 @@ class UsageTests(unittest.TestCase):
         """사용률을 모르는 것을 '괜찮다'로도 '문제'로도 쓰면 안 된다."""
 
         plan = priority.build(samples=[FakeSample(used_percent=None)])
+        self.assertEqual(plan.actions, [])
+
+    def test_a_failed_collection_is_not_called_full(self):
+        """실패한 수집의 숫자는 옛 값이다 - 그걸로 "지금 찼다" 고 하면 안 된다."""
+
+        plan = priority.build(samples=[FakeSample(used_percent=99.0, ok=False)])
         self.assertEqual(plan.actions, [])
 
 

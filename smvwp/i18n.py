@@ -111,6 +111,146 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "선이 끊긴 곳은 그때 수집기가 돌지 않은 것입니다 - 이어 그으면 없는 값을 "
             "있는 것처럼 보여주게 되므로 끊어 둡니다."
         ),
+        # -- 무엇부터 할까: 줄을 눌렀을 때의 안내 -------------------
+        "priority.hint": "줄을 누르면 지금 상황과 할 일을 자세히 봅니다",
+        "guide.title": "{account} - 무엇을 하면 되나",
+        "guide.title_general": "무엇을 하면 되나",
+        "guide.level.critical": "지금 조치",
+        "guide.level.high": "오늘 안에",
+        "guide.level.medium": "알아 두기",
+        "guide.section.situation": "지금 상황",
+        "guide.section.why": "왜 먼저인가",
+        "guide.section.steps": "무엇을 하면 되나",
+        "guide.section.commands": "확인 명령 - 읽기만 하는 명령입니다",
+        "guide.loading": "근거를 읽는 중...",
+        "guide.no_evidence": "보여 줄 근거가 아직 없습니다 (야간 상세 스캔이 한 번 돌아야 채워집니다).",
+        "guide.never_deletes": "이 도구는 파일을 지우지 않습니다. 정리는 과제 담당자에게 요청하세요.",
+        "guide.btn.copy_commands": "명령 복사",
+        "guide.btn.copy_path": "경로 복사",
+        "guide.btn.account": "계정 상세",
+        "guide.btn.scan": "상세 스캔으로",
+        "guide.copied": "복사했습니다: {text}",
+        "guide.partial": "{parts}을(를) 읽지 못해 근거가 일부 비어 있습니다.",
+        "guide.more": " 외 {count}개",
+        "guide.coarse_warning": (
+            "이 중 일부는 BACKUP 폴더 안쪽을 못 보고 run 폴더 이름과 크기로만 대조했습니다. "
+            "정리를 요청하기 전에 백업 쪽을 한 번 열어 보세요."
+        ),
+        "guide.col.task": "과제 / 실행",
+        "guide.col.reclaim": "정리하면",
+        "guide.col.backup_size": "백업 쪽 크기",
+        "guide.col.backup_at": "백업 위치",
+        "guide.col.path": "경로",
+        "guide.col.size": "크기",
+        "guide.col.delta": "지난 스캔 대비",
+        "guide.col.status": "백업",
+        "guide.col.missing": "백업에 없는 항목",
+        "guide.col.file": "파일",
+        "guide.col.share": "계정 비중",
+        "guide.evidence.cleanup": "정리 후보 - 백업 계정에 같은 이름·크기로 있는 것이 확인된 과제",
+        "guide.evidence.where": "어디가 많이 차지하나 - 지난 스캔 대비 많이 는 경로",
+        "guide.evidence.no_backup": "백업이 확인되지 않은 과제",
+        "guide.evidence.big_file": "이 계정의 큰 파일 (주황색이 이 줄의 파일)",
+        "guide.evidence.surge": "어디서 늘었나 - 지난 스캔 대비 많이 는 경로",
+        "guide.full.situation": "{account} 이(가) 속한 스토리지가 {pct}% 찼습니다.",
+        "guide.full.numbers": "사용 {used} · 남은 {free}",
+        "guide.full.forecast": "지금 속도면 FULL 까지: {forecast}",
+        "guide.full.why_now": (
+            "100% 가 되면 이 스토리지를 쓰는 모든 작업의 쓰기가 실패합니다. 저장하던 "
+            "레이아웃과 돌던 시뮬레이션이 중간에 깨지고, 같은 스토리지를 쓰는 다른 "
+            "계정도 함께 막힙니다. 그래서 목록 맨 위에 둡니다."
+        ),
+        "guide.full.why_soon": (
+            "아직 급하지는 않지만 경고 구간입니다. 여유가 있을 때 비워 두면 "
+            "급할 때 서두르다 실수할 일이 줄어듭니다."
+        ),
+        "guide.full.fix.step1": (
+            "아래 정리 후보 {count}개(합계 {freeable})는 백업 계정에 같은 이름·크기로 "
+            "있는 것이 확인된 과제입니다. 큰 것부터 과제 담당자에게 정리를 요청하세요."
+        ),
+        "guide.full.fix.step2": (
+            "요청하기 전에 확인 명령으로 원본과 백업 쪽 크기를 한 번 비교해 보세요."
+        ),
+        "guide.full.fix.step3": "정리가 끝나면 홈의 `새로고침`을 누르면 사용률이 바로 바뀝니다.",
+        "guide.full.nofix.step1": (
+            "아래 목록에서 많이 늘어난 곳을 보고, 그 경로의 담당자에게 정리할 수 있는지 "
+            "물어보세요. 더 자세히는 `계정 상세`의 큰 파일·증가 경로에 있습니다."
+        ),
+        "guide.full.nofix.step2": (
+            "정리 후보가 안 나오는 흔한 이유는 백업 계정이 연결되지 않은 것입니다. "
+            "`계정 관리`에서 이 계정의 백업 계정을 연결하면 다음 스캔부터 후보가 나옵니다."
+        ),
+        "guide.full.nofix.step3": (
+            "당장 비울 것이 없으면 스토리지 관리자에게 용량 증설이나 쿼터 조정을 요청하세요."
+        ),
+        "guide.no_backup.situation": (
+            "{account} 에서 BACKUP 단계까지 간 과제 {count}개({size})가 연결된 백업 "
+            "계정({backup})에서 확인되지 않았습니다."
+        ),
+        "guide.no_backup.why": (
+            "이 과제들은 사본이 한 벌뿐입니다. 실수로 지우거나 스토리지에 문제가 생기면 "
+            "되살릴 곳이 없습니다. 용량 문제가 아니라 잃을 위험이라 높게 둡니다."
+        ),
+        "guide.no_backup.step1": (
+            "아래 '백업에 없는 항목'이 백업 계정에서 찾지 못한 폴더 이름입니다. "
+            "백업 담당자에게 복사가 됐는지 확인하세요."
+        ),
+        "guide.no_backup.step2": (
+            "'일부만'은 백업 쪽 크기가 원본의 95% 에 못 미치는 것입니다 - 복사가 도중에 "
+            "끊겼을 수 있습니다."
+        ),
+        "guide.no_backup.step3": "백업이 확인될 때까지 이 과제들은 정리 대상에서 빼세요.",
+        "guide.no_backup.step4": "백업을 마친 뒤 다음 야간 스캔이 돌면 이 줄은 저절로 사라집니다.",
+        "guide.cleanup.situation": (
+            "{account} 에 백업이 확인된 과제 {count}개가 있습니다. 정리하면 {freeable} 이(가) 빕니다."
+        ),
+        "guide.cleanup.why": (
+            "스토리지가 급하지는 않지만, 이미 백업된 과제가 원본 자리를 차지하고 있습니다. "
+            "여유 있을 때 정리해 두면 급할 때 서두르지 않아도 됩니다."
+        ),
+        "guide.cleanup.step1": (
+            "아래 목록은 BACKUP 안의 폴더들이 백업 계정에 같은 이름·비슷한 크기(95% 이상)로 "
+            "있는 과제입니다."
+        ),
+        "guide.cleanup.step2": "과제 담당자에게 원본을 정리해도 되는지 확인하세요.",
+        "guide.cleanup.step3": "요청하기 전에 확인 명령으로 원본과 백업 쪽 크기를 비교해 보세요.",
+        "guide.big_file.situation": "{name} 파일 하나가 {size} 로 계정 전체의 {pct}% 를 차지합니다.",
+        "guide.big_file.grew": "지난 스캔보다 {delta} 커졌습니다.",
+        "guide.big_file.new": "지난 스캔의 큰 파일 목록에는 없던 파일입니다.",
+        "guide.big_file.why": (
+            "파일 하나가 계정을 이만큼 차지하면 대개 의도치 않게 커진 것입니다 - 끝나지 않은 "
+            "시뮬레이션 출력, 남겨 둔 코어 덤프나 로그 같은 것들입니다. 하나만 정리해도 효과가 큽니다."
+        ),
+        "guide.big_file.step1": "확인 명령으로 파일 주인과 마지막 수정 시각을 보세요.",
+        "guide.big_file.step2": (
+            "수정 시각이 방금이면 돌고 있는 작업이 계속 키우는 중일 수 있습니다 - 주인에게 알리세요."
+        ),
+        "guide.big_file.step3": "필요 없는 파일이면 주인에게 정리를 요청하세요.",
+        "guide.surge.situation": "{account} 이(가) 지난 스캔보다 {delta} 늘었습니다 (지금 {total}).",
+        "guide.surge.why": (
+            "하룻밤 사이 이만큼 늘면 대개 특정 작업 하나 때문입니다. 이 속도가 이어지면 "
+            "FULL 이 그만큼 앞당겨집니다."
+        ),
+        "guide.surge.step1": "아래 목록에서 어디가 늘었는지 보세요.",
+        "guide.surge.step2": "예정된 작업(새 과제 시작, 대량 시뮬레이션)이면 괜찮습니다.",
+        "guide.surge.step3": "예상 밖이면 그 경로의 담당자에게 무엇이 쌓이는지 물어보세요.",
+        "guide.unscanned.situation": "상세 스캔이 한 번도 끝나지 않은 계정: {names}",
+        "guide.unscanned.why": (
+            "정리 후보·큰 파일·급증은 야간 상세 스캔 결과로만 알 수 있습니다. 이 계정들에 "
+            "대해 목록이 비어 있는 것은 '문제 없음'이 아니라 '아직 모름'입니다."
+        ),
+        "guide.unscanned.step1": "`상세 스캔` 탭에서 cron 등록 상태를 확인하세요 (빨간 글씨면 밤에 안 돕니다).",
+        "guide.unscanned.step2": "계정이 크면 한 밤에 다 못 돌 수 있습니다 - `계정별` 탭의 진행률을 보세요.",
+        "guide.unscanned.step3": "급하면 `지금 상세 스캔 실행`으로 바로 돌릴 수 있습니다.",
+        "guide.coarse.situation": "과제 {count}개는 BACKUP 폴더 안쪽을 못 보고 판정했습니다.",
+        "guide.coarse.why": (
+            "스캔 깊이가 3이면 BACKUP 폴더까지만 기록되고 그 안의 폴더 이름은 모릅니다. "
+            "그래서 run 폴더 이름과 전체 크기로만 비교했습니다 - '확인됨'이 실제보다 "
+            "강하게 읽힐 수 있습니다."
+        ),
+        "guide.coarse.step1": "`계정 관리` → 설정에서 스캔 깊이를 4로 올리세요.",
+        "guide.coarse.step2": "다음 야간 스캔부터 BACKUP 안의 폴더 이름까지 하나하나 대조합니다.",
+        "guide.coarse.step3": "그 전까지는 정리를 요청하기 전에 백업 쪽을 직접 열어 확인하세요.",
         "priority.heading": "무엇부터 할까",
         "priority.summary": "할 일 {count}건 · 지금 조치 {critical}건 · 정리하면 {freeable} 빕니다",
         "priority.nothing": "지금 먼저 손댈 것이 없습니다.",
@@ -854,6 +994,125 @@ _CATALOG: Dict[str, Dict[str, str]] = {
             "A break in the line means the collector was not running then - joining it "
             "up would show values we do not have."
         ),
+        # -- What to do first: guide shown on click -------------------
+        "priority.hint": "Click a line to see the situation and what to do",
+        "guide.title": "{account} - what to do",
+        "guide.title_general": "What to do",
+        "guide.level.critical": "Act now",
+        "guide.level.high": "Today",
+        "guide.level.medium": "Good to know",
+        "guide.section.situation": "Situation",
+        "guide.section.why": "Why it comes first",
+        "guide.section.steps": "What to do",
+        "guide.section.commands": "Check commands - read-only",
+        "guide.loading": "Reading the evidence...",
+        "guide.no_evidence": "No evidence yet (one nightly detail scan fills this in).",
+        "guide.never_deletes": "This tool never deletes files. Ask the task owner to clean up.",
+        "guide.btn.copy_commands": "Copy commands",
+        "guide.btn.copy_path": "Copy path",
+        "guide.btn.account": "Account detail",
+        "guide.btn.scan": "Go to detail scan",
+        "guide.copied": "Copied: {text}",
+        "guide.partial": "Could not read {parts}; some evidence is missing.",
+        "guide.more": " and {count} more",
+        "guide.coarse_warning": (
+            "Some of these were matched by run folder name and size only, without seeing "
+            "inside BACKUP. Open the backup side once before asking for a cleanup."
+        ),
+        "guide.col.task": "Task / run",
+        "guide.col.reclaim": "Frees",
+        "guide.col.backup_size": "Backup size",
+        "guide.col.backup_at": "Backup location",
+        "guide.col.path": "Path",
+        "guide.col.size": "Size",
+        "guide.col.delta": "vs previous scan",
+        "guide.col.status": "Backup",
+        "guide.col.missing": "Missing from backup",
+        "guide.col.file": "File",
+        "guide.col.share": "Share",
+        "guide.evidence.cleanup": "Cleanup candidates - found in the backup account with the same names and sizes",
+        "guide.evidence.where": "What takes the space - paths that grew most",
+        "guide.evidence.no_backup": "Tasks without a confirmed backup",
+        "guide.evidence.big_file": "Large files in this account (orange is the one on this line)",
+        "guide.evidence.surge": "Where it grew - paths that grew most",
+        "guide.full.situation": "The storage holding {account} is {pct}% full.",
+        "guide.full.numbers": "Used {used} · free {free}",
+        "guide.full.forecast": "At the current rate, FULL in: {forecast}",
+        "guide.full.why_now": (
+            "At 100% every write to this storage fails. Layouts being saved and running "
+            "simulations break halfway, and other accounts on the same storage are "
+            "blocked too. That is why it is at the top."
+        ),
+        "guide.full.why_soon": (
+            "Not urgent yet, but in the warning range. Freeing space while there is time "
+            "avoids rushed mistakes later."
+        ),
+        "guide.full.fix.step1": (
+            "The {count} candidates below ({freeable} in total) are confirmed in the backup "
+            "account with the same names and sizes. Ask the task owners, biggest first."
+        ),
+        "guide.full.fix.step2": "Before asking, compare the original and backup sizes with the check commands.",
+        "guide.full.fix.step3": "After the cleanup, press Refresh on the home screen to see the new usage.",
+        "guide.full.nofix.step1": (
+            "Look at the paths that grew most below and ask their owners what can go. "
+            "Account detail has the large files and growth paths."
+        ),
+        "guide.full.nofix.step2": (
+            "The usual reason for no candidates is a missing backup link. Link a backup "
+            "account in Account settings and the next scan will find candidates."
+        ),
+        "guide.full.nofix.step3": "If nothing can be freed now, ask the storage admin for more space or a quota change.",
+        "guide.no_backup.situation": (
+            "{count} tasks in {account} that reached the BACKUP stage ({size}) were not found "
+            "in the linked backup account ({backup})."
+        ),
+        "guide.no_backup.why": (
+            "These tasks exist in one copy only. If they are deleted by mistake or the storage "
+            "fails, there is nothing to restore from. It is a loss risk, not a space problem."
+        ),
+        "guide.no_backup.step1": "'Missing from backup' lists folder names not found in the backup account. Check with whoever runs the backup.",
+        "guide.no_backup.step2": "'partial' means the backup is under 95% of the original - the copy may have been cut off.",
+        "guide.no_backup.step3": "Keep these tasks out of any cleanup until the backup is confirmed.",
+        "guide.no_backup.step4": "Once backed up, this line disappears after the next nightly scan.",
+        "guide.cleanup.situation": "{account} has {count} tasks with a confirmed backup. Cleaning them up frees {freeable}.",
+        "guide.cleanup.why": (
+            "The storage is not urgent, but backed-up tasks still hold their original space. "
+            "Cleaning up early avoids rushing later."
+        ),
+        "guide.cleanup.step1": "These tasks have their BACKUP folders in the backup account with the same names and 95%+ of the size.",
+        "guide.cleanup.step2": "Ask the task owners whether the originals can be removed.",
+        "guide.cleanup.step3": "Before asking, compare the original and backup sizes with the check commands.",
+        "guide.big_file.situation": "One file, {name}, is {size} - {pct}% of the whole account.",
+        "guide.big_file.grew": "It grew {delta} since the previous scan.",
+        "guide.big_file.new": "It was not on the previous scan's large-file list.",
+        "guide.big_file.why": (
+            "A single file this big is usually an accident - unfinished simulation output, a "
+            "leftover core dump or log. Cleaning up one file makes a big difference."
+        ),
+        "guide.big_file.step1": "Use the check commands to see the owner and last modified time.",
+        "guide.big_file.step2": "If it was modified just now, a running job may still be growing it - tell the owner.",
+        "guide.big_file.step3": "If it is not needed, ask the owner to clean it up.",
+        "guide.surge.situation": "{account} grew {delta} since the previous scan (now {total}).",
+        "guide.surge.why": "Growth this fast overnight usually comes from one job. If it continues, FULL comes that much sooner.",
+        "guide.surge.step1": "See below where it grew.",
+        "guide.surge.step2": "If it is planned (a new task, a big simulation batch), that is fine.",
+        "guide.surge.step3": "If not, ask the owner of that path what is piling up.",
+        "guide.unscanned.situation": "Accounts with no finished detail scan: {names}",
+        "guide.unscanned.why": (
+            "Cleanup candidates, large files and surges only come from the nightly detail scan. "
+            "An empty list for these accounts means 'unknown', not 'fine'."
+        ),
+        "guide.unscanned.step1": "Check the cron status on the Detail scan tab (red means it does not run at night).",
+        "guide.unscanned.step2": "Large accounts may need more than one night - see progress on the By account tab.",
+        "guide.unscanned.step3": "If urgent, use Run detail scan now.",
+        "guide.coarse.situation": "{count} tasks were judged without seeing inside the BACKUP folder.",
+        "guide.coarse.why": (
+            "At scan depth 3 only the BACKUP folder itself is recorded, not the folders inside it. "
+            "They were matched by run folder name and total size only, so 'confirmed' may read stronger than it is."
+        ),
+        "guide.coarse.step1": "Raise the scan depth to 4 in Account settings.",
+        "guide.coarse.step2": "From the next nightly scan, folders inside BACKUP are matched one by one.",
+        "guide.coarse.step3": "Until then, open the backup side yourself before asking for a cleanup.",
         "priority.heading": "What to do first",
         "priority.summary": "{count} things - {critical} need action now - {freeable} could be freed",
         "priority.nothing": "Nothing needs attention first right now.",
