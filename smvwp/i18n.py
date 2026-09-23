@@ -257,6 +257,28 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "priority.unavailable": "우선순위를 계산하지 못했습니다. 아래 표는 그대로 볼 수 있습니다.",
         "priority.unscanned": "아직 상세 스캔이 끝나지 않은 계정 {count}개는 판단에 넣지 못했습니다 ({names})",
         "priority.coarse": "과제 {count}개는 BACKUP 안쪽까지 못 보고 판정했습니다 (설정의 `스캔 깊이`를 4로 올리면 정확해집니다)",
+        "priority.item.full_shared_with_fix": (
+            "{mount} · 계정 {accounts}개 {pct}% - 정리하면 {freeable} 빕니다 (백업 확인된 과제 {count}개)"
+        ),
+        "priority.item.full_shared": (
+            "{mount} · 계정 {accounts}개 {pct}% - 비울 수 있는 것을 아직 못 찾았습니다"
+        ),
+        "guide.col.account": "계정",
+        "guide.col.tasks": "정리 후보 과제",
+        "guide.evidence.shared": "이 스토리지를 쓰는 계정들 - 정리할 것이 많은 쪽부터",
+        "guide.full.shared": (
+            "{mount} 을(를) 계정 {count}개가 함께 쓰고, 지금 {pct}% 찼습니다: {names}"
+        ),
+        "guide.full.shared_how": (
+            "`df` 가 이 계정들에 같은 파일시스템·같은 크기를 돌려주어 한 자리로 묶었습니다."
+        ),
+        "guide.full.why_shared": (
+            "한 계정만 정리해도 같은 스토리지를 쓰는 나머지 계정까지 함께 숨통이 트입니다."
+        ),
+        "guide.full.shared.step": (
+            "아래에서 정리할 것이 가장 많은 계정부터 봅니다. `계정 상세` 로 그 계정의 "
+            "과제 목록을 열 수 있습니다."
+        ),
         "priority.item.full_with_fix": "{account} {pct}% - 정리하면 {freeable} 빕니다 (백업 확인된 과제 {count}개)",
         "priority.item.full": "{account} {pct}% - 비울 수 있는 것을 아직 못 찾았습니다",
         "priority.item.no_backup": "{account}: 백업이 확인되지 않은 과제 {count}개 ({size}) - 지금 사라지면 복구할 곳이 없습니다",
@@ -397,6 +419,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.col.collected_at": "최근 수집",
         "dashboard.col.kind": "성격",
         "dashboard.collect_error_short": "수집 실패",
+        "dashboard.filter": "이름·경로로 찾기",
+        "dashboard.list_filtered": "{total}개 중 {shown}개 보임",
         "dashboard.list_title": "계정 목록",
         "dashboard.list_hint": "행을 두 번 누르면 그 계정의 모든 것을 한 창에서 봅니다",
         "dashboard.btn.collect_now": "새로고침",
@@ -413,6 +437,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.warn_summary": "주의 이상 계정 {count}개 - 가장 급함: {worst}",
         "dashboard.hero_detail": "가장 높은 사용률 · {account}",
         "dashboard.stat.accounts": "계정",
+        "dashboard.stat.storages": "스토리지",
         "dashboard.stat.attention": "주의 이상",
         "dashboard.stat.collected": "마지막 수집",
         "dashboard.not_collected": "아직 수집되지 않음",
@@ -1119,6 +1144,27 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "priority.unavailable": "Could not work out the priorities. The table below still works.",
         "priority.unscanned": "{count} accounts have no finished detail scan yet and were left out ({names})",
         "priority.coarse": "{count} tasks were judged without seeing inside BACKUP (raise the scan depth setting to 4 for a precise check)",
+        "priority.item.full_shared_with_fix": (
+            "{mount} · {accounts} accounts {pct}% - cleaning up frees {freeable} ({count} tasks with a confirmed backup)"
+        ),
+        "priority.item.full_shared": (
+            "{mount} · {accounts} accounts {pct}% - nothing found yet that could be freed"
+        ),
+        "guide.col.account": "Account",
+        "guide.col.tasks": "Cleanup candidates",
+        "guide.evidence.shared": "Accounts on this storage - most to clean up first",
+        "guide.full.shared": (
+            "{count} accounts share {mount}, now {pct}% full: {names}"
+        ),
+        "guide.full.shared_how": (
+            "`df` returns the same filesystem and size for these accounts, so they are treated as one place."
+        ),
+        "guide.full.why_shared": (
+            "Cleaning up one account gives the others on the same storage room too."
+        ),
+        "guide.full.shared.step": (
+            "Start with the account that has the most to clean up. Account detail opens its task list."
+        ),
         "priority.item.full_with_fix": "{account} {pct}% - cleaning up frees {freeable} ({count} tasks with a confirmed backup)",
         "priority.item.full": "{account} {pct}% - nothing found yet that could be freed",
         "priority.item.no_backup": "{account}: {count} tasks with no confirmed backup ({size}) - nothing to restore from if they go",
@@ -1260,6 +1306,8 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.col.collected_at": "Last collected",
         "dashboard.col.kind": "Kind",
         "dashboard.collect_error_short": "collection failed",
+        "dashboard.filter": "Filter by name or path",
+        "dashboard.list_filtered": "showing {shown} of {total}",
         "dashboard.list_title": "Accounts",
         "dashboard.list_hint": "Double-click a row for everything about that account",
         "dashboard.btn.collect_now": "Refresh",
@@ -1276,6 +1324,7 @@ _CATALOG: Dict[str, Dict[str, str]] = {
         "dashboard.warn_summary": "{count} account(s) at warning or worse - most urgent: {worst}",
         "dashboard.hero_detail": "Highest usage · {account}",
         "dashboard.stat.accounts": "Accounts",
+        "dashboard.stat.storages": "Storages",
         "dashboard.stat.attention": "Warning+",
         "dashboard.stat.collected": "Last collected",
         "dashboard.not_collected": "Not collected yet",

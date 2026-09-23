@@ -77,10 +77,18 @@ class Action:
     pct: Optional[float] = None
     path: str = ""
     count: int = 0
+    # 같은 스토리지를 쓰는 계정들 `[(이름, id, 정리가능KB, 과제수), ...]`.
+    # 하나뿐이면 예전과 같은 한 계정짜리 줄이다.
+    shared: List["tuple"] = field(default_factory=list)
+    mount_point: str = ""
 
     @property
     def critical(self) -> bool:
         return self.level == LEVEL_CRITICAL
+
+    @property
+    def shared_count(self) -> int:
+        return len(self.shared)
 
 
 @dataclass
@@ -115,6 +123,36 @@ class Plan:
             seen.add(item.account_id)
             total += item.reclaimable_kb
         return total
+
+
+# 같은 스토리지로 볼 사용률 차이(%p).
+#
+# 계정마다 `df` 를 부르는 시각이 몇 초씩 어긋나므로 같은 파일시스템이라도
+# 숫자가 딱 맞지는 않는다. 그 정도 흔들림만 허용한다.
+SAME_STORAGE_PCT = 0.5
+
+
+def _storage_key(sample) -> "tuple":
+    """같은 스토리지로 볼 것인가.
+
+    `df` 는 계정이 아니라 **그 경로가 속한 파일시스템**을 잰다. 한 스토리지에
+    계정이 여덟이면 여덟 계정이 똑같은 숫자를 돌려주므로, 그대로 두면 똑같은
+    줄이 여덟 개 생기고 목록 상한(MAX_ACTIONS) 안에서 다른 종류(백업 없음,
+    큰 파일)를 밀어낸다.
+
+    파일시스템·마운트 지점·전체 크기가 같으면 같은 자리로 본다. 전체 크기를
+    넣는 이유: 디렉터리 쿼터가 컨테이너로 걸려 있으면 같은 마운트라도 계정마다
+    다른 크기가 돌아온다 - 그때는 갈라야 맞다.
+
+    셋 중 하나라도 모르면 묶지 않는다 - 모르는 것을 근거로 묶으면 남의 계정을
+    한 줄에 넣게 된다."""
+
+    filesystem = getattr(sample, "filesystem", None)
+    mount_point = getattr(sample, "mount_point", None)
+    total_kb = getattr(sample, "total_kb", None)
+    if not filesystem or not mount_point or not total_kb:
+        return ("account", getattr(sample, "account_id", ""))
+    return (filesystem, mount_point, total_kb)
 
 
 def _usage_level(pct: Optional[float]) -> Optional[int]:
@@ -165,6 +203,9 @@ def build(
             bucket["count"] += 1
 
     # -- 1. 스토리지가 찼다 --------------------------------------------
+    #
+    # **계정이 아니라 스토리지 하나에 한 줄.** `_storage_key` 참고.
+    groups = {}
     for sample in samples:
         # 수집이 실패한 표본의 숫자는 옛 값이거나 비어 있다 - 그걸로 "지금
         # 찼다" 고 말하면 안 된다. 실패 자체는 홈 표의 '최근 수집' 칸이 말한다.
@@ -177,17 +218,47 @@ def build(
         if level is None:
             continue
         account_id = getattr(sample, "account_id", "")
+        key = _storage_key(sample)
+        bucket = groups.get(key)
+        if bucket is not None and abs(bucket["pct"] - pct) > SAME_STORAGE_PCT:
+            # 같은 자리로 보이는데 숫자가 많이 다르면 묶지 않는다.
+            key = ("account", account_id)
+            bucket = groups.get(key)
+        if bucket is None:
+            bucket = groups.setdefault(
+                key,
+                {
+                    "pct": pct, "level": level, "members": [],
+                    "mount_point": getattr(sample, "mount_point", "") or "",
+                },
+            )
+        # 같은 스토리지 안에서는 가장 높은 값을 그 스토리지의 값으로 본다.
+        if pct > bucket["pct"]:
+            bucket["pct"], bucket["level"] = pct, level
         relief = cleanup_by_account.get(account_id)
+        bucket["members"].append((
+            names.get(account_id, account_id), account_id,
+            relief["kb"] if relief else 0, relief["count"] if relief else 0,
+        ))
+
+    for bucket in groups.values():
+        members = sorted(bucket["members"], key=lambda item: (-item[2], item[0]))
+        freeable = sum(item[2] for item in members)
+        # 대표 계정은 **정리할 것이 가장 많은 쪽**이다. 창의 '계정 상세' 가
+        # 그 계정을 연다 - 손댈 곳이 있는 계정이 먼저 나와야 한다.
+        primary = members[0]
         actions.append(
             Action(
                 kind=ACT_FULL,
-                level=level,
-                account=names.get(account_id, account_id),
-                account_id=account_id,
-                pct=pct,
+                level=bucket["level"],
+                account=primary[0],
+                account_id=primary[1],
+                pct=bucket["pct"],
                 # 해법을 같은 줄에 붙인다.
-                reclaimable_kb=relief["kb"] if relief else None,
-                count=relief["count"] if relief else 0,
+                reclaimable_kb=freeable or None,
+                count=sum(item[3] for item in members),
+                shared=members,
+                mount_point=bucket["mount_point"],
             )
         )
 
@@ -219,7 +290,11 @@ def build(
     # -- 3. 정리 후보 (사용률 줄에 안 붙은 것만) --------------------------
     #
     # 이미 붙은 계정을 또 내놓으면 같은 일이 두 줄이 되고, 합계도 두 번 세인다.
-    mentioned = {item.account_id for item in actions if item.kind == ACT_FULL}
+    mentioned = {
+        member[1]
+        for item in actions if item.kind == ACT_FULL
+        for member in item.shared
+    }
     for account_id, bucket in cleanup_by_account.items():
         if account_id in mentioned or bucket["kb"] < CLEANUP_WORTH_KB:
             continue

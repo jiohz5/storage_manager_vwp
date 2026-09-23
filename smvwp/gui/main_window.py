@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -39,6 +40,7 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QShortcut,
     QVBoxLayout,
     QWidget,
 )
@@ -347,6 +349,13 @@ class MainWindow(QMainWindow):
         self.list_hint.setWordWrap(True)
         list_head.addWidget(self.list_hint, 1)
         list_head.addStretch(1)
+        # 계정이 스물을 넘으면 눈으로 찾는 것이 일이 된다. 이름이나 경로 조각을
+        # 치면 그것만 남는다 - 표를 다시 그리기만 하므로 DB 를 다시 읽지 않는다.
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setMaximumWidth(220)
+        self.filter_edit.textChanged.connect(self._on_filter_changed)
+        list_head.addWidget(self.filter_edit)
         list_head.addWidget(self.collect_btn)
         right.addLayout(list_head)
 
@@ -362,11 +371,22 @@ class MainWindow(QMainWindow):
         # 한 계정에 대한 사실은 네 군데에 흩어져 있다 (사용률·추세·스캔·백업).
         # 두 번 누르면 그 넷을 한 창에 모아 준다.
         self.table.cellDoubleClicked.connect(self._open_account_detail)
+        # 목록을 화살표로 훑다가 Enter 로 여는 사람이 있다. 마우스로만 열 수
+        # 있으면 계정이 많을수록 손이 많이 간다.
+        open_shortcut = QShortcut(QKeySequence(Qt.Key_Return), self.table)
+        open_shortcut.setContext(Qt.WidgetShortcut)
+        open_shortcut.activated.connect(
+            lambda: self._open_account_detail(self.table.currentRow())
+        )
         # 계정 표는 **Qt 내장 정렬을 쓰지 않는다.** 사용률 막대와 등급 배지가
         # 칸 위젯이라, Qt가 항목만 옮기고 위젯은 제자리에 두어 행과 위젯이
         # 어긋난다. 대신 정렬 키만 기억해 두고 표를 다시 그린다.
-        self._sort_column = None
+        # **기본은 사용률 내림차순.** 등록 순서로 두면 스무 개 넘는 목록에서
+        # 정작 급한 계정이 가운데 어딘가에 있게 된다. 이 화면을 여는 이유가
+        # "지금 어디가 급한가" 이므로 그 순서가 기본이어야 한다.
+        self._sort_column = COL_BYTE
         self._sort_desc = True
+        self._filter_text = ""
 
         # 홈 탭에서는 계정 표가 세로 공간을 전부 가져간다.
         self.table.setMinimumHeight(140)
@@ -506,7 +526,9 @@ class MainWindow(QMainWindow):
         stats = QHBoxLayout()
         stats.setSpacing(28)
         self.hero_stats = {}
-        for key in ("accounts", "attention", "collected"):
+        # 계정 수만 보면 몇 자리를 보고 있는지 모른다. 계정 아홉이 한
+        # 스토리지에 있는 것과 아홉 곳에 흩어진 것은 전혀 다른 이야기다.
+        for key in ("accounts", "storages", "attention", "collected"):
             column = QVBoxLayout()
             column.setSpacing(1)
             caption = QLabel()
@@ -556,6 +578,7 @@ class MainWindow(QMainWindow):
         # 헤더를 눌러 정렬한다. Qt 내장 정렬 대신 직접 하는 이유는 위 주석 참고.
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
+        header.setSortIndicator(COL_BYTE, Qt.DescendingOrder)
         header.sectionClicked.connect(self._on_header_clicked)
 
         # 행 배경(등급 색)은 델리게이트가 그린다. 자세한 이유는
@@ -593,6 +616,7 @@ class MainWindow(QMainWindow):
         self.caveat_label.setText(i18n.t("dashboard.df_caveat"))
         self.list_title.setText(i18n.t("dashboard.list_title"))
         self.list_hint.setText(i18n.t("dashboard.list_hint"))
+        self.filter_edit.setPlaceholderText(i18n.t("dashboard.filter"))
         self.collect_btn.setText(i18n.t("dashboard.btn.collect_now"))
         self.collect_btn.setToolTip(i18n.t("dashboard.btn.collect_now_tooltip"))
         self.accounts_btn.setText(i18n.t("dashboard.btn.accounts"))
@@ -793,17 +817,32 @@ class MainWindow(QMainWindow):
             hours=self._config.settings.freshness_window_hours,
         )
 
+    def _on_filter_changed(self, text: str) -> None:
+        self._filter_text = (text or "").strip().lower()
+        self._render_table(self._latest_samples)
+
+    def _visible_accounts(self, accounts) -> list:
+        """찾기 칸에 친 글자가 이름이나 경로에 든 계정만."""
+
+        if not self._filter_text:
+            return accounts
+        needle = self._filter_text
+        return [
+            account for account in accounts
+            if needle in account.name.lower() or needle in account.path.lower()
+        ]
+
     def _render_table(self, latest: Dict[str, store.SampleRecord]) -> None:
-        accounts = self._sorted_accounts(latest)
+        every = self._sorted_accounts(latest)
+        accounts = self._visible_accounts(every)
+        # 거른 상태를 말해 준다. 안 그러면 "계정이 사라졌다" 로 읽힌다.
+        self.list_hint.setText(
+            i18n.t("dashboard.list_filtered", shown=len(accounts), total=len(every))
+            if self._filter_text else i18n.t("dashboard.list_hint")
+        )
         self.table.setRowCount(len(accounts))
 
-        worst_tier = tiers.NORMAL
-        worst_account_label: Optional[str] = None
-        warn_or_worse_count = 0
         dash = i18n.t("common.none")
-        # 히어로의 큰 숫자에 쓸 값 (가장 높은 사용률과 그 계정).
-        self._worst_pct: Optional[float] = None
-        self._worst_account_name: Optional[str] = None
         # 행 수가 줄어든 경우 이전 행의 색이 남지 않도록 매번 비운다.
         self._row_tints.clear()
 
@@ -855,12 +894,6 @@ class MainWindow(QMainWindow):
             self.table.setCellWidget(
                 row, COL_TREND, self._spark_for(account.account_id, sample.overall_tier)
             )
-            if sample.byte_pct is not None and (
-                self._worst_pct is None or sample.byte_pct > self._worst_pct
-            ):
-                self._worst_pct = sample.byte_pct
-                self._worst_account_name = account.name
-
             forecast = self._forecasts.get(account.account_id)
             forecast_item = QTableWidgetItem(formatting.format_forecast_cell(forecast))
             forecast_item.setToolTip(
@@ -904,14 +937,42 @@ class MainWindow(QMainWindow):
             # 되어 정작 문제 있는 행이 묻힌다.
             self._tint_row(row, sample.overall_tier if sample.ok else tiers.UNKNOWN)
 
-            if sample.ok:
-                if tiers.is_at_least(sample.overall_tier, "warn"):
-                    warn_or_worse_count += 1
-                if tiers.severity(sample.overall_tier) > tiers.severity(worst_tier):
-                    worst_tier = sample.overall_tier
-                    worst_account_label = (
-                        f"{account.name} ({tiers.display_text(sample.overall_tier, sample.byte_pct)})"
-                    )
+        self._summarize(every, latest)
+
+    def _summarize(self, accounts, latest) -> None:
+        """히어로의 요약을 낸다.
+
+        **거른 목록이 아니라 늘 전체를 본다.** 찾기 칸에 한 계정만 남겨 놓고
+        "모든 계정 정상" 을 읽으면, 보이지 않는 곳이 꽉 차 있어도 괜찮은 줄
+        안다 - 멈춘 데이터를 보고 정상이라고 판단하는 것과 같은 종류의 사고다.
+        """
+
+        worst_tier = tiers.NORMAL
+        worst_account_label: Optional[str] = None
+        warn_or_worse_count = 0
+        # 히어로의 큰 숫자에 쓸 값 (가장 높은 사용률과 그 계정).
+        self._worst_pct: Optional[float] = None
+        self._worst_account_name: Optional[str] = None
+
+        for account in accounts:
+            sample = latest.get(account.account_id)
+            if sample is None:
+                continue
+            if sample.byte_pct is not None and (
+                self._worst_pct is None or sample.byte_pct > self._worst_pct
+            ):
+                self._worst_pct = sample.byte_pct
+                self._worst_account_name = account.name
+            if not sample.ok:
+                continue
+            if tiers.is_at_least(sample.overall_tier, "warn"):
+                warn_or_worse_count += 1
+            if tiers.severity(sample.overall_tier) > tiers.severity(worst_tier):
+                worst_tier = sample.overall_tier
+                worst_account_label = (
+                    f"{account.name} "
+                    f"({tiers.display_text(sample.overall_tier, sample.byte_pct)})"
+                )
 
         self._update_summary(warn_or_worse_count, worst_account_label, worst_tier)
 
@@ -996,6 +1057,20 @@ class MainWindow(QMainWindow):
     def _apply_hero_tier(self, tier: str) -> None:
         self.hero_accent.setStyleSheet(HERO_ACCENT_STYLE.format(color=tiers.color(tier)))
 
+    def _storage_count(self) -> int:
+        """지금 보고 있는 **스토리지** 수 (계정이 아니라).
+
+        `priority._storage_key` 와 같은 기준으로 센다 - 같은 파일시스템·마운트·
+        크기면 한 자리다. 판단이 두 곳에서 갈리면 우선순위 줄과 이 숫자가
+        서로 다른 말을 하게 된다."""
+
+        keys = set()
+        for sample in self._latest_samples.values():
+            if getattr(sample, "ok", True) is False:
+                continue
+            keys.add(priority._storage_key(sample))
+        return len(keys)
+
     def _update_hero_stats(self, warn_or_worse_count: int) -> None:
         newest = [
             info.age_seconds
@@ -1006,6 +1081,7 @@ class MainWindow(QMainWindow):
 
         for key, value in (
             ("accounts", str(len(self._config.accounts))),
+            ("storages", str(self._storage_count() or "-")),
             ("attention", str(warn_or_worse_count)),
             ("collected", collected),
         ):

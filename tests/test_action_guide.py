@@ -210,5 +210,40 @@ class NoKeyLeakTests(unittest.TestCase):
                 i18n.set_language(i18n.KOREAN)
 
 
+class SharedStorageGuideTests(unittest.TestCase):
+    """여러 계정이 한 스토리지를 쓸 때의 안내."""
+
+    def shared(self):
+        return action(
+            priority.ACT_FULL, level=priority.LEVEL_CRITICAL, account="proj_a",
+            pct=96.0, reclaimable_kb=500 * GB, count=4, mount_point="/ifs",
+            shared=[("proj_a", "a", 300 * GB, 2), ("proj_b", "b", 200 * GB, 2),
+                    ("proj_c", "c", 0, 0)],
+        )
+
+    def test_the_line_says_how_many_accounts_share_it(self):
+        line = action_guide.headline(self.shared())
+        self.assertIn("/ifs", line)
+        self.assertIn("3", line)
+
+    def test_the_guide_names_them_and_says_how_we_know(self):
+        guide = action_guide.build(self.shared())
+        text = " ".join(guide.situation)
+        for name in ("proj_a", "proj_b", "proj_c"):
+            self.assertIn(name, text)
+        self.assertIn("df", text)
+
+    def test_the_evidence_is_which_account_to_open_first(self):
+        guide = action_guide.build(self.shared(), rich_detail())
+        self.assertEqual(
+            [row.cells[0] for row in guide.evidence_rows],
+            ["proj_a", "proj_b", "proj_c"],
+        )
+
+    def test_one_account_keeps_the_old_shape(self):
+        guide = action_guide.build(FULL, rich_detail())
+        self.assertEqual(guide.evidence_title, i18n.t("guide.evidence.cleanup"))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

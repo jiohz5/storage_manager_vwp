@@ -1048,10 +1048,18 @@ class HomeLayoutTests(_GuiCase):
     def test_the_path_moved_to_the_name_tooltip(self):
         """경로 열을 뺐다고 경로를 못 보게 되면 안 된다."""
 
+        from PyQt5.QtCore import Qt
+
         from smvwp.gui.main_window import COL_NAME
 
-        item = self.window.table.item(0, COL_NAME)
-        self.assertIn(self.config.accounts[0].path, item.toolTip())
+        account = self.config.accounts[0]
+        table = self.window.table
+        # 행 순서를 가정하지 않는다 - 기본 정렬이 사용률 내림차순이다.
+        item = next(
+            table.item(row, COL_NAME) for row in range(table.rowCount())
+            if table.item(row, COL_NAME).data(Qt.UserRole) == account.account_id
+        )
+        self.assertIn(account.path, item.toolTip())
 
     def test_a_collection_failure_still_shows_up_somewhere(self):
         """상태 열을 뺐다 - 실패를 아무 데서도 못 보면 숫자를 믿게 된다."""
@@ -1456,6 +1464,145 @@ class ActionDialogTests(_GuiCase):
     def test_it_fits_a_1080_screen(self):
         dialog = self.dialog(action=self.full())
         self.assertLess(dialog.minimumSizeHint().height(), 700)
+
+
+class ManyAccountsTests(_GuiCase):
+    """한 사람이 계정 여럿을 볼 때.
+
+    스무 개가 넘어가면 "어느 계정이 급한가" 와 "그 계정이 어디 있나" 가 둘 다
+    일이 된다. 급한 것이 위에 오고, 이름 조각으로 좁힐 수 있어야 한다."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch(
+            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.window._render_table(self.samples())
+        _app().processEvents()
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def samples(self):
+        from datetime import datetime, timezone
+
+        from smvwp import store
+
+        # proj 은 한산하고 bak 이 꽉 찼다 - 정렬이 실제로 도는지 보려면 순서가
+        # 등록 순서와 달라야 한다.
+        percentages = {"proj": 40.0, "bak": 96.0}
+        made = {}
+        for account in self.config.accounts:
+            pct = percentages[account.name]
+            total = 10 * 1024 * self.GB
+            made[account.account_id] = store.SampleRecord(
+                account_id=account.account_id,
+                collected_at=datetime.now(timezone.utc).isoformat(), ok=True,
+                filesystem="nfs4", mount_point="/ifs", total_kb=total,
+                used_kb=int(total * pct / 100), avail_kb=1, byte_pct=pct,
+                overall_tier="alert" if pct > 90 else "normal",
+            )
+        return made
+
+    def names_in_order(self):
+        from smvwp.gui.main_window import COL_NAME
+
+        table = self.window.table
+        return [table.item(row, COL_NAME).text() for row in range(table.rowCount())]
+
+    # -- 급한 것부터 ------------------------------------------------------
+    def test_the_fullest_account_is_on_top_without_touching_anything(self):
+        """등록 순서로 두면 스무 개 넘는 목록에서 급한 계정이 가운데 묻힌다."""
+
+        self.assertEqual(self.names_in_order()[0], "bak")
+
+    def test_the_header_shows_which_column_it_is_sorted_by(self):
+        from PyQt5.QtCore import Qt
+
+        from smvwp.gui.main_window import COL_BYTE
+
+        header = self.window.table.horizontalHeader()
+        self.assertEqual(header.sortIndicatorSection(), COL_BYTE)
+        self.assertEqual(header.sortIndicatorOrder(), Qt.DescendingOrder)
+
+    # -- 찾기 --------------------------------------------------------------
+    def test_typing_a_name_narrows_the_list(self):
+        self.window.filter_edit.setText("ba")
+        _app().processEvents()
+        self.assertEqual(self.names_in_order(), ["bak"])
+
+    def test_the_path_counts_too(self):
+        """이름을 기억 못 해도 경로 조각으로 찾을 수 있어야 한다."""
+
+        self.window.filter_edit.setText(self.config.accounts[0].path[-4:].lower())
+        _app().processEvents()
+        self.assertEqual(self.names_in_order(), [self.config.accounts[0].name])
+
+    def test_it_says_how_many_are_hidden(self):
+        """줄어든 목록이 "계정이 사라졌다" 로 읽히면 안 된다."""
+
+        from smvwp import i18n
+
+        self.window.filter_edit.setText("ba")
+        _app().processEvents()
+        self.assertEqual(
+            self.window.list_hint.text(),
+            i18n.t("dashboard.list_filtered", shown=1, total=2),
+        )
+
+    def test_clearing_the_box_brings_everyone_back(self):
+        from smvwp import i18n
+
+        self.window.filter_edit.setText("ba")
+        self.window.filter_edit.setText("")
+        _app().processEvents()
+        self.assertEqual(len(self.names_in_order()), 2)
+        self.assertEqual(self.window.list_hint.text(), i18n.t("dashboard.list_hint"))
+
+    def test_the_summary_still_describes_everyone_while_filtered(self):
+        """한 계정만 남겨 놓고 "모든 계정 정상" 을 읽으면, 보이지 않는 곳이
+        꽉 차 있어도 괜찮은 줄 안다."""
+
+        self.window._latest_samples = self.samples()
+        self.window.filter_edit.setText("proj")   # 한산한 계정만 남긴다
+        _app().processEvents()
+        self.assertEqual(self.names_in_order(), ["proj"])
+        # 히어로는 여전히 꽉 찬 쪽을 말한다.
+        self.assertIn("96", self.window.hero_value_label.text())
+        self.assertEqual(self.window.hero_stats["attention"][1].text(), "1")
+
+    def test_a_filter_that_matches_nothing_is_not_a_crash(self):
+        self.window.filter_edit.setText("없는계정")
+        _app().processEvents()
+        self.assertEqual(self.names_in_order(), [])
+
+    # -- 키보드 -------------------------------------------------------------
+    def test_enter_opens_the_selected_account(self):
+        """화살표로 훑다가 Enter 로 여는 사람이 있다."""
+
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QKeySequence
+        from PyQt5.QtWidgets import QShortcut
+
+        opened = []
+        shortcut = next(
+            item for item in self.window.table.findChildren(QShortcut)
+            if item.key() == QKeySequence(Qt.Key_Return)
+        )
+        self.window.table.selectRow(0)
+        with patch.object(
+            self.window, "_open_account_detail", side_effect=opened.append
+        ):
+            shortcut.activated.emit()
+        self.assertEqual(opened, [0])
 
 
 if __name__ == "__main__":  # pragma: no cover

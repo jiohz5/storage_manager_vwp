@@ -91,6 +91,21 @@ def headline(action) -> str:
     """할 일 한 줄을 사람 문장으로. 목록과 안내 창이 같은 문장을 쓴다."""
 
     if action.kind == priority.ACT_FULL:
+        if action.shared_count > 1:
+            # 여러 계정이 같은 스토리지를 쓴다. 계정마다 한 줄씩 내면 똑같은
+            # 줄이 여러 개 되어 다른 종류가 목록 밖으로 밀린다.
+            key = (
+                "priority.item.full_shared_with_fix" if action.reclaimable_kb
+                else "priority.item.full_shared"
+            )
+            return i18n.t(
+                key,
+                mount=action.mount_point or action.account,
+                accounts=action.shared_count,
+                pct=f"{action.pct:.0f}",
+                freeable=formatting.format_kb(action.reclaimable_kb),
+                count=action.count,
+            )
         if action.reclaimable_kb:
             # 문제와 해법을 한 줄에. 따로 두면 사람이 두 화면을 오가며
             # 스스로 이어 붙여야 하고, 그러면 대개 안 한다.
@@ -284,14 +299,49 @@ def _growth_rows(guide: Guide, detail, title_key: str) -> None:
         guide.commands.append(f"du -sh {_q(row['path'])}")
 
 
+def _shared_rows(guide: Guide, action) -> None:
+    """같은 스토리지를 쓰는 계정별로 정리할 것이 얼마나 있나.
+
+    스토리지 한 줄에서 사람이 다음에 묻는 것은 "그래서 어느 계정을 손대나" 다."""
+
+    guide.evidence_title = i18n.t("guide.evidence.shared")
+    guide.evidence_columns = [
+        i18n.t("guide.col.account"), i18n.t("guide.col.reclaim"),
+        i18n.t("guide.col.tasks"),
+    ]
+    dash = i18n.t("common.none")
+    for name, _account_id, freeable, count in action.shared:
+        guide.evidence_rows.append(EvidenceRow(cells=[
+            name,
+            formatting.format_kb(freeable) if freeable else dash,
+            f"{count:,}" if count else dash,
+        ]))
+
+
 def _full(guide: Guide, action, detail) -> None:
-    guide.situation.append(
-        i18n.t("guide.full.situation", account=action.account, pct=f"{action.pct:.1f}")
-    )
+    if action.shared_count > 1:
+        guide.situation.append(
+            i18n.t(
+                "guide.full.shared",
+                mount=action.mount_point or "-",
+                count=action.shared_count,
+                names=", ".join(name for name, _id, _kb, _n in action.shared),
+                pct=f"{action.pct:.1f}",
+            )
+        )
+        # 어떻게 알았는지도 적는다 - `df` 가 같은 숫자를 돌려준다는 것이
+        # 우리가 아는 전부다.
+        guide.situation.append(i18n.t("guide.full.shared_how"))
+    else:
+        guide.situation.append(
+            i18n.t("guide.full.situation", account=action.account, pct=f"{action.pct:.1f}")
+        )
     _usage_facts(guide, detail)
     guide.why = i18n.t(
         "guide.full.why_now" if action.critical else "guide.full.why_soon"
     )
+    if action.shared_count > 1:
+        guide.why += " " + i18n.t("guide.full.why_shared")
     if action.reclaimable_kb:
         guide.steps = [
             i18n.t("guide.full.fix.step1", count=action.count,
@@ -299,13 +349,20 @@ def _full(guide: Guide, action, detail) -> None:
             i18n.t("guide.full.fix.step2"),
             i18n.t("guide.full.fix.step3"),
         ]
-        _cleanup_rows(guide, detail)
     else:
         guide.steps = [
             i18n.t("guide.full.nofix.step1"),
             i18n.t("guide.full.nofix.step2"),
             i18n.t("guide.full.nofix.step3"),
         ]
+    if action.shared_count > 1:
+        # 여러 계정이 걸린 줄에서는 **어느 계정부터인지**가 먼저다. 한 계정의
+        # 과제 목록은 그 계정을 연 다음에 본다.
+        _shared_rows(guide, action)
+        guide.steps.insert(0, i18n.t("guide.full.shared.step"))
+    elif action.reclaimable_kb:
+        _cleanup_rows(guide, detail)
+    else:
         _growth_rows(guide, detail, "guide.evidence.where")
     if guide.account_path:
         guide.commands.insert(0, f"df -h {_q(guide.account_path)}")
