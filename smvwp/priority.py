@@ -145,7 +145,15 @@ def _storage_key(sample) -> "tuple":
     다른 크기가 돌아온다 - 그때는 갈라야 맞다.
 
     셋 중 하나라도 모르면 묶지 않는다 - 모르는 것을 근거로 묶으면 남의 계정을
-    한 줄에 넣게 된다."""
+    한 줄에 넣게 된다.
+
+    ## `paths.volume_key` 와 다른 것이다 (합치지 말 것)
+
+    야간 스캔은 `paths.volume_key` 로 계정을 묶어 병렬을 정한다. 그쪽이 묻는
+    것은 **처리 능력을 나눠 쓰는 단위**(NetApp 볼륨, NFS export)이고, 여기서
+    묻는 것은 **용량을 나눠 쓰는 단위**다. 디렉터리 쿼터가 컨테이너로 걸리면
+    같은 볼륨 안에서도 용량은 따로 차므로 둘은 갈린다 - 같은 뜻으로 보고
+    하나로 합치면 한쪽이 반드시 틀린다."""
 
     filesystem = getattr(sample, "filesystem", None)
     mount_point = getattr(sample, "mount_point", None)
