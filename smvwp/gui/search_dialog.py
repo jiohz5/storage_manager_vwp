@@ -16,14 +16,12 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
     QLineEdit as _QLineEdit,
     QMessageBox,
     QPushButton,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
 )
@@ -32,6 +30,7 @@ from .. import admin_auth, config as config_module
 from .. import formatting
 from .. import i18n, search_index, tiers
 from ..scheduler import ThreadWorker
+from . import widgets
 from .pin_dialog import PinChangeDialog
 
 
@@ -168,17 +167,11 @@ class SearchDialog(QDialog):
         self.status_label.setMinimumHeight(36)
         root.addWidget(self.status_label)
 
-        self.results = QTableWidget(0, 2)
-        self.results.setHorizontalHeaderLabels(
-            [i18n.t("search.col.path"), i18n.t("search.col.kind")]
+        # 경로 표다 - 뒤를 자르면 정작 다른 부분이 사라진다 (`read_only_table`).
+        self.results = widgets.read_only_table(
+            headers=[i18n.t("search.col.path"), i18n.t("search.col.kind")],
+            row_height=34,
         )
-        self.results.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.results.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.results.horizontalHeader().setHighlightSections(False)
-        self.results.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.results.verticalHeader().setVisible(False)
-        self.results.verticalHeader().setDefaultSectionSize(34)
-        self.results.setShowGrid(False)
         root.addWidget(self.results)
 
         close_btn = QPushButton(i18n.t("common.close"))

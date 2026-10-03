@@ -15,10 +15,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
 )
@@ -26,7 +24,7 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import formatting
 from .. import i18n, scan_store
-from . import theme
+from . import theme, widgets
 
 COLUMN_KEYS = [
     "progress.col.path",
@@ -84,16 +82,11 @@ class ScanProgressDialog(QDialog):
         self.summary_label.setWordWrap(True)
         root.addWidget(self.summary_label)
 
-        self.table = QTableWidget(0, len(COLUMN_KEYS))
-        self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(COL_PATH, QHeaderView.Stretch)
-        header.setHighlightSections(False)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(32)
-        self.table.setShowGrid(False)
+        # 경로 표다 - 뒤를 자르면 정작 다른 부분이 사라진다 (`read_only_table`).
+        self.table = widgets.read_only_table(
+            headers=[i18n.t(key) for key in COLUMN_KEYS],
+            row_height=32, stretch_column=COL_PATH,
+        )
         root.addWidget(self.table, 1)
 
         bottom = QHBoxLayout()

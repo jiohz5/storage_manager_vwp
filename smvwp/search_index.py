@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, List, Optional
 
+from . import sqlite_db
+
 KIND_FILE = "file"
 KIND_DIR = "dir"
 KIND_LINK = "link"
@@ -71,13 +73,24 @@ def db_path(data_dir: Path) -> Path:
     return data_dir / "search_index.db"
 
 
-def connect(data_dir: Path) -> sqlite3.Connection:
-    data_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
-    conn.row_factory = sqlite3.Row
+def _initialize(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
-    conn.commit()
-    return conn
+
+
+def connect(data_dir: Path) -> sqlite3.Connection:
+    """연결 규칙은 `sqlite_db` 에 있다.
+
+    예전에는 연결할 때마다 스키마를 다시 만들고 커밋했다. 다른 두 DB 는 NFS
+    위에서 그 비용 때문에 진작 프로세스당 한 번으로 바꿨는데, 이쪽만 복사본이
+    아니라 따로 짠 코드라 그 개선을 받지 못했다."""
+
+    return sqlite_db.connect(db_path(data_dir), data_dir, _initialize)
+
+
+def journal_mode(data_dir: Path) -> Optional[str]:
+    """지금 DB가 실제로 쓰고 있는 journal 모드 (진단용). 못 읽으면 None."""
+
+    return sqlite_db.journal_mode(db_path(data_dir))
 
 
 def _utc_now() -> str:

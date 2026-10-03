@@ -30,7 +30,6 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -98,16 +97,7 @@ class _LoadReader(ThreadWorker):
 
 
 def _table(column_keys, height: int) -> QTableWidget:
-    table = QTableWidget(0, len(column_keys))
-    table.setHorizontalHeaderLabels([i18n.t(key) for key in column_keys])
-    table.setEditTriggers(QTableWidget.NoEditTriggers)
-    table.verticalHeader().setVisible(False)
-    table.setShowGrid(False)
-    table.setSelectionBehavior(QTableWidget.SelectRows)
-    table.horizontalHeader().setHighlightSections(False)
-    table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-    for column in range(1, len(column_keys)):
-        table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
+    table = widgets.read_only_table(headers=[i18n.t(key) for key in column_keys])
     table.setMinimumHeight(height)
     return table
 

@@ -15,19 +15,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from smvwp import paths, scan_store, store
+from smvwp import paths, scan_store, sqlite_db, store
 
 
 class JournalModeFallbackTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.tmp.name) / "data"
-        scan_store._INITIALIZED.clear()
-        store._INITIALIZED.clear()
+        sqlite_db._INITIALIZED.clear()
 
     def tearDown(self):
-        scan_store._INITIALIZED.clear()
-        store._INITIALIZED.clear()
+        sqlite_db._INITIALIZED.clear()
         self.tmp.cleanup()
 
     def test_local_path_uses_wal(self):
@@ -55,7 +53,7 @@ class JournalModeFallbackTests(unittest.TestCase):
         holder = sqlite3.connect(str(scan_store.db_path(self.data_dir)))
         holder.execute("SELECT COUNT(*) FROM scan_runs").fetchone()
         try:
-            scan_store._INITIALIZED.clear()
+            sqlite_db._INITIALIZED.clear()
             with patch.object(paths, "journal_mode_for", return_value="DELETE"):
                 conn = scan_store.connect(self.data_dir)   # 예외가 나면 실패
             self.assertIsNotNone(conn)
@@ -70,10 +68,10 @@ class JournalModeFallbackTests(unittest.TestCase):
         """이미 원하는 모드면 쓰기 잠금을 잡으러 갈 이유가 없다."""
 
         scan_store.connect(self.data_dir).close()
-        scan_store._INITIALIZED.clear()
+        sqlite_db._INITIALIZED.clear()
 
         # sqlite3.Connection.execute 는 교체할 수 없으므로 얇은 대역을 쓴다.
-        # `_apply_journal_mode` 가 쓰는 것은 execute 하나뿐이다.
+        # `apply_journal_mode` 가 쓰는 것은 execute 하나뿐이다.
         class Spy:
             def __init__(self, real):
                 self._real = real
@@ -87,7 +85,7 @@ class JournalModeFallbackTests(unittest.TestCase):
         spy = Spy(conn)
         try:
             with patch.object(paths, "journal_mode_for", return_value="WAL"):
-                scan_store._apply_journal_mode(spy, self.data_dir)
+                sqlite_db.apply_journal_mode(spy, self.data_dir)
             executed = spy.executed
         finally:
             conn.close()

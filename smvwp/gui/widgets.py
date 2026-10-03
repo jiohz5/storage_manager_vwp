@@ -13,9 +13,11 @@ from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QStyle,
     QStyledItemDelegate,
+    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -60,6 +62,46 @@ def badge_cell(tier: str, pct: Optional[float]) -> QWidget:
     box.addWidget(TierBadge(tier, pct))
     box.addStretch(1)
     return container
+
+
+def read_only_table(columns=0, headers=None, row_height: int = 30,
+                    stretch_column: int = 0) -> QTableWidget:
+    """읽기 전용 표 하나. **이 프로그램의 표는 전부 이것으로 만든다.**
+
+    ## 왜 한 곳인가
+
+    표 설정이 여덟 군데에 복사돼 있었고, 복사본마다 조금씩 달랐다. 경로를
+    가운데에서 줄이는 설정을 상세 스캔 탭에서 고쳤는데(오른쪽을 자르면
+    `run_03/BACKUP` 같은 정작 다른 뒤쪽이 사라진다), 스캔 진행·검색 결과처럼
+    **똑같이 경로를 보여 주는 표**는 그 고침을 받지 못하고 여전히 뒤를 잘랐다.
+
+    - 경로는 **가운데를** 줄인다.
+    - 줄바꿈을 끈다. 켜 두면 줄임 대신 행 안에서 접히려다 잘린다.
+    - 고칠 수 없다 (이 도구는 보기만 한다), 행 단위로 고른다, 격자는 없다.
+    - `stretch_column` 이 남는 폭을 가져가고 나머지는 내용대로 잡는다. None 이면
+      폭 정책은 부르는 쪽이 정한다.
+
+    `columns` 는 열 수, `headers` 는 머리글 목록 (주면 열 수도 거기서 정한다).
+    """
+
+    if headers is not None:
+        columns = len(headers)
+    table = QTableWidget(0, columns)
+    if headers is not None:
+        table.setHorizontalHeaderLabels(list(headers))
+    table.setEditTriggers(QTableWidget.NoEditTriggers)
+    table.setSelectionBehavior(QTableWidget.SelectRows)
+    table.verticalHeader().setVisible(False)
+    table.verticalHeader().setDefaultSectionSize(row_height)
+    table.setShowGrid(False)
+    table.setWordWrap(False)
+    table.setTextElideMode(Qt.ElideMiddle)
+    header = table.horizontalHeader()
+    header.setHighlightSections(False)
+    if stretch_column is not None and columns:
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(stretch_column, QHeaderView.Stretch)
+    return table
 
 
 class NumericItem(QTableWidgetItem):

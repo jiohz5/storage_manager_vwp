@@ -88,6 +88,15 @@ class _GuiCase(unittest.TestCase):
 class MainWindowSmokeTests(_GuiCase):
     def setUp(self):
         super().setUp()
+        # 창을 만들면 진짜 스캔 상태 조회가 작업 스레드에서 돈다. 그 결과가
+        # 시험의 `processEvents()` 도중에 도착하면 시험이 쏜 배너 신호를 덮어써
+        # 결과가 타이밍에 달리게 된다 (실제로 몇 ms 차이로 갈렸다). 여기서
+        # 보는 것은 신호 배선이므로 바깥 신호는 막는다.
+        patcher = patch(
+            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         from smvwp.gui.main_window import MainWindow
 
         self.window = MainWindow(self.data_dir, self.config)
@@ -1141,6 +1150,17 @@ class AccountDetailDialogTests(_GuiCase):
         self.assertIn("91", self.dialog.usage_label.text())
         self.assertIn("910.0", self.dialog._fact_rows["capacity"][1].text())
         self.assertIn("12", self.dialog._fact_rows["inode"][1].text())
+
+    def test_a_quota_without_a_limit_still_shows_the_usage(self):
+        """한도 없이 사용량만 오는 구성. 홈 표의 quota 열을 뺄 때 이 경우를
+        '-' 로 떨어뜨렸다 - 값을 받고도 버리는 셈이었다."""
+
+        detail = self.detail()
+        detail.sample.quota_used_kb = 5_000
+        detail.sample.quota_limit_kb = None
+        detail.sample.quota_pct = None
+        self.dialog._on_loaded(detail)
+        self.assertIn("5,000", self.dialog._fact_rows["quota"][1].text())
 
     def test_the_backup_summary_says_what_can_be_cleaned(self):
         self.load()

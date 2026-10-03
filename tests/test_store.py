@@ -102,7 +102,9 @@ class ConcurrentConnectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             data_dir = Path(name) / "data"
             # 이 경로는 이 프로세스에서 처음이다 - 그래야 만드는 경로를 탄다.
-            store._INITIALIZED.discard(str(store.db_path(data_dir)))
+            from smvwp import sqlite_db
+
+            sqlite_db._INITIALIZED.discard(str(store.db_path(data_dir)))
 
             start = threading.Barrier(6)
             errors = []

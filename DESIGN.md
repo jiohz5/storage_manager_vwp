@@ -338,6 +338,7 @@ storage_manager_vwp/
     config.py                 # JSON 설정 (계정 목록 + 전역 설정)
     collector.py               # df/inode(+quota) 조회 및 파싱
     store.py                    # SQLite 표본 저장소 (보존기간 정리 포함)
+    sqlite_db.py                # 세 DB 의 공통 연결 규칙 (스키마 1회·잠금·journal 모드)
     quota.py                     # 사내 quota JSON 어댑터 (선택)
     notifications.py              # 알림 생성 + outbox/command/webhook 전송 + 감사
     popup_queue.py                 # outbox 읽음 상태 관리 (Qt 비의존)

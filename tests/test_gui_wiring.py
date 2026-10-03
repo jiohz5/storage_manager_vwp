@@ -582,5 +582,44 @@ class ThreadEmitTests(unittest.TestCase):
         self.assertIn("scheduler.py:ThreadWorker", owners)
 
 
+class TableFactoryTests(unittest.TestCase):
+    """읽기 전용 표는 `widgets.read_only_table` 로만 만든다.
+
+    표 설정이 여덟 군데에 복사돼 있었고 복사본마다 달랐다. 경로를 가운데에서
+    줄이는 고침을 상세 스캔 탭에만 넣었더니, 똑같이 경로를 보여 주는 스캔 진행·
+    검색 결과 표는 그 고침을 못 받고 계속 뒤를 잘랐다."""
+
+    # 직접 만들어도 되는 곳. 늘리려면 이유를 적을 것.
+    ALLOWED = {
+        # 공통 함수 자체.
+        ("widgets.py", "read_only_table"),
+        # 칸에 콤보를 넣고 행 높이를 콤보에 맞춰 잰다 - 일반 표와 규칙이 다르다.
+        ("account_dialog.py", "_build_ui"),
+        # 막대·추세선이 칸 위젯이고 등급 색을 대리자가 칠한다. 정렬도 직접 한다.
+        ("main_window.py", "_build_ui"),
+    }
+
+    def test_tables_come_from_the_shared_factory(self):
+        found = set()
+        for path in sorted(GUI.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef):
+                    continue
+                for call in ast.walk(func):
+                    if (isinstance(call, ast.Call)
+                            and isinstance(call.func, ast.Name)
+                            and call.func.id == "QTableWidget"):
+                        found.add((path.name, func.name))
+        strays = sorted(found - self.ALLOWED)
+        self.assertEqual(
+            strays, [],
+            "읽기 전용 표는 widgets.read_only_table 로 만들 것: "
+            + ", ".join(f"{name}:{func}" for name, func in strays),
+        )
+        # 예외 목록이 낡으면(그 자리에서 더는 안 만들면) 같이 지운다.
+        self.assertEqual(sorted(self.ALLOWED - found), [])
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

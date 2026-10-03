@@ -11,32 +11,16 @@ SQLite는 표준 라이브러리(`sqlite3`)만으로 충분해 폐쇄망 제약�
 
 from __future__ import annotations
 
-import logging
 import sqlite3
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import paths
-
-logger = logging.getLogger(__name__)
+from . import sqlite_db
 
 
 
-# 이미 스키마를 확인한 DB 파일. **이 프로세스 안에서만** 유효하다.
-#
-# `connect()`는 원래 부를 때마다 `executescript(SCHEMA)` + `_migrate()` +
-# `commit()`을 했다. 로컬 디스크에서는 무시할 만한 비용이지만, 데이터 디렉터리가
-# NFS에 있고 저널이 DELETE 모드면 그 commit 하나가 **저널 파일 생성·fsync·삭제
-# 왕복**이 된다. GUI는 5초마다, 스캔 작업자들은 체크포인트마다 연결하므로
-# 그 비용이 그대로 화면 멈춤과 스캔 지연으로 나타났다.
-#
-# 스키마는 멱등이라 프로세스당 한 번이면 충분하다. 프로세스가 여럿이어도
-# 각자 한 번씩 하므로 여전히 안전하다.
-_INITIALIZED = set()
-_INIT_LOCK = threading.Lock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS samples (
@@ -66,21 +50,20 @@ CREATE INDEX IF NOT EXISTS idx_samples_account_time
 # 나중에 추가된 열. `CREATE TABLE IF NOT EXISTS`는 이미 있는 테이블을 바꾸지
 # 않으므로, 기존 DB에는 ALTER TABLE로 따로 붙여 준다 (열 추가만 하고 기존
 # 데이터는 건드리지 않으므로 되돌릴 필요가 없는 안전한 변경).
-_ADDED_COLUMNS = (
-    ("quota_used_kb", "INTEGER"),
-    ("quota_limit_kb", "INTEGER"),
-    ("quota_soft_limit_kb", "INTEGER"),
-    ("quota_pct", "REAL"),
-    ("quota_tier", "TEXT"),
-)
+# 나중에 추가된 열 (`sqlite_db.add_missing_columns` 가 채운다).
+_ADDED_COLUMNS = {
+    "quota_used_kb": "INTEGER",
+    "quota_limit_kb": "INTEGER",
+    "quota_soft_limit_kb": "INTEGER",
+    "quota_pct": "REAL",
+    "quota_tier": "TEXT",
+}
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(samples)").fetchall()}
-    for column, column_type in _ADDED_COLUMNS:
-        if column not in existing:
-            conn.execute(f"ALTER TABLE samples ADD COLUMN {column} {column_type}")
+def _initialize(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
     conn.commit()
+    sqlite_db.add_missing_columns(conn, "samples", _ADDED_COLUMNS)
 
 
 @dataclass
@@ -117,85 +100,16 @@ def db_path(data_dir: Path) -> Path:
 
 
 
-def _apply_journal_mode(conn: sqlite3.Connection, data_dir: Path) -> str:
-    """이 위치에 안전한 journal 모드로 맞춘다. 최종 모드를 돌려준다.
-
-    ## 왜 먼저 읽어 보는가
-
-    `journal_mode`는 **DB 파일에 영구 저장되는 값**이다. 이미 원하는 모드면
-    바꿀 이유가 없는데, 그냥 `PRAGMA journal_mode=...`를 쓰면 쓰기 잠금을
-    잡으려 든다.
-
-    ## 왜 예외를 삼키는가
-
-    WAL에서 다른 모드로 바꾸려면 **다른 연결이 하나도 없어야** 한다. 있으면
-    `database is locked`가 난다. 이 프로그램은 수집기(cron)·야간 스캔·GUI·
-    알림기가 같은 DB를 건드리므로 그 상황이 일상이다.
-
-    여기서 예외를 올리면 **연결 자체가 실패해 수집도 화면도 통째로 멈춘다.**
-    실제로 그랬다 - GUI가 5초마다 연결하면서 매번 `timeout=10`만큼 기다렸다
-    실패해 화면이 끊겼다. 모드를 못 바꾼 것은 다음 기회에 바꾸면 되는 일이고,
-    지금 할 일은 있는 그대로라도 여는 것이다. 실제 모드는 진단이 보여 준다.
-    """
-
-    desired = paths.journal_mode_for(data_dir)
-    try:
-        current = conn.execute("PRAGMA journal_mode").fetchone()[0]
-    except sqlite3.Error:  # pragma: no cover - 방어적 처리
-        current = ""
-
-    if str(current).lower() == desired.lower():
-        return desired
-
-    try:
-        return conn.execute(f"PRAGMA journal_mode={desired}").fetchone()[0]
-    except sqlite3.Error as exc:
-        logger.warning(
-            "journal 모드를 %s로 바꾸지 못했습니다 (%s). 지금은 %s로 씁니다 - "
-            "데이터 디렉터리가 네트워크 파일시스템이면 다른 프로세스를 모두 "
-            "멈춘 뒤 다시 열어야 바뀝니다.",
-            desired, exc, current or "알 수 없음",
-        )
-        return str(current)
-
-
 def journal_mode(data_dir: Path) -> Optional[str]:
     """지금 DB가 실제로 쓰고 있는 journal 모드 (진단용). 못 읽으면 None."""
 
-    target = db_path(data_dir)
-    if not target.exists():
-        return None
-    try:
-        conn = sqlite3.connect(str(target), timeout=2)
-    except sqlite3.Error:
-        return None
-    try:
-        return conn.execute("PRAGMA journal_mode").fetchone()[0]
-    except sqlite3.Error:  # pragma: no cover
-        return None
-    finally:
-        conn.close()
+    return sqlite_db.journal_mode(db_path(data_dir))
 
 
 def connect(data_dir: Path) -> sqlite3.Connection:
-    data_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path(data_dir)), timeout=10)
-    conn.row_factory = sqlite3.Row
-    # 스키마 확인은 프로세스당 한 번이면 된다 (_INITIALIZED 주석 참고).
-    #
-    # **만드는 동안 잠금을 쥐고 있어야 한다.** 예전에는 표시만 먼저 해 두고
-    # 잠금을 놓았는데, 그 사이에 들어온 다른 스레드는 "이미 됐다"고 보고 빈
-    # DB 를 그대로 받아 갔다 - 새 데이터 디렉터리에서 창을 처음 열면 작업
-    # 스레드 몇이 동시에 들어오므로 실제로 `no such table` 이 났다.
-    key = str(db_path(data_dir))
-    with _INIT_LOCK:
-        if key not in _INITIALIZED:
-            _apply_journal_mode(conn, data_dir)
-            conn.executescript(SCHEMA)
-            conn.commit()
-            _migrate(conn)
-            _INITIALIZED.add(key)
-    return conn
+    """연결 규칙(스키마는 프로세스당 한 번, journal 모드)은 `sqlite_db` 에 있다."""
+
+    return sqlite_db.connect(db_path(data_dir), data_dir, _initialize)
 
 
 def insert_sample(conn: sqlite3.Connection, sample: SampleRecord) -> int:

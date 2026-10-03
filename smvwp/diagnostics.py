@@ -175,9 +175,13 @@ def check_data_dir(data_dir: Optional[Path]) -> dict:
     # 조용히 그 상태로 남지 않도록 진단이 드러낸다.
     modes = {}
     try:
-        from . import scan_store, store
+        from . import scan_store, search_index, store
 
-        for label, module in (("samples.db", store), ("detail_scan.db", scan_store)):
+        for label, module in (
+            ("samples.db", store),
+            ("detail_scan.db", scan_store),
+            ("search_index.db", search_index),
+        ):
             mode = module.journal_mode(data_dir)
             if mode:
                 modes[label] = mode

@@ -44,6 +44,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import action_guide, config as config_module, i18n, priority, tiers
+from . import widgets
 from .account_detail_dialog import DetailReader
 
 # 급함 단계의 색. 목록 줄과 같은 색을 쓴다 - 창을 열어도 "아까 그 빨간 줄"
@@ -151,17 +152,9 @@ class ActionDialog(QDialog):
         self.evidence_note.setWordWrap(True)
         right.addWidget(self.evidence_note)
 
-        self.evidence = QTableWidget(0, 0)
-        self.evidence.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.evidence.setSelectionBehavior(QTableWidget.SelectRows)
+        # 열은 근거의 종류에 따라 그릴 때 정해진다.
+        self.evidence = widgets.read_only_table(0, stretch_column=None)
         self.evidence.setSelectionMode(QTableWidget.SingleSelection)
-        self.evidence.verticalHeader().setVisible(False)
-        self.evidence.verticalHeader().setDefaultSectionSize(30)
-        self.evidence.setShowGrid(False)
-        self.evidence.setWordWrap(False)
-        # 경로는 가운데를 줄인다 - 오른쪽을 자르면 정작 다른 뒤쪽이 사라진다.
-        self.evidence.setTextElideMode(Qt.ElideMiddle)
-        self.evidence.horizontalHeader().setHighlightSections(False)
         self.evidence.itemSelectionChanged.connect(self._sync_copy_button)
         right.addWidget(self.evidence, 1)
 

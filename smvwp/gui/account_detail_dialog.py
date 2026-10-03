@@ -28,7 +28,6 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QStackedWidget,
@@ -40,7 +39,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import account_detail, config as config_module
-from .. import formatting, i18n, tiers
+from .. import formatting, i18n, quota, tiers
 from ..scheduler import ThreadWorker
 from . import theme, widgets
 from .trend_view import TrendChart
@@ -262,20 +261,7 @@ class AccountDetailDialog(QDialog):
         box = QVBoxLayout(page)
         box.setContentsMargins(0, 10, 0, 0)
 
-        table = QTableWidget(0, len(column_keys))
-        table.setHorizontalHeaderLabels([i18n.t(key) for key in column_keys])
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(30)
-        table.setShowGrid(False)
-        table.setWordWrap(False)
-        # 경로는 가운데를 줄인다 - 오른쪽을 자르면 정작 다른 뒤쪽이 사라진다.
-        table.setTextElideMode(Qt.ElideMiddle)
-        header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setHighlightSections(False)
+        table = widgets.read_only_table(headers=[i18n.t(key) for key in column_keys])
         box.addWidget(table, 1)
 
         self.stack.addWidget(page)
@@ -369,7 +355,9 @@ class AccountDetailDialog(QDialog):
         )
         self._fact(
             "quota",
-            f"{sample.quota_pct:.1f}%" if sample.quota_pct is not None else dash,
+            # 한도 없이 사용량만 오는 구성도 있다 - 그때 '-' 로 두면 값을
+            # 받고도 버리는 셈이다. 홈 표에 있던 것과 같은 함수로 그린다.
+            quota.format_usage(sample),
         )
         self._fact("collected", formatting.local_minute_text(sample.collected_at))
         if sample.ok:

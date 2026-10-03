@@ -437,15 +437,8 @@ class ScanTab(QFrame):
         - 줄바꿈을 끈다. 켜 두면 줄임 대신 행 안에서 접히려다 잘린다.
         """
 
-        table = QTableWidget(0, columns)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.verticalHeader().setVisible(False)
-        table.setShowGrid(False)
-        table.setWordWrap(False)
-        table.setTextElideMode(Qt.ElideMiddle)
-        table.horizontalHeader().setHighlightSections(False)
-        return table
+        # 폭 정책은 표마다 다르게 정하므로 여기서는 정하지 않는다.
+        return widgets.read_only_table(columns, row_height=34, stretch_column=None)
 
     # -- 1. 요약 ---------------------------------------------------------
     def _build_summary_page(self) -> None:
