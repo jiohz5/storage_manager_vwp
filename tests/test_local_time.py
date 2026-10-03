@@ -72,7 +72,7 @@ class FallbackTests(unittest.TestCase):
     def test_garbage_does_not_become_a_plausible_time(self):
         """자르기 방식은 쓰레기 입력도 그럴듯하게 보여 줬다."""
 
-        self.assertEqual(formatting.local_clock_text("not a time"), "-")
+        self.assertEqual(formatting.local_minute_text("not a time"), "-")
         self.assertIsNone(formatting.to_local("2026-13-45"))
 
     def test_the_fallback_can_be_chosen(self):
@@ -91,7 +91,7 @@ class ShapeTests(unittest.TestCase):
             moment.strftime("%Y-%m-%d %H:%M"),
         )
         self.assertEqual(
-            formatting.local_clock_text("2026-09-10T00:00:00+00:00"),
+            formatting.local_minute_text("2026-09-10T00:00:00+00:00")[-5:],
             moment.strftime("%H:%M"),
         )
 
@@ -106,14 +106,14 @@ class KoreanTimeTests(unittest.TestCase):
         """이것이 신고된 증상이다 - 오전 9시가 00: 으로 나왔다."""
 
         self.assertEqual(
-            formatting.local_clock_text("2026-09-10T00:00:00+00:00", tz=KST), "09:00"
+            formatting.local_minute_text("2026-09-10T00:00:00+00:00", tz=KST)[-5:], "09:00"
         )
 
     def test_the_night_window_reads_as_the_night(self):
         """밤 10시 시작은 22:00 으로 보여야 한다 (UTC로는 13:00)."""
 
         self.assertEqual(
-            formatting.local_clock_text("2026-09-09T13:00:00+00:00", tz=KST), "22:00"
+            formatting.local_minute_text("2026-09-09T13:00:00+00:00", tz=KST)[-5:], "22:00"
         )
 
     def test_an_early_morning_scan_keeps_its_own_date(self):
@@ -157,7 +157,7 @@ class SystemTimezoneTests(unittest.TestCase):
 
         self.addCleanup(restore)
         self.assertEqual(
-            formatting.local_clock_text("2026-09-10T00:00:00+00:00"), "09:00"
+            formatting.local_minute_text("2026-09-10T00:00:00+00:00")[-5:], "09:00"
         )
 
 

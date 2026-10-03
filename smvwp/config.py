@@ -283,9 +283,6 @@ class Settings:
     full_prediction_max_years: int = 10         # 이보다 먼 예상은 '예측 불가'
     # 급증 판정도 같은 3시간 창을 쓴다 (창을 나누면 설명만 어려워진다).
     capacity_surge_min_kb: int = 100 * 1024 * 1024  # 100GB
-    # 경로별 증감 이력 - 이상탐지는 아직 없지만 나중에 붙일 수 있게 숫자만
-    # 축적한다. 행이 작아 기준선 세대보다 훨씬 오래 남길 수 있다.
-    growth_history_keep_generations: int = 60
     # 수집 신선도 감시. cron이 조용히 안 도는 상황을 잡기 위한 것이라 판정을
     # 넉넉하게 잡는다 - 한두 번 밀린 것으로 경고하면 경고가 일상이 되어
     # 아무도 안 본다.
@@ -448,8 +445,6 @@ def _settings_from_dict(raw: dict) -> Settings:
         raise ConfigError("full_prediction_max_years는 1 이상이어야 합니다")
     if settings.capacity_surge_min_kb < 0:
         raise ConfigError("capacity_surge_min_kb는 음수일 수 없습니다")
-    if settings.growth_history_keep_generations < 1:
-        raise ConfigError("growth_history_keep_generations는 1 이상이어야 합니다")
     if settings.freshness_stale_multiplier < 2:
         raise ConfigError("freshness_stale_multiplier는 2 이상이어야 합니다 (cron 지연 여유)")
     if settings.freshness_window_hours < 1:

@@ -22,7 +22,7 @@ subprocess 모듈 객체**다. 여러 경로를 각각 patch하면 나중에 적
 from __future__ import annotations
 
 import subprocess
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Sequence
 
 
 def completed(
@@ -88,3 +88,48 @@ def df_runner(
         return completed(argv, inode_output if "-Pi" in argv else bytes_output)
 
     return CommandRunner({"df": handler})
+
+
+# -- 스캔 DB 시험용 ------------------------------------------------------------
+#
+# 운영 코드에는 시험에서만 쓰는 함수를 두지 않는다. 아래는 시험이 데이터를
+# 심거나 저장된 것을 들여다볼 때만 쓰는 것들이다.
+
+
+def save_checkpoint_results(conn, account_id: str, generation: int) -> None:
+    """끝난(done) 체크포인트의 크기를 기준선 결과로 옮긴다.
+
+    운영에서는 체크포인트를 처리하면서 `save_tree_entries` 가 곧바로 넣는다.
+    시험은 체크포인트만 심고 결과를 한 번에 만들 때 이것을 쓴다."""
+
+    from smvwp import scan_store
+
+    rows = conn.execute(
+        "SELECT path, size_kb FROM scan_checkpoints "
+        "WHERE account_id = ? AND kind = 'baseline' AND generation = ? AND status = 'done'",
+        (account_id, generation),
+    ).fetchall()
+    conn.executemany(
+        "INSERT OR REPLACE INTO baseline_results "
+        "(account_id, generation, path, size_kb, completed_at) VALUES (?, ?, ?, ?, ?)",
+        [(account_id, generation, row[0], row[1], scan_store.utc_now_iso()) for row in rows],
+    )
+    conn.commit()
+
+
+def sample_processes(conn, sample_id: int):
+    """서버 표본 하나에 딸린 프로세스 줄들 (CPU 많은 순)."""
+
+    return conn.execute(
+        "SELECT * FROM server_sample_processes WHERE sample_id = ? ORDER BY cpu_percent DESC",
+        (sample_id,),
+    ).fetchall()
+
+
+def sample_mounts(conn, sample_id: int):
+    """서버 표본 하나에 딸린 마운트 줄들 (요청 많은 순)."""
+
+    return conn.execute(
+        "SELECT * FROM server_sample_mounts WHERE sample_id = ? ORDER BY ops DESC",
+        (sample_id,),
+    ).fetchall()

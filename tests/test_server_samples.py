@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from smvwp import nfsstat, procstat, scan_store, servermon
+from tests import support
 
 
 def iso(days_ago=0, hours=0):
@@ -102,7 +103,7 @@ class SaveTests(StoreBase):
         sample_id = scan_store.save_server_sample(
             self.conn, sample(processes=[process(1), process(2, comm="du", ours=True)])
         )
-        rows = scan_store.sample_processes(self.conn, sample_id)
+        rows = support.sample_processes(self.conn, sample_id)
         self.assertEqual([row["comm"] for row in rows], ["virtuoso", "du"])
         self.assertEqual(rows[1]["is_ours"], 1)
 
@@ -112,7 +113,7 @@ class SaveTests(StoreBase):
         sample_id = scan_store.save_server_sample(
             self.conn, sample(mounts=[mount(rtt=2.0, queue=8.0)])
         )
-        row = scan_store.sample_mounts(self.conn, sample_id)[0]
+        row = support.sample_mounts(self.conn, sample_id)[0]
         self.assertAlmostEqual(row["avg_rtt_ms"], 2.0)
         self.assertAlmostEqual(row["avg_queue_ms"], 8.0)
         self.assertGreater(row["queue_share"], 0.7)
@@ -214,7 +215,7 @@ class PruneTests(StoreBase):
         scan_store.prune_server_samples(self.conn, retention_days=90)
         self.assertEqual(len(scan_store.server_samples(self.conn)), 1)
         # 자식을 남기면 어느 것이 고아인지 알 방법이 없어진다.
-        self.assertEqual(scan_store.sample_processes(self.conn, old), [])
+        self.assertEqual(support.sample_processes(self.conn, old), [])
 
     def test_the_two_kinds_do_not_prune_each_other(self):
         """촘촘한 쪽과 성긴 쪽은 값어치가 달라 보존 기간이 다르다."""

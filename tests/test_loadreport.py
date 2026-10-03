@@ -213,10 +213,6 @@ class RankingTests(unittest.TestCase):
             loadreport.summarize([row(cpu_busy_percent=40.0)] * 8, label="15시"),
         ]
 
-    def test_busiest_first(self):
-        picked = loadreport.busiest_hours(self.buckets(), limit=2)
-        self.assertEqual([item.label for item in picked], ["10시", "15시"])
-
     def test_quietest_first(self):
         picked = loadreport.quietest_hours(self.buckets(), limit=2)
         self.assertEqual([item.label for item in picked], ["03시", "15시"])

@@ -34,6 +34,28 @@ class LoadSaveConfigTests(unittest.TestCase):
             self.assertEqual(reloaded.accounts[0].name, "project_a")
             self.assertEqual(reloaded.settings.collector_interval_seconds, 1800)
 
+    def test_a_setting_that_was_removed_does_not_break_an_old_config(self):
+        """기능을 걷어 내도 반입 장비의 옛 설정 파일은 그대로 열려야 한다.
+
+        `growth_history_keep_generations` 는 경로별 증감 이력을 걷어 내며 없앤
+        설정이다. 남아 있는 키 때문에 프로그램이 안 뜨면 설정 파일을 손으로
+        고쳐야 하는데, 폐쇄망 장비에서 그것은 사람을 부르는 일이다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            config_module.load_config(data_dir)   # 기본 파일을 만든다
+            path = config_module.config_file(data_dir)
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            raw["settings"]["growth_history_keep_generations"] = 60
+            path.write_text(json.dumps(raw), encoding="utf-8")
+
+            config = config_module.load_config(data_dir)
+            self.assertFalse(hasattr(config.settings, "growth_history_keep_generations"))
+            # 다음에 저장하면 낡은 키도 사라진다.
+            config_module.save_config(data_dir, config)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn("growth_history_keep_generations", saved["settings"])
+
     def test_rejects_invalid_json(self):
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)

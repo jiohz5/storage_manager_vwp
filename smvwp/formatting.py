@@ -105,13 +105,6 @@ def local_date_text(iso_text, fallback: str = "-", tz=None) -> str:
     return moment.strftime("%Y-%m-%d") if moment else fallback
 
 
-def local_clock_text(iso_text, fallback: str = "-", tz=None) -> str:
-    """`09:00` - 시각만."""
-
-    moment = to_local(iso_text, tz)
-    return moment.strftime("%H:%M") if moment else fallback
-
-
 def tier_badge_text(tier: str, pct: Optional[float]) -> str:
     return tiers.display_text(tier, pct)
 

@@ -221,34 +221,5 @@ class TakeOneTests(unittest.TestCase):
         self.assertEqual(order, ["prime", "work", "sample"])
 
 
-class SummaryTests(unittest.TestCase):
-    """스캔을 돌려도 되는지 판단할 때 필요한 것은 우리 몫이 아니라 남은 여유다."""
-
-    def samples(self):
-        return [
-            servermon.ServerSample(
-                sampled_at="a", interval_seconds=1, cpu_count=4,
-                cpu_busy_percent=40.0, scan_cpu_percent=0.0,
-                load_avg_1m=1.0, procs_blocked=2, blocked_others=2,
-            ),
-            servermon.ServerSample(
-                sampled_at="b", interval_seconds=1, cpu_count=4,
-                cpu_busy_percent=80.0, scan_cpu_percent=0.0,
-                load_avg_1m=5.0, procs_blocked=8, blocked_others=6,
-            ),
-        ]
-
-    def test_average_and_peak(self):
-        summary = servermon.summarize_others(self.samples())
-        self.assertAlmostEqual(summary["cpu_avg"], 60.0)
-        self.assertAlmostEqual(summary["cpu_peak"], 80.0)
-        self.assertAlmostEqual(summary["load_peak"], 5.0)
-        self.assertAlmostEqual(summary["blocked_peak"], 6.0)
-
-    def test_nothing_measured_gives_nothing(self):
-        empty = [servermon.ServerSample(sampled_at="a", interval_seconds=1)]
-        self.assertEqual(servermon.summarize_others(empty), {})
-
-
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

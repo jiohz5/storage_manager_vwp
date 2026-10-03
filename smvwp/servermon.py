@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 from . import nfsstat, procstat
 
@@ -266,29 +266,3 @@ def busiest_processes(
     return procstat.top(sample.processes, by=by, limit=limit)
 
 
-def summarize_others(samples: Sequence[ServerSample]) -> Dict[str, float]:
-    """여러 표본에서 '우리가 아닌 것들'이 만든 부하를 요약한다.
-
-    스캔을 돌려도 되는지 판단할 때 필요한 것은 우리 몫이 아니라 **남은 여유**다.
-    """
-
-    others = [
-        sample.others_cpu_percent
-        for sample in samples
-        if sample.others_cpu_percent is not None
-    ]
-    loads = [sample.load_avg_1m for sample in samples if sample.load_avg_1m is not None]
-    blocked = [
-        sample.blocked_others for sample in samples if sample.procs_blocked is not None
-    ]
-    result: Dict[str, float] = {}
-    if others:
-        result["cpu_avg"] = sum(others) / len(others)
-        result["cpu_peak"] = max(others)
-    if loads:
-        result["load_avg"] = sum(loads) / len(loads)
-        result["load_peak"] = max(loads)
-    if blocked:
-        result["blocked_avg"] = sum(blocked) / len(blocked)
-        result["blocked_peak"] = float(max(blocked))
-    return result

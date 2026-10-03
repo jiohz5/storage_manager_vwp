@@ -129,6 +129,28 @@ class SessionTests(_Case):
             conn.execute("SELECT 1")
 
 
+class RetiredTableTests(_Case):
+    """걷어 낸 표가 기존 DB 에 남지 않는다.
+
+    `growth_history` 는 밤마다 모든 경로의 증감을 기록하고 60세대를 보관했는데
+    읽는 화면이 없었다. 기록을 멈추는 것만으로는 이미 쌓인 것이 그대로 남는다."""
+
+    def test_an_old_database_loses_the_retired_table(self):
+        self.data_dir.mkdir(parents=True)
+        old = sqlite3.connect(str(scan_store.db_path(self.data_dir)))
+        old.execute("CREATE TABLE growth_history (account_id TEXT, path TEXT)")
+        old.execute("INSERT INTO growth_history VALUES ('a', '/x')")
+        old.commit()
+        old.close()
+
+        with scan_store.session(self.data_dir) as conn:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )}
+        self.assertNotIn("growth_history", tables)
+        self.assertIn("scan_runs", tables)
+
+
 class AddMissingColumnsTests(_Case):
     def test_only_missing_columns_are_added(self):
         conn = sqlite3.connect(str(self.path.parent.mkdir(parents=True) or self.path))

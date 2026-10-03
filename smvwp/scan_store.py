@@ -27,7 +27,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from . import sqlite_db
 
@@ -92,21 +92,6 @@ CREATE TABLE IF NOT EXISTS baseline_results (
     completed_at TEXT NOT NULL,
     PRIMARY KEY (account_id, generation, path)
 );
-
--- 경로별 증감 이력. baseline_results는 DB 크기 때문에 최근 몇 세대만
--- 남기지만, 이상탐지(중앙값·MAD 등)를 나중에 붙이려면 더 긴 이력이 필요하다.
--- 여기에는 경로와 숫자만 담아 행을 작게 유지하고, 그만큼 오래 보관한다.
-CREATE TABLE IF NOT EXISTS growth_history (
-    account_id TEXT NOT NULL,
-    generation INTEGER NOT NULL,
-    path TEXT NOT NULL,
-    delta_kb INTEGER NOT NULL,
-    current_kb INTEGER NOT NULL,
-    recorded_at TEXT NOT NULL,
-    PRIMARY KEY (account_id, generation, path)
-);
-CREATE INDEX IF NOT EXISTS idx_growth_history_path
-    ON growth_history(account_id, path, generation);
 
 -- 스캔이 도는 동안 일정 주기로 찍은 리소스 표본.
 --
@@ -313,6 +298,10 @@ _COLUMNS_ADDED = {
 
 def _initialize(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # 걷어 낸 표. **밤마다 모든 경로의 증감을 기록하고 60세대를 보관**했는데
+    # (경로 5만 개면 300만 줄) 읽는 화면이 없었다 - NFS 위에서 쓰기만 하는
+    # 비용이었다. 기존 DB 에서는 한 번 지우고, 그 뒤로는 아무 일도 하지 않는다.
+    conn.execute("DROP TABLE IF EXISTS growth_history")
     for table, columns in _COLUMNS_ADDED.items():
         sqlite_db.add_missing_columns(conn, table, columns)
 
@@ -688,31 +677,6 @@ def insert_children(conn: sqlite3.Connection, parent: sqlite3.Row, child_paths: 
     conn.commit()
 
 
-def leaf_results(conn: sqlite3.Connection, account_id: str, generation: int) -> List[sqlite3.Row]:
-    """이번 세대에서 실제로 크기가 측정된(done) 항목들 - "성장 경로"로 보여줄
-    후보. split된 상위 디렉터리는 자기 자신의 크기를 갖지 않으므로 제외된다
-    (그 자리는 자식들의 done 결과가 대신한다)."""
-
-    return conn.execute(
-        """
-        SELECT * FROM scan_checkpoints
-        WHERE account_id = ? AND kind = 'baseline' AND generation = ? AND status = 'done'
-        ORDER BY size_kb DESC
-        """,
-        (account_id, generation),
-    ).fetchall()
-
-
-def save_baseline_results(conn: sqlite3.Connection, account_id: str, generation: int, rows: List[sqlite3.Row]) -> None:
-    now = utc_now_iso()
-    conn.executemany(
-        "INSERT OR REPLACE INTO baseline_results (account_id, generation, path, size_kb, completed_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [(account_id, generation, row["path"], row["size_kb"], now) for row in rows],
-    )
-    conn.commit()
-
-
 def generation_completed_at(
     conn: sqlite3.Connection, account_id: str, generation: int
 ) -> Optional[str]:
@@ -728,17 +692,6 @@ def generation_completed_at(
         (account_id, generation),
     ).fetchone()
     return row["at"] if row and row["at"] else None
-
-
-def generation_dates(conn: sqlite3.Connection, account_id: str) -> Dict[int, str]:
-    """이 계정이 가진 모든 스캔의 완료 시각 {세대: ISO}."""
-
-    rows = conn.execute(
-        "SELECT generation, MAX(completed_at) AS at FROM baseline_results "
-        "WHERE account_id = ? GROUP BY generation",
-        (account_id,),
-    ).fetchall()
-    return {row["generation"]: row["at"] for row in rows if row["at"]}
 
 
 def save_tree_entries(
@@ -832,98 +785,6 @@ def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: 
         (previous_generation, account_id, current_generation, max_depth, limit),
     ).fetchall()
     return rows
-
-
-def record_growth_history(
-    conn: sqlite3.Connection,
-    account_id: str,
-    generation: int,
-    previous_generation: Optional[int],
-) -> int:
-    """완료된 세대의 경로별 증감을 이력 테이블에 남긴다.
-
-    `baseline_results`는 곧 정리되어 사라지므로, 이상탐지에 쓸 수 있도록 숫자만
-    따로 남긴다. 비교할 이전 세대가 없으면(첫 기준선) 아무것도 쓰지 않는다 -
-    전부 '신규'로 기록되면 나중 통계가 왜곡된다.
-    """
-
-    if not previous_generation or previous_generation < 1:
-        return 0
-
-    rows = conn.execute(
-        """
-        SELECT cur.path AS path, cur.size_kb AS current_kb, prev.size_kb AS previous_kb
-        FROM baseline_results cur
-        LEFT JOIN baseline_results prev
-            ON prev.account_id = cur.account_id AND prev.generation = ? AND prev.path = cur.path
-        WHERE cur.account_id = ? AND cur.generation = ?
-        """,
-        (previous_generation, account_id, generation),
-    ).fetchall()
-    if not rows:
-        return 0
-
-    now = utc_now_iso()
-    conn.executemany(
-        "INSERT OR REPLACE INTO growth_history "
-        "(account_id, generation, path, delta_kb, current_kb, recorded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        [
-            (
-                account_id,
-                generation,
-                row["path"],
-                row["current_kb"] - (row["previous_kb"] or 0),
-                row["current_kb"],
-                now,
-            )
-            for row in rows
-        ],
-    )
-    conn.commit()
-    return len(rows)
-
-
-def growth_history_for_path(
-    conn: sqlite3.Connection, account_id: str, path: str, limit: int = 60
-) -> List[sqlite3.Row]:
-    """한 경로의 최근 증감 이력 (오래된 것부터). 이상탐지를 붙일 때 쓸 입력."""
-
-    rows = conn.execute(
-        "SELECT generation, delta_kb, current_kb, recorded_at FROM growth_history "
-        "WHERE account_id = ? AND path = ? ORDER BY generation DESC LIMIT ?",
-        (account_id, path, limit),
-    ).fetchall()
-    return list(reversed(rows))
-
-
-def prune_growth_history(
-    conn: sqlite3.Connection, account_id: str, keep_generations: int = 60
-) -> int:
-    """오래된 세대의 증감 이력을 지운다.
-
-    `prune_old_generations`(기준선, 기본 2세대)와 별개로 훨씬 길게 남긴다 -
-    행이 작아 오래 들고 있어도 부담이 적고, 이력이 짧으면 이상탐지 자체가
-    불가능하기 때문."""
-
-    generations = [
-        row["generation"]
-        for row in conn.execute(
-            "SELECT DISTINCT generation FROM growth_history WHERE account_id = ? "
-            "ORDER BY generation DESC",
-            (account_id,),
-        ).fetchall()
-    ]
-    to_delete = generations[keep_generations:]
-    if not to_delete:
-        return 0
-    placeholders = ",".join("?" for _ in to_delete)
-    cursor = conn.execute(
-        f"DELETE FROM growth_history WHERE account_id = ? AND generation IN ({placeholders})",
-        (account_id, *to_delete),
-    )
-    conn.commit()
-    return cursor.rowcount
 
 
 def save_large_files(
@@ -1282,21 +1143,6 @@ def server_samples(
     return conn.execute(
         "SELECT * FROM server_samples " + where + " ORDER BY sampled_at LIMIT ?",
         params,
-    ).fetchall()
-
-
-def sample_processes(conn: sqlite3.Connection, sample_id: int) -> List[sqlite3.Row]:
-    return conn.execute(
-        "SELECT * FROM server_sample_processes WHERE sample_id = ? "
-        "ORDER BY cpu_percent DESC",
-        (sample_id,),
-    ).fetchall()
-
-
-def sample_mounts(conn: sqlite3.Connection, sample_id: int) -> List[sqlite3.Row]:
-    return conn.execute(
-        "SELECT * FROM server_sample_mounts WHERE sample_id = ? ORDER BY ops DESC",
-        (sample_id,),
     ).fetchall()
 
 

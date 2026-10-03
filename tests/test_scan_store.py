@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from smvwp import scan_store
+from tests import support
 
 
 class ScanStoreTestCase(unittest.TestCase):
@@ -171,8 +172,7 @@ class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):
     def test_save_and_top_paths(self):
         conn = self.conn
         self._seed_and_complete("acct-1", 1, {"/user/a/big": 5000, "/user/a/small": 10})
-        rows = scan_store.leaf_results(conn, "acct-1", 1)
-        scan_store.save_baseline_results(conn, "acct-1", 1, rows)
+        support.save_checkpoint_results(conn, "acct-1", 1)
 
         top = scan_store.top_paths(conn, "acct-1", 1, limit=1)
         self.assertEqual(len(top), 1)
@@ -182,11 +182,11 @@ class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):
         conn = self.conn
         # 세대 1: a=100, b=200 (b가 1등)
         self._seed_and_complete("acct-1", 1, {"/a": 100, "/b": 200})
-        scan_store.save_baseline_results(conn, "acct-1", 1, scan_store.leaf_results(conn, "acct-1", 1))
+        support.save_checkpoint_results(conn, "acct-1", 1)
 
         # 세대 2: a=500(폭증, 1등으로), b=210(거의 그대로)
         self._seed_and_complete("acct-1", 2, {"/a": 500, "/b": 210})
-        scan_store.save_baseline_results(conn, "acct-1", 2, scan_store.leaf_results(conn, "acct-1", 2))
+        support.save_checkpoint_results(conn, "acct-1", 2)
 
         delta = scan_store.growth_delta(conn, "acct-1", 2, 1)
         by_path = {row["path"]: (row["current_kb"], row["previous_kb"]) for row in delta}
@@ -199,10 +199,10 @@ class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):
     def test_growth_delta_new_path_has_null_previous(self):
         conn = self.conn
         self._seed_and_complete("acct-1", 1, {"/a": 100})
-        scan_store.save_baseline_results(conn, "acct-1", 1, scan_store.leaf_results(conn, "acct-1", 1))
+        support.save_checkpoint_results(conn, "acct-1", 1)
 
         self._seed_and_complete("acct-1", 2, {"/a": 100, "/new_dir": 999})
-        scan_store.save_baseline_results(conn, "acct-1", 2, scan_store.leaf_results(conn, "acct-1", 2))
+        support.save_checkpoint_results(conn, "acct-1", 2)
 
         delta = scan_store.growth_delta(conn, "acct-1", 2, 1)
         by_path = {row["path"]: row["previous_kb"] for row in delta}
@@ -212,9 +212,7 @@ class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):
         conn = self.conn
         for generation in (1, 2, 3):
             self._seed_and_complete("acct-1", generation, {"/a": generation * 100})
-            scan_store.save_baseline_results(
-                conn, "acct-1", generation, scan_store.leaf_results(conn, "acct-1", generation)
-            )
+            support.save_checkpoint_results(conn, "acct-1", generation)
 
         scan_store.prune_old_generations(conn, "acct-1", keep_last=2)
 
@@ -377,9 +375,7 @@ class GenerationDateTests(ScanStoreTestCase):
         scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
         checkpoint = scan_store.next_pending(conn, "acct-1", scan_store.BASELINE, 1)
         scan_store.mark_done(conn, checkpoint["id"], size_kb=100)
-        scan_store.save_baseline_results(
-            conn, "acct-1", 1, scan_store.leaf_results(conn, "acct-1", 1)
-        )
+        support.save_checkpoint_results(conn, "acct-1", 1)
 
         completed = scan_store.generation_completed_at(conn, "acct-1", 1)
         self.assertIsNotNone(completed)
@@ -392,20 +388,3 @@ class GenerationDateTests(ScanStoreTestCase):
         scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
         self.assertIsNone(scan_store.generation_completed_at(conn, "acct-1", 1))
 
-    def test_dates_map_covers_every_saved_scan(self):
-        conn = self.conn
-        for generation in (1, 2):
-            scan_store.seed_checkpoints(
-                conn, "acct-1", scan_store.BASELINE, generation, [f"/g{generation}"]
-            )
-            checkpoint = scan_store.next_pending(
-                conn, "acct-1", scan_store.BASELINE, generation
-            )
-            scan_store.mark_done(conn, checkpoint["id"], size_kb=10)
-            scan_store.save_baseline_results(
-                conn, "acct-1", generation,
-                scan_store.leaf_results(conn, "acct-1", generation),
-            )
-
-        dates = scan_store.generation_dates(conn, "acct-1")
-        self.assertEqual(set(dates), {1, 2})

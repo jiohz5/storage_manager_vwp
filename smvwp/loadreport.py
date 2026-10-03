@@ -240,14 +240,6 @@ def daytime_verdict(bucket: Bucket) -> Verdict:
     )
 
 
-def busiest_hours(buckets: Sequence[Bucket], limit: int = 3) -> List[Bucket]:
-    """남의 부하가 가장 높은 시간대부터."""
-
-    ranked = [item for item in buckets if item.others_cpu.average is not None]
-    ranked.sort(key=lambda item: -(item.others_cpu.average or 0.0))
-    return ranked[:limit]
-
-
 def quietest_hours(
     buckets: Sequence[Bucket], limit: int = 3, scan_free_only: bool = True
 ) -> List[Bucket]:

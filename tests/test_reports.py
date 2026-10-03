@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from smvwp import config as config_module
+from tests import support
 from smvwp import i18n, reports, scan_store, store, tiers
 
 
@@ -342,10 +343,7 @@ class ScanProgressInReportTests(unittest.TestCase):
                     if checkpoint is None:
                         break
                     scan_store.mark_done(conn, checkpoint["id"], size_kb=2048)
-                scan_store.save_baseline_results(
-                    conn, account.account_id, generation,
-                    scan_store.leaf_results(conn, account.account_id, generation),
-                )
+                support.save_checkpoint_results(conn, account.account_id, generation)
                 scan_store.mark_generation_completed(conn, account.account_id, generation)
             finally:
                 conn.close()
