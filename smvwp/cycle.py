@@ -76,6 +76,10 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
 
     accounts_by_id = {a.account_id: a for a in accounts}
     state = notifications.load_notify_state(data_dir)
+    # 등급 알림은 계정마다 따로 간다. 같은 스토리지의 계정 여럿이 한꺼번에 차면
+    # 같은 이야기가 계정 수만큼 가지만, 그런 일은 드물어 묶지 않고 있는 그대로
+    # 보인다 (2026-10 결정). FULL 임박 예측은 `forecast_notify` 가 파일시스템
+    # 단위로 이미 합치고, 화면의 "무엇부터 할까"도 스토리지 단위로 묶는다.
     for record in records:
         account = accounts_by_id.get(record.account_id)
         if account is None:
