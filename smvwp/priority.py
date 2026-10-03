@@ -191,28 +191,77 @@ def build(
     - `health_summary` - `health.check_all` 결과.
     - `scan_accounts` - `nightly_scan.StatusSnapshot.accounts`.
     - `accounts_by_id` - 계정 이름을 찾기 위한 `{id: 이름}`.
+
+    종류마다 함수 하나가 줄을 만들고, 여기서는 모아서 순서만 정한다. 넣는
+    순서(사용률 → 백업 → 정리 → 스캔)는 순위가 같을 때의 순서가 되므로 바꾸지
+    않는다.
     """
 
     names = dict(accounts_by_id or {})
     plan = Plan()
-    actions: List[Action] = []
-
-    # -- 정리 후보를 계정별로 미리 모아 둔다 ---------------------------
-    #
-    # 사용률 줄과 붙여 놓아야 "96% 인데 정리하면 800GB 빈다" 한 줄이 된다.
-    cleanup_by_account = {}
     if health_summary is not None:
         plan.coarse_count = health_summary.coarse_count
-        for item in health_summary.cleanable:
-            bucket = cleanup_by_account.setdefault(
-                item.account_id, {"kb": 0, "count": 0, "name": item.account_name}
-            )
-            bucket["kb"] += item.reclaimable_kb
-            bucket["count"] += 1
+    cleanup = _cleanup_by_account(health_summary)
 
-    # -- 1. 스토리지가 찼다 --------------------------------------------
-    #
-    # **계정이 아니라 스토리지 하나에 한 줄.** `_storage_key` 참고.
+    actions = _full_actions(samples, cleanup, names)
+    actions += _backup_actions(health_summary)
+    actions += _cleanup_actions(cleanup, already=_accounts_on_full_lines(actions))
+    scan_lines, plan.accounts_without_scan = _scan_actions(scan_accounts)
+    actions += scan_lines
+
+    actions.sort(key=_rank)
+    plan.actions = actions[:MAX_ACTIONS]
+    return plan
+
+
+def _cleanup_by_account(health_summary) -> dict:
+    """정리 후보를 계정별로 모은다 `{계정id: {"kb", "count", "name"}}`.
+
+    사용률 줄과 붙여 놓아야 "96% 인데 정리하면 800GB 빈다" 한 줄이 된다."""
+
+    result = {}
+    if health_summary is None:
+        return result
+    for item in health_summary.cleanable:
+        bucket = result.setdefault(
+            item.account_id, {"kb": 0, "count": 0, "name": item.account_name}
+        )
+        bucket["kb"] += item.reclaimable_kb
+        bucket["count"] += 1
+    return result
+
+
+# -- 1. 스토리지가 찼다 ------------------------------------------------------
+def _full_actions(samples, cleanup: dict, names: dict) -> List[Action]:
+    """**계정이 아니라 스토리지 하나에 한 줄.** `_storage_key` 참고."""
+
+    actions = []
+    for bucket in _group_by_storage(samples, cleanup, names):
+        members = sorted(bucket["members"], key=lambda item: (-item[2], item[0]))
+        freeable = sum(item[2] for item in members)
+        # 대표 계정은 **정리할 것이 가장 많은 쪽**이다. 창의 '계정 상세' 가
+        # 그 계정을 연다 - 손댈 곳이 있는 계정이 먼저 나와야 한다.
+        primary = members[0]
+        actions.append(
+            Action(
+                kind=ACT_FULL,
+                level=bucket["level"],
+                account=primary[0],
+                account_id=primary[1],
+                pct=bucket["pct"],
+                # 해법을 같은 줄에 붙인다.
+                reclaimable_kb=freeable or None,
+                count=sum(item[3] for item in members),
+                shared=members,
+                mount_point=bucket["mount_point"],
+            )
+        )
+    return actions
+
+
+def _group_by_storage(samples, cleanup: dict, names: dict) -> List[dict]:
+    """급한 표본을 스토리지별로 묶는다 (넣은 순서를 지킨다)."""
+
     groups = {}
     for sample in samples:
         # 수집이 실패한 표본의 숫자는 옛 값이거나 비어 있다 - 그걸로 "지금
@@ -243,85 +292,82 @@ def build(
         # 같은 스토리지 안에서는 가장 높은 값을 그 스토리지의 값으로 본다.
         if pct > bucket["pct"]:
             bucket["pct"], bucket["level"] = pct, level
-        relief = cleanup_by_account.get(account_id)
+        relief = cleanup.get(account_id)
         bucket["members"].append((
             names.get(account_id, account_id), account_id,
             relief["kb"] if relief else 0, relief["count"] if relief else 0,
         ))
+    return list(groups.values())
 
-    for bucket in groups.values():
-        members = sorted(bucket["members"], key=lambda item: (-item[2], item[0]))
-        freeable = sum(item[2] for item in members)
-        # 대표 계정은 **정리할 것이 가장 많은 쪽**이다. 창의 '계정 상세' 가
-        # 그 계정을 연다 - 손댈 곳이 있는 계정이 먼저 나와야 한다.
-        primary = members[0]
-        actions.append(
-            Action(
-                kind=ACT_FULL,
-                level=bucket["level"],
-                account=primary[0],
-                account_id=primary[1],
-                pct=bucket["pct"],
-                # 해법을 같은 줄에 붙인다.
-                reclaimable_kb=freeable or None,
-                count=sum(item[3] for item in members),
-                shared=members,
-                mount_point=bucket["mount_point"],
-            )
-        )
 
-    # -- 2. 백업이 안 된 과제 -------------------------------------------
-    #
-    # 용량 문제가 아니라 **잃을 위험**이다. 그래서 사용률과 같은 칸에 둔다.
-    if health_summary is not None:
-        risky_by_account = {}
-        for item in health_summary.risky:
-            bucket = risky_by_account.setdefault(
-                item.account_id,
-                {"count": 0, "kb": 0, "name": item.account_name, "path": item.label},
-            )
-            bucket["count"] += 1
-            bucket["kb"] += item.backup_size_kb or item.run_size_kb or 0
-        for account_id, bucket in risky_by_account.items():
-            actions.append(
-                Action(
-                    kind=ACT_NO_BACKUP,
-                    level=LEVEL_HIGH,
-                    account=bucket["name"],
-                    account_id=account_id,
-                    size_kb=bucket["kb"],
-                    count=bucket["count"],
-                    path=bucket["path"],
-                )
-            )
+def _accounts_on_full_lines(actions) -> set:
+    """사용률 줄에 이미 올라간 계정들 (묶인 계정 전부)."""
 
-    # -- 3. 정리 후보 (사용률 줄에 안 붙은 것만) --------------------------
-    #
-    # 이미 붙은 계정을 또 내놓으면 같은 일이 두 줄이 되고, 합계도 두 번 세인다.
-    mentioned = {
+    return {
         member[1]
         for item in actions if item.kind == ACT_FULL
         for member in item.shared
     }
-    for account_id, bucket in cleanup_by_account.items():
-        if account_id in mentioned or bucket["kb"] < CLEANUP_WORTH_KB:
-            continue
-        actions.append(
-            Action(
-                kind=ACT_CLEANUP,
-                level=LEVEL_MEDIUM,
-                account=bucket["name"],
-                account_id=account_id,
-                reclaimable_kb=bucket["kb"],
-                count=bucket["count"],
-            )
-        )
 
-    # -- 4. 스캔이 준 것들 ----------------------------------------------
+
+# -- 2. 백업이 안 된 과제 ----------------------------------------------------
+def _backup_actions(health_summary) -> List[Action]:
+    """용량 문제가 아니라 **잃을 위험**이다. 그래서 사용률과 같은 칸에 둔다."""
+
+    if health_summary is None:
+        return []
+    risky_by_account = {}
+    for item in health_summary.risky:
+        bucket = risky_by_account.setdefault(
+            item.account_id,
+            {"count": 0, "kb": 0, "name": item.account_name, "path": item.label},
+        )
+        bucket["count"] += 1
+        bucket["kb"] += item.backup_size_kb or item.run_size_kb or 0
+    return [
+        Action(
+            kind=ACT_NO_BACKUP,
+            level=LEVEL_HIGH,
+            account=bucket["name"],
+            account_id=account_id,
+            size_kb=bucket["kb"],
+            count=bucket["count"],
+            path=bucket["path"],
+        )
+        for account_id, bucket in risky_by_account.items()
+    ]
+
+
+# -- 3. 정리 후보 (사용률 줄에 안 붙은 것만) ---------------------------------
+def _cleanup_actions(cleanup: dict, already: set) -> List[Action]:
+    """이미 사용률 줄에 붙은 계정을 또 내놓으면 같은 일이 두 줄이 되고,
+    합계도 두 번 세인다."""
+
+    return [
+        Action(
+            kind=ACT_CLEANUP,
+            level=LEVEL_MEDIUM,
+            account=bucket["name"],
+            account_id=account_id,
+            reclaimable_kb=bucket["kb"],
+            count=bucket["count"],
+        )
+        for account_id, bucket in cleanup.items()
+        if account_id not in already and bucket["kb"] >= CLEANUP_WORTH_KB
+    ]
+
+
+# -- 4. 스캔이 준 것들 ---------------------------------------------------------
+def _scan_actions(scan_accounts) -> "tuple":
+    """큰 파일과 급증. 스캔이 한 번도 안 끝난 계정은 따로 돌려준다
+    `(줄들, 스캔 없는 계정 이름들)` - 빈 목록이 "문제 없음" 으로 읽히면 안 된다."""
+
+    actions: List[Action] = []
+    unscanned: List[str] = []
     for entry in scan_accounts:
         name = getattr(entry, "account_name", "")
         if getattr(entry, "last_completed_generation", None) is None:
-            plan.accounts_without_scan.append(name)
+            unscanned.append(name)
             continue
 
         for item in large_files_module.build(
@@ -358,10 +404,7 @@ def build(
                         size_kb=entry.measured_kb,
                     )
                 )
-
-    actions.sort(key=_rank)
-    plan.actions = actions[:MAX_ACTIONS]
-    return plan
+    return actions, unscanned
 
 
 def _rank(action: Action):

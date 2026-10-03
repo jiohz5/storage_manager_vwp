@@ -57,10 +57,30 @@ def _app():
     return _APP
 
 
+# 창이 **스스로** 띄우는 배경 작업. 시험에서는 멈춰 둔다.
+#
+# 창을 만들면 첫 수집(진짜 `df`)·대시보드 읽기·스캔 상태 조회가 작업 스레드로
+# 돈다. 시험은 보통 가짜 표본이나 스냅샷을 넣고 `processEvents()` 를 부른 뒤
+# 확인하는데, 그 사이에 배경 결과가 도착하면 시험이 넣은 것을 **진짜(빈) 값으로
+# 덮어쓴다.** 몇 ms 차이로 결과가 갈려 시험이 들쭉날쭉했다 - 클래스마다 하나씩
+# 막다가 놓친 곳에서 계속 났다. 한 곳에서 다 막는다.
+#
+# 배경 작업 자체는 `test_thread_worker` 가 따로 본다.
+_BACKGROUND = (
+    "smvwp.scheduler.CollectorScheduler.start",
+    "smvwp.scheduler.DashboardWorker.refresh_async",
+    "smvwp.scheduler.ScanStatusWorker.refresh_async",
+)
+
+
 @unittest.skipUnless(HAVE_QT, "PyQt5 없음")
 class _GuiCase(unittest.TestCase):
     def setUp(self):
         _app()
+        for target in _BACKGROUND:
+            patcher = patch(target, lambda *args, **kwargs: None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         # 창이 띄우는 작업 스레드(대시보드, 스캔 상태)는 daemon 이라 창을 닫아도
         # 곧바로 끝나지 않고, 그동안 SQLite 파일을 쥐고 있다. 윈도우는 열린
         # 파일을 못 지우므로 정리에서 죽는다 - 리눅스에서는 나지 않는 일이다.
@@ -88,15 +108,6 @@ class _GuiCase(unittest.TestCase):
 class MainWindowSmokeTests(_GuiCase):
     def setUp(self):
         super().setUp()
-        # 창을 만들면 진짜 스캔 상태 조회가 작업 스레드에서 돈다. 그 결과가
-        # 시험의 `processEvents()` 도중에 도착하면 시험이 쏜 배너 신호를 덮어써
-        # 결과가 타이밍에 달리게 된다 (실제로 몇 ms 차이로 갈렸다). 여기서
-        # 보는 것은 신호 배선이므로 바깥 신호는 막는다.
-        patcher = patch(
-            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
         from smvwp.gui.main_window import MainWindow
 
         self.window = MainWindow(self.data_dir, self.config)
@@ -768,12 +779,6 @@ class ScanTabLayoutTests(_GuiCase):
 
     def setUp(self):
         super().setUp()
-        # 창이 스스로 읽어 온 빈 스냅샷이 우리 것을 덮어쓰지 않게.
-        patcher = patch(
-            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
         from smvwp.gui.main_window import MainWindow
 
         self.window = MainWindow(self.data_dir, self.config)
@@ -948,11 +953,6 @@ class HomeLayoutTests(_GuiCase):
 
     def setUp(self):
         super().setUp()
-        patcher = patch(
-            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
         from smvwp.gui.main_window import MainWindow
 
         self.window = MainWindow(self.data_dir, self.config)
@@ -1235,11 +1235,6 @@ class HomeToDetailTests(_GuiCase):
 
     def setUp(self):
         super().setUp()
-        patcher = patch(
-            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
         from smvwp.gui.main_window import MainWindow
 
         self.window = MainWindow(self.data_dir, self.config)
@@ -1496,11 +1491,6 @@ class ManyAccountsTests(_GuiCase):
 
     def setUp(self):
         super().setUp()
-        patcher = patch(
-            "smvwp.scheduler.ScanStatusWorker.refresh_async", lambda self: None
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
         from smvwp.gui.main_window import MainWindow
 
         self.window = MainWindow(self.data_dir, self.config)
