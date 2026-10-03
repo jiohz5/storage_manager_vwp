@@ -353,7 +353,12 @@ storage_manager_vwp/
     diagnostics.py                        # Python/모듈/GUI툴킷/데이터 디렉터리 진단
     scan_window.py                         # 22:00~06:00 시간창 계산
     scan_lock.py                            # 실행 잠금 + run ID 매칭 안전 중지
-    scan_store.py                            # 스캔 체크포인트/기준선 SQLite
+    scan_store/                              # 스캔 DB (detail_scan.db) - 밖에서는 scan_store.X
+      db.py                                    #   연결·스키마·공통 상수
+      runs.py                                  #   실행 이력, 스캔 중 리소스 시계열
+      checkpoints.py                           #   체크포인트 큐, 계정 상태, 진행률·남은 시간·진단
+      results.py                               #   기준선 결과, 큰 파일, 새로 생긴 과제 판정
+      server.py                                #   서버 부하 표본, 사용 기록
     detail_scan.py                            # 기준선 스캔 (분할/우선순위, 엔진 선택)
     walker.py                                 # 파이썬 병렬 순회 엔진 (기본)
     formatting.py                             # 숫자/상태 -> 문자열 (Qt 없음, 시험 가능)

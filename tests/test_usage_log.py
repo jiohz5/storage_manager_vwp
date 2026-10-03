@@ -51,7 +51,7 @@ class RecordTests(unittest.TestCase):
     def test_a_broken_database_does_not_stop_the_person(self):
         """기록은 부가 정보다. 이것 때문에 하려던 일이 막히면 본말이 뒤집힌다."""
 
-        with patch.object(scan_store, "connect", side_effect=OSError("잠김")):
+        with patch.object(scan_store.db, "connect", side_effect=OSError("잠김")):
             self.assertFalse(usage_log.record(self.data_dir, usage_log.GUI_OPENED))
 
     def test_a_write_failure_does_not_raise(self):
@@ -67,7 +67,7 @@ class RecordTests(unittest.TestCase):
             def close(self):
                 pass
 
-        with patch.object(scan_store, "connect", return_value=Exploding()):
+        with patch.object(scan_store.db, "connect", return_value=Exploding()):
             self.assertFalse(usage_log.record(self.data_dir, usage_log.GUI_OPENED))
 
     def test_the_user_can_be_given(self):
@@ -128,7 +128,7 @@ class ByUserTests(SummaryBase):
         # 2026-09-10 03:00 KST 와 11:00 KST - 지역시간으로는 같은 날.
         self.add("2026-09-09T18:00:00+00:00")
         self.add("2026-09-10T02:00:00+00:00")
-        with patch.object(scan_store, "_local_offset_modifier", return_value="+540 minutes"):
+        with patch.object(scan_store.server, "_local_offset_modifier", return_value="+540 minutes"):
             row = scan_store.usage_by_user(self.conn)[0]
         self.assertEqual(row["events"], 2)
         self.assertEqual(row["days"], 1)

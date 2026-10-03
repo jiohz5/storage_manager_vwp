@@ -44,7 +44,8 @@ class InitializeOnceTests(_Case):
     def test_every_store_goes_through_the_shared_rule(self):
         """검색 색인만 따로 짠 연결 함수를 쓰고 있었다."""
 
-        for module in (store, scan_store, search_index):
+        # 스캔 DB 는 패키지라 연결부가 `scan_store.db` 에 있다.
+        for module in (store, scan_store.db, search_index):
             calls = []
             original = module._initialize
 
