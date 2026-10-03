@@ -347,7 +347,8 @@ storage_manager_vwp/
     analytics.py                      # FULL 도달 예측 (최소제곱 회귀)
     forecast_notify.py                 # 예측/급증 알림 (파일시스템 단위 중복제거)
     procio.py                           # 외부 명령 UTF-8 입출력 래퍼
-    i18n.py                            # 한국어/영어 문자열 카탈로그
+    i18n.py                            # 언어 고르기·문자열 찾기 (t)
+    locales/ko.py, locales/en.py       # 언어별 문자열 (키는 둘이 같아야 한다)
     reports.py                          # 일간/주간/정리 후보 보고서
     readability.py                       # 계정 경로 읽기 권한 표본 조사
     diagnostics.py                        # Python/모듈/GUI툴킷/데이터 디렉터리 진단
