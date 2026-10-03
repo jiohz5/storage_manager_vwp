@@ -295,7 +295,7 @@ class AccountDialog(QDialog):
         # 창을 닫으면 함께 멈추는 쪽을 쓸지. 이 값 하나가 "cron 없이 GUI 로만"
         # 과 "사람 없어도 도는" 운영을 가른다.
         self.auto_scan_check = QCheckBox()
-        self.auto_scan_check.setChecked(bool(getattr(settings, "gui_auto_nightly_scan", True)))
+        self.auto_scan_check.setChecked(settings.gui_auto_nightly_scan)
         self.auto_scan_check.setToolTip(i18n.t("accounts.auto_scan_hint"))
         form.addRow(i18n.t("accounts.auto_scan"), self.auto_scan_check)
 

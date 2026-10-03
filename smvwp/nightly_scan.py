@@ -284,7 +284,7 @@ def _engine_plan(settings) -> "tuple[str, int, int]":
     """
 
     workers = max(1, settings.checkpoint_workers)
-    if getattr(settings, "scan_engine", config_module.SCAN_ENGINE_DU) == config_module.SCAN_ENGINE_PYTHON:
+    if settings.scan_engine == config_module.SCAN_ENGINE_PYTHON:
         return detail_scan.ENGINE_PYTHON, 1, workers
     return detail_scan.ENGINE_DU, workers, 1
 

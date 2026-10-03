@@ -99,14 +99,14 @@ class ShouldStartTests(unittest.TestCase):
             auto_scan.should_start(datetime(2026, 8, 29, 2, 0), settings, False, None)
         )
 
-    def test_old_settings_without_the_field_do_not_crash(self):
-        """옛 설정 파일에는 이 값이 없다 - 없으면 자동 시작을 안 할 뿐이다."""
+    def test_old_settings_without_the_field_do_not_start(self):
+        """옛 설정 파일에는 이 값이 없다 - 읽을 때 기본값(꺼짐)이 채워져 자동
+        시작을 안 할 뿐이다."""
 
-        class Old:
-            detail_scan_window_start_hour = 22
-            detail_scan_window_end_hour = 6
-
-        self.assertFalse(auto_scan.should_start(self.NIGHT, Old(), False, None))
+        settings = config_module._settings_from_dict(
+            {"detail_scan_window_start_hour": 22, "detail_scan_window_end_hour": 6}
+        )
+        self.assertFalse(auto_scan.should_start(self.NIGHT, settings, False, None))
 
 
 class SettingsTests(unittest.TestCase):

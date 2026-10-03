@@ -52,7 +52,7 @@ def should_start(
     반복해서 훑는다.
     """
 
-    if not getattr(settings, "gui_auto_nightly_scan", False):
+    if not settings.gui_auto_nightly_scan:
         return False
     if already_running:
         return False

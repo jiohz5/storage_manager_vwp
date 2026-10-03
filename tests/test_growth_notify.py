@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from smvwp import admin_auth
 from smvwp import config as config_module
-from smvwp import nightly_scan, notifications, scan_store, search_index, tiers
+from smvwp import nightly_scan, notifications, search_index, tiers
 from smvwp.config import Account
 from tests import support
 

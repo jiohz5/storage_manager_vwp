@@ -20,10 +20,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 try:
-    from PyQt5.QtCore import QObject  # noqa: F401 - 있는지만 본다
-    HAVE_QT = True
+    from PyQt5 import QtCore
 except ImportError:  # pragma: no cover - PyQt5 없는 환경
-    HAVE_QT = False
+    QtCore = None
+HAVE_QT = QtCore is not None
 
 
 def wait_until(predicate, timeout=5.0):

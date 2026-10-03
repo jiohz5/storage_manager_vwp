@@ -617,7 +617,7 @@ class ScanTab(QFrame):
         if status is None:
             self.cron_status_label.setVisible(False)
             return
-        auto = bool(getattr(self._get_config().settings, "gui_auto_nightly_scan", False))
+        auto = self._get_config().settings.gui_auto_nightly_scan
         key = cron_status.summary_key(status)
         # 창이 밤을 지키는 설정이면 야간 줄이 없는 것이 정상이다 - 그때까지
         # 경고하면 "고치라"는 잘못된 신호가 된다.

@@ -1,5 +1,4 @@
 import json
-import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -324,5 +323,26 @@ class ImmediateNotifyTests(unittest.TestCase):
             second = notifications.maybe_notify(
                 data_dir, account, self._sample(account.account_id, 99.9, now), state,
                 cooldown_minutes=60, now=now + timedelta(minutes=15), immediate_pct=None,
+            )
+        self.assertIsNone(second)
+
+    def test_zero_turns_it_off_as_documented(self):
+        """README: "0으로 두면 이 동작이 꺼집니다".
+
+        예전에는 0 을 넣으면 모든 사용률이 0 이상이라 **경고 이상인 계정 전부가**
+        cooldown 을 무시하고 15분마다 울렸다 - 끄려고 넣은 값이 반대로 동작했다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            account = config_module.Account(name="a", path="/user/a")
+            now = datetime(2026, 8, 19, 0, 0, tzinfo=timezone.utc)
+            state = {}
+            notifications.maybe_notify(
+                data_dir, account, self._sample(account.account_id, 92.0, now), state,
+                cooldown_minutes=60, now=now, immediate_pct=0.0,
+            )
+            second = notifications.maybe_notify(
+                data_dir, account, self._sample(account.account_id, 92.0, now), state,
+                cooldown_minutes=60, now=now + timedelta(minutes=15), immediate_pct=0.0,
             )
         self.assertIsNone(second)

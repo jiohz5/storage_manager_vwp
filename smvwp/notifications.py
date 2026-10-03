@@ -314,8 +314,12 @@ def maybe_notify(
     #
     # 15분 표본이 이미 이 수준이면 "한 시간 뒤에 다시 알려 주기"는 늦다 - 그
     # 한 시간 안에 꽉 차서 쓰기가 실패한다. 조용한 것이 더 위험한 구간이다.
+    #
+    # 0 이면 끈다 (README). 예전에는 0 이 모든 사용률을 넘겨 경고 이상인 계정
+    # 전부가 매 수집마다 울렸다 - 끄려고 넣은 값이 정반대로 동작했다.
     urgent = (
         immediate_pct is not None
+        and immediate_pct > 0
         and sample.byte_pct is not None
         and sample.byte_pct >= immediate_pct
     )

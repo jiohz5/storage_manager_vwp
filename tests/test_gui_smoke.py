@@ -259,7 +259,7 @@ class AccountDialogComboTests(_GuiCase):
                 )
                 self.assertGreaterEqual(
                     combo.width(), combo.sizeHint().width(),
-                    f"콤보가 필요한 폭보다 좁게 놓였습니다",
+                    "콤보가 필요한 폭보다 좁게 놓였습니다",
                 )
 
     def test_the_text_has_room_left_after_padding(self):
@@ -509,8 +509,8 @@ class ScanDigestSmokeTests(_GuiCase):
         super().tearDown()
 
     def snapshot(self, *accounts, run=None, running=False):
-        from dataclasses import dataclass, field
-        from typing import List, Optional
+        from dataclasses import dataclass
+        from typing import Optional
 
         @dataclass
         class Snap:

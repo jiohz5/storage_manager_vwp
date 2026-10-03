@@ -56,15 +56,17 @@ class EnginePlanTests(unittest.TestCase):
                 )
                 self.assertEqual(checkpoints * walk, 4)
 
-    def test_missing_setting_falls_back_to_du(self):
-        """옛 설정 파일에는 이 값이 없다 - 그때 죽지 말고 예전 동작을 한다."""
+    def test_old_config_without_the_setting_does_not_crash(self):
+        """옛 설정 파일에는 이 값이 없다 - 읽을 때 기본값이 채워져 그대로 돈다.
 
-        class Old:
-            checkpoint_workers = 2
+        예전 이 시험은 속성이 없는 가짜 객체를 넘겨 "du 로 되돌아간다"를 봤는데,
+        실제로 설정을 읽는 길(`load_config`)에서는 그런 객체가 생기지 않는다 -
+        빠진 값은 기본값(`DEFAULT_SCAN_ENGINE`)으로 먼저 채워진다."""
 
-        engine, checkpoints, walk = nightly_scan._engine_plan(Old())
-        self.assertEqual(engine, detail_scan.ENGINE_DU)
-        self.assertEqual((checkpoints, walk), (2, 1))
+        settings = config_module._settings_from_dict({"checkpoint_workers": 2})
+        self.assertEqual(settings.scan_engine, config_module.DEFAULT_SCAN_ENGINE)
+        engine, checkpoints, walk = nightly_scan._engine_plan(settings)
+        self.assertEqual(checkpoints * walk, 2)
 
 
 class PythonEngineNightlyScanTests(unittest.TestCase):

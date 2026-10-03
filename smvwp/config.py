@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -345,55 +345,127 @@ def config_file(data_dir: Path) -> Path:
     return data_dir / "config.json"
 
 
-def _settings_from_dict(raw: dict) -> Settings:
-    known = Settings.__dataclass_fields__
-    values = {key: value for key, value in raw.items() if key in known}
-    settings = Settings(**values)
-    if settings.collector_interval_seconds < 60:
-        raise ConfigError("collector_interval_seconds는 60 이상이어야 합니다")
-    if settings.notification_cooldown_minutes < 0:
-        raise ConfigError("notification_cooldown_minutes는 음수일 수 없습니다")
-    from .tiers import LABELS
-
-    if settings.notification_min_tier not in LABELS:
-        raise ConfigError("notification_min_tier가 올바른 등급이 아닙니다")
-    if settings.df_timeout_seconds < 1:
-        raise ConfigError("df_timeout_seconds는 1 이상이어야 합니다")
-    if not 0 <= settings.detail_scan_window_start_hour <= 23:
-        raise ConfigError("detail_scan_window_start_hour는 0~23이어야 합니다")
-    if not 0 <= settings.detail_scan_window_end_hour <= 23:
-        raise ConfigError("detail_scan_window_end_hour는 0~23이어야 합니다")
-    if settings.detail_task_timeout_seconds < 10:
-        raise ConfigError("detail_task_timeout_seconds는 10 이상이어야 합니다")
-    if settings.detail_scan_keep_generations < 1:
-        raise ConfigError("detail_scan_keep_generations는 1 이상이어야 합니다")
-    if not 1 <= settings.detail_scan_top_n <= 200:
-        raise ConfigError("detail_scan_top_n은 1~200이어야 합니다")
-    if not 1 <= settings.detail_scan_max_depth <= 12:
-        raise ConfigError("detail_scan_max_depth는 1~12여야 합니다")
+# 숫자 설정이 받을 수 있는 범위 `(이름, 최소, 최대, 덧붙일 말)`. 최대가 None 이면
+# 위로 열려 있다.
+#
+# **설정을 하나 더하면 여기 한 줄을 더한다** (빠뜨리면 시험이 잡는다). 예전에는
+# 설정마다 if 문 하나였고 문장도 설정마다 모양이 조금씩 달랐다. 범위 밖이면
+# 이름과 범위를 담아 ConfigError 를 낸다 - 손으로 고친 config.json 이 잘못됐을
+# 때 사람이 보는 문장이다.
+_NUMBER_RANGES = (
+    ("collector_interval_seconds", 60, None, ""),
+    ("notification_cooldown_minutes", 0, None, ""),
+    # 0 이면 수집할 때마다 df 이력이 전부 지워진다 (`store.prune_old_samples`).
+    ("sample_retention_days", 1, None, ""),
+    ("df_timeout_seconds", 1, None, ""),
+    ("detail_scan_window_start_hour", 0, 23, ""),
+    ("detail_scan_window_end_hour", 0, 23, ""),
+    ("detail_task_timeout_seconds", 10, None, ""),
+    ("detail_scan_keep_generations", 1, None, ""),
+    ("detail_scan_top_n", 1, 200, ""),
+    ("detail_scan_max_depth", 1, 12, ""),
+    # 음수면 증가 경로 목록이 말없이 텅 빈다.
+    ("growth_list_max_depth", 0, None, ""),
     # 상한을 16으로 둔 것은 임의값이 아니다 - 계정 수만큼 du를 동시에 띄우면
     # 파일서버가 감당하는 범위를 넘어설 수 있고, 이 프로그램이 장애의 원인이
     # 되는 것이 가장 나쁜 실패다. 실측용으로 충분히 넓으면서 사고는 막는 선.
-    if not 1 <= settings.nightly_parallel_accounts <= 16:
-        raise ConfigError("nightly_parallel_accounts는 1~16이어야 합니다")
-    if not 1 <= settings.weekend_parallel_accounts <= 16:
-        raise ConfigError("weekend_parallel_accounts는 1~16이어야 합니다")
+    ("nightly_parallel_accounts", 1, 16, ""),
+    ("weekend_parallel_accounts", 1, 16, ""),
     # 상한을 32로 둔 근거: 실기의 RPC 슬롯 상한이 128이고, 순회는 32코어 중
     # 0.19코어(0.6%)밖에 안 쓴다. 즉 우리 쪽에는 여유가 많고 천장은 파일서버에
     # 있다. 그렇다고 128을 열어 주지는 않는다 - 서버 쪽 부담은 이 프로세스에서
     # 관측할 수 없으므로(DESIGN.md 1부 2절), 진단으로 재 본 범위까지만 연다.
-    if not 1 <= settings.checkpoint_workers <= 32:
-        raise ConfigError("checkpoint_workers는 1~32여야 합니다")
+    ("checkpoint_workers", 1, 32, ""),
+    ("load_sample_interval_seconds", 5, None, ""),
+    ("load_sample_retention_days", 1, None, ""),
+    ("server_sample_retention_days", 1, None, ""),
+    ("notification_timeout_seconds", 1, None, ""),
+    # 끄는 값은 0 하나다 (README). 음수나 100 넘는 값도 결과는 꺼짐이지만
+    # 오타일 가능성이 커서 말하고 멈춘다.
+    ("immediate_notify_pct", 0, 100, "0이면 끔"),
+    ("weekly_report_weekday", 0, 6, "0=월 ~ 6=일"),
+    ("cleanup_min_size_kb", 0, None, ""),
+    ("cleanup_min_age_days", 0, None, ""),
+    ("cleanup_idle_days", 0, None, ""),
+    ("report_retention_days", 1, None, ""),
+    ("search_result_limit", 1, 10000, ""),
+    ("growth_alert_min_kb", 0, None, ""),
+    ("full_prediction_window_hours", 1, None, ""),
+    ("full_prediction_min_samples", 2, None, "회귀에 최소 2점 필요"),
+    ("trend_short_min_samples", 2, None, "회귀에 최소 2점 필요"),
+    ("trend_long_min_samples", 2, None, "회귀에 최소 2점 필요"),
+    ("full_prediction_max_years", 1, None, ""),
+    ("capacity_surge_min_kb", 0, None, ""),
+    ("freshness_stale_multiplier", 2, None, "cron 지연 여유"),
+    ("freshness_window_hours", 1, None, ""),
+    ("freshness_min_coverage_pct", 0, 100, ""),
+    ("freshness_min_expected_samples", 1, None, ""),
+)
+
+
+def _check_kinds(settings: Settings) -> None:
+    """값의 종류가 기본값과 같은지 본다 - 숫자 자리에는 숫자, 켜고 끄는 자리에는
+    true/false.
+
+    손으로 고친 config.json 에서 가장 흔한 실수는 따옴표다. 숫자 자리의 `"60"` 은
+    예전에는 비교에서 TypeError 를 내 프로그램이 그냥 죽었고, 켜고 끄는 자리의
+    `"false"` 는 **글자라서 참으로 읽혀** 끄려던 기능을 켰다.
+
+    0/1 은 false/true 로 받아 준다. 뜻이 분명한데 거절하면, 그렇게 적어 둔 곳은
+    새 판으로 갈아 끼운 다음 날부터 수집이 멈춘다.
+
+    종류를 기본값에서 읽으므로 설정을 새로 더해도 여기에 적을 것은 없다."""
+
+    for spec in fields(Settings):
+        default = spec.default if spec.default is not MISSING else spec.default_factory()
+        value = getattr(settings, spec.name)
+        if isinstance(default, bool):
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int) and value in (0, 1):
+                setattr(settings, spec.name, bool(value))
+                continue
+            raise ConfigError(_kind_message(spec.name, "true 또는 false", value))
+        if isinstance(default, (int, float)):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                continue
+            raise ConfigError(_kind_message(spec.name, "숫자", value))
+
+
+def _kind_message(name: str, expected: str, value) -> str:
+    shown = json.dumps(value, ensure_ascii=False, default=repr)
+    hint = " - 따옴표 없이 적습니다" if isinstance(value, str) else ""
+    return f"{name} 값은 {expected}여야 합니다{hint} (지금: {shown})"
+
+
+def _check_number_ranges(settings: Settings) -> None:
+    """`_NUMBER_RANGES` 를 하나씩 본다. 처음 걸린 것에서 멈춘다."""
+
+    for name, low, high, note in _NUMBER_RANGES:
+        value = getattr(settings, name)
+        suffix = f" ({note})" if note else ""
+        if high is not None and not low <= value <= high:
+            raise ConfigError(f"{name} 값은 {low}~{high} 사이여야 합니다{suffix}")
+        if high is None and value < low:
+            floor = "음수일 수 없습니다" if low == 0 else f"{low} 이상이어야 합니다"
+            raise ConfigError(f"{name} 값은 {floor}{suffix}")
+
+
+def _settings_from_dict(raw: dict) -> Settings:
+    known = Settings.__dataclass_fields__
+    values = {key: value for key, value in raw.items() if key in known}
+    settings = Settings(**values)
+    _check_kinds(settings)
+    _check_number_ranges(settings)
+
+    from .tiers import LABELS
+
+    if settings.notification_min_tier not in LABELS:
+        raise ConfigError("notification_min_tier가 올바른 등급이 아닙니다")
     if settings.scan_engine not in SCAN_ENGINES:
         raise ConfigError(
             "scan_engine은 " + " 또는 ".join(SCAN_ENGINES) + "여야 합니다"
         )
-    if settings.load_sample_interval_seconds < 5:
-        raise ConfigError("load_sample_interval_seconds는 5 이상이어야 합니다")
-    if settings.load_sample_retention_days < 1:
-        raise ConfigError("load_sample_retention_days는 1 이상이어야 합니다")
-    if settings.server_sample_retention_days < 1:
-        raise ConfigError("server_sample_retention_days는 1 이상이어야 합니다")
     if not i18n.is_supported(settings.language):
         # 언어는 잘못돼도 앱을 막지 않고 기본값으로 되돌린다 - 표시 문제일 뿐
         # 데이터 무결성 문제가 아니기 때문.
@@ -414,45 +486,11 @@ def _settings_from_dict(raw: dict) -> Settings:
         isinstance(part, str) for part in settings.quota_command
     ):
         raise ConfigError("quota_command는 문자열 배열이어야 합니다")
-    if settings.notification_timeout_seconds < 1:
-        raise ConfigError("notification_timeout_seconds는 1 이상이어야 합니다")
-    if not 0 <= settings.weekly_report_weekday <= 6:
-        raise ConfigError("weekly_report_weekday는 0(월)~6(일)이어야 합니다")
-    if settings.cleanup_min_size_kb < 0:
-        raise ConfigError("cleanup_min_size_kb는 음수일 수 없습니다")
-    if settings.cleanup_min_age_days < 0 or settings.cleanup_idle_days < 0:
-        raise ConfigError("cleanup 기간 설정은 음수일 수 없습니다")
-    if settings.report_retention_days < 1:
-        raise ConfigError("report_retention_days는 1 이상이어야 합니다")
-    if not 1 <= settings.search_result_limit <= 10000:
-        raise ConfigError("search_result_limit은 1~10000이어야 합니다")
-    if settings.growth_alert_min_kb < 0:
-        raise ConfigError("growth_alert_min_kb는 음수일 수 없습니다")
-    if settings.full_prediction_window_hours < 1:
-        raise ConfigError("full_prediction_window_hours는 1 이상이어야 합니다")
+    # 두 값의 관계. 범위 하나로는 말할 수 없어 따로 본다.
     if settings.full_critical_hours >= settings.full_warn_hours:
         raise ConfigError("full_critical_hours는 full_warn_hours보다 작아야 합니다")
     if settings.trend_short_days >= settings.trend_long_days:
         raise ConfigError("trend_short_days는 trend_long_days보다 작아야 합니다")
-    for name in (
-        "full_prediction_min_samples",
-        "trend_short_min_samples",
-        "trend_long_min_samples",
-    ):
-        if getattr(settings, name) < 2:
-            raise ConfigError(f"{name}은 2 이상이어야 합니다 (회귀에 최소 2점 필요)")
-    if settings.full_prediction_max_years < 1:
-        raise ConfigError("full_prediction_max_years는 1 이상이어야 합니다")
-    if settings.capacity_surge_min_kb < 0:
-        raise ConfigError("capacity_surge_min_kb는 음수일 수 없습니다")
-    if settings.freshness_stale_multiplier < 2:
-        raise ConfigError("freshness_stale_multiplier는 2 이상이어야 합니다 (cron 지연 여유)")
-    if settings.freshness_window_hours < 1:
-        raise ConfigError("freshness_window_hours는 1 이상이어야 합니다")
-    if not 0 <= settings.freshness_min_coverage_pct <= 100:
-        raise ConfigError("freshness_min_coverage_pct는 0~100이어야 합니다")
-    if settings.freshness_min_expected_samples < 1:
-        raise ConfigError("freshness_min_expected_samples는 1 이상이어야 합니다")
     return settings
 
 
@@ -476,7 +514,11 @@ def load_config(data_dir: Path) -> AppConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"{file_path}의 최상위 요소는 JSON 객체여야 합니다")
 
-    settings = _settings_from_dict(raw.get("settings", {}))
+    try:
+        settings = _settings_from_dict(raw.get("settings", {}))
+    except ConfigError as exc:
+        # 어느 파일을 고치면 되는지 같이 말한다 - 위의 형식 오류와 같은 꼴.
+        raise ConfigError(f"{file_path}: {exc}") from exc
     accounts = []
     seen_ids = set()
     changed = False
