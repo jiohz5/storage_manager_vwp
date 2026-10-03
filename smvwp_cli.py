@@ -223,8 +223,7 @@ def command_load(args) -> int:
     data_dir = _resolve_or_fail(args.data_dir)
     since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat()
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         rows = scan_store.server_samples(conn, since=since, limit=200000)
         if not rows:
             print("아직 서버 부하 표본이 없습니다.")
@@ -345,8 +344,6 @@ def command_load(args) -> int:
             print()
             print("  대기(queue)가 왕복(rtt)보다 크면 병목은 파일서버가 아니라")
             print("  이쪽 RPC 슬롯입니다 - 그때 병렬을 줄이면 정확히 반대 처방입니다.")
-    finally:
-        conn.close()
     return 0
 
 
@@ -365,8 +362,7 @@ def command_usage(args) -> int:
     data_dir = _resolve_or_fail(args.data_dir)
     since = (datetime.now(timezone.utc) - timedelta(days=args.days)).isoformat()
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         people = scan_store.usage_by_user(conn, since=since)
         actions = scan_store.usage_by_action(conn, since=since)
         if not people:
@@ -422,8 +418,6 @@ def command_usage(args) -> int:
                     + pad(str(row["user_name"] or "-"), 14)
                     + str(row["action"]) + detail
                 )
-    finally:
-        conn.close()
     return 0
 
 
@@ -515,8 +509,7 @@ def _print_scan_status(data_dir, config) -> int:
     print(f"측정 엔진  {engine} ({engine_note})")
     print()
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         run = scan_store.latest_run(conn)
         if run is None:
             print("아직 실행된 스캔이 없습니다.")
@@ -574,8 +567,6 @@ def _print_scan_status(data_dir, config) -> int:
         print("    뜻입니다. 같은 결론입니다.")
         print("  · 평일 밤은 동시 계정이 1개입니다 - 한 계정이 밤을 다 쓰면 나머지는")
         print("    그날 스캔되지 않습니다 (다음 밤에 순서가 돌아갑니다).")
-    finally:
-        conn.close()
     return 0
 
 

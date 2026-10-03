@@ -82,8 +82,7 @@ class _LoadReader(ThreadWorker):
 
     def _work(self, days: int, by: str):
         since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        conn = scan_store.connect(self._data_dir)
-        try:
+        with scan_store.session(self._data_dir) as conn:
             samples = scan_store.server_samples(conn, since=since, limit=200000)
             return {
                 "samples": len(samples),
@@ -92,8 +91,6 @@ class _LoadReader(ThreadWorker):
                 "jobs": scan_store.busiest_processes(conn, since=since, by=by, limit=30),
                 "mounts": scan_store.mount_activity(conn, since=since),
             }
-        finally:
-            conn.close()
 
 
 def _table(column_keys, height: int) -> QTableWidget:

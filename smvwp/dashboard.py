@@ -51,12 +51,9 @@ def read_dashboard(data_dir: Path, config) -> DashboardData:
     "용량이 얼마인지"조차 못 보게 되는데, 그쪽이 훨씬 나쁜 실패다.
     """
 
-    conn = store.connect(data_dir)
-    try:
+    with store.session(data_dir) as conn:
         samples = store.latest_samples(conn)
         trends = _read_trends(conn, config)
-    finally:
-        conn.close()
 
     try:
         forecasts = {

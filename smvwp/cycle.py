@@ -49,13 +49,10 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
         if not records:
             collect()
 
-    conn = store.connect(data_dir)
-    try:
+    with store.session(data_dir) as conn:
         for record in records:
             store.insert_sample(conn, record)
         store.prune_old_samples(conn, settings.sample_retention_days)
-    finally:
-        conn.close()
 
     # 서버 부하는 스캔 DB 쪽에 남긴다 - 스캔 실행 이력과 같은 곳에 있어야
     # "이 시각에 우리가 뭘 하고 있었나"를 조인 한 번으로 볼 수 있다.
@@ -64,8 +61,7 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
     # 자체가 실패로 끝나면 안 되므로 예외를 삼킨다.
     if server_sample is not None:
         try:
-            scan_conn = scan_store.connect(data_dir)
-            try:
+            with scan_store.session(data_dir) as scan_conn:
                 scan_store.save_server_sample(
                     scan_conn, server_sample, source=scan_store.SOURCE_COLLECTOR
                 )
@@ -75,8 +71,6 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
                 scan_store.prune_usage_events(
                     scan_conn, usage_log.DEFAULT_RETENTION_DAYS
                 )
-            finally:
-                scan_conn.close()
         except Exception:  # pragma: no cover - 방어적 처리
             logger.exception("서버 부하 표본 저장 실패 (수집 결과는 이미 저장됨)")
 

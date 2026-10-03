@@ -217,8 +217,7 @@ def _drain_checkpoints(
     interrupted = threading.Event()
 
     def worker():
-        conn = scan_store.connect(data_dir)
-        try:
+        with scan_store.session(data_dir) as conn:
             while True:
                 if should_stop() or deadline_reached():
                     interrupted.set()
@@ -250,8 +249,6 @@ def _drain_checkpoints(
                     dispatcher.release(checkpoint["id"])
                 if load is not None:
                     load.sample()
-        finally:
-            conn.close()
 
     if workers <= 1:
         worker()
@@ -1071,8 +1068,7 @@ def get_status_snapshot(
     top_n = top_n or config.settings.detail_scan_top_n
     now = clock()
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         latest_run_row = scan_store.latest_run(conn)
         latest_run = dict(latest_run_row) if latest_run_row is not None else None
 
@@ -1160,8 +1156,6 @@ def get_status_snapshot(
                     ),
                 )
             )
-    finally:
-        conn.close()
 
     return StatusSnapshot(
         is_running=scan_lock.is_locked(data_dir),
@@ -1184,15 +1178,12 @@ def mark_interrupted_run(data_dir: Path) -> bool:
     스캔을 막지는 않지만, 실제 상태와 파일을 굳이 어긋나게 둘 이유가 없다.
     """
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         row = scan_store.latest_run(conn)
         if row is None or row["status"] != "running":
             return False
         run_id = row["run_id"]
         scan_store.finish_run(conn, run_id, STATUS_STOPPED)
-    finally:
-        conn.close()
 
     scan_lock.release_lock(data_dir, run_id)
     return True

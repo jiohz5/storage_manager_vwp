@@ -104,11 +104,8 @@ def build_daily_report(
     data_dir: Path, config: config_module.AppConfig, now: Optional[datetime] = None
 ) -> str:
     now = now or datetime.now(timezone.utc)
-    conn = store.connect(data_dir)
-    try:
+    with store.session(data_dir) as conn:
         latest = store.latest_samples(conn)
-    finally:
-        conn.close()
 
     lines: List[str] = []
     lines.append(f"Storage Manager VWP - {i18n.t('reports.daily')}")
@@ -302,8 +299,7 @@ def build_weekly_report(
     lines.append(f"[{i18n.t('reports.weekly')}] {i18n.t('scan.section_title')}")
     lines.append("")
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         for account in config.accounts:
             state = scan_store.get_account_state(conn, account.account_id)
             current = state.last_completed_generation
@@ -367,8 +363,6 @@ def build_weekly_report(
                     lines.append(f"    {_fmt_kb(current_kb):>12}  {delta_text:<24} {row['path']}")
                 else:
                     lines.append(f"    {_fmt_kb(row['size_kb']):>12}  {'':<24} {row['path']}")
-    finally:
-        conn.close()
 
     return "\n".join(lines) + "\n"
 
@@ -398,8 +392,7 @@ def build_cleanup_candidates(
     settings = config.settings
     candidates: List[CleanupCandidate] = []
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         for account in config.accounts:
             state = scan_store.get_account_state(conn, account.account_id)
             current = state.last_completed_generation
@@ -440,8 +433,6 @@ def build_cleanup_candidates(
                         unchanged=True,
                     )
                 )
-    finally:
-        conn.close()
 
     candidates.sort(key=lambda item: item.size_kb, reverse=True)
     return candidates

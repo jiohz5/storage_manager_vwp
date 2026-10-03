@@ -87,6 +87,12 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     return sqlite_db.connect(db_path(data_dir), data_dir, _initialize)
 
 
+def session(data_dir: Path):
+    """`with search_index.session(data_dir) as conn:` - 블록이 끝나면 연결을 닫는다."""
+
+    return sqlite_db.session(connect, data_dir)
+
+
 def journal_mode(data_dir: Path) -> Optional[str]:
     """지금 DB가 실제로 쓰고 있는 journal 모드 (진단용). 못 읽으면 None."""
 

@@ -112,6 +112,12 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     return sqlite_db.connect(db_path(data_dir), data_dir, _initialize)
 
 
+def session(data_dir: Path):
+    """`with store.session(data_dir) as conn:` - 블록이 끝나면 연결을 닫는다."""
+
+    return sqlite_db.session(connect, data_dir)
+
+
 def insert_sample(conn: sqlite3.Connection, sample: SampleRecord) -> int:
     cursor = conn.execute(
         """

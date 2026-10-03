@@ -108,6 +108,27 @@ class InitializeOnceTests(_Case):
         self.assertEqual(len(attempts), 2)
 
 
+class SessionTests(_Case):
+    """`with 모듈.session(...)` 은 블록이 끝나면 **닫는다.**
+
+    sqlite3 연결의 `with conn:` 은 커밋만 하고 닫지 않는다 - 그걸 믿고 쓰면
+    연결이 남아 윈도우에서는 파일을 못 지우고 NFS 위에서는 잠금이 오래 남는다."""
+
+    def test_the_connection_is_closed_after_the_block(self):
+        for module in (store, scan_store, search_index):
+            with module.session(self.data_dir) as conn:
+                conn.execute("SELECT 1").fetchone()
+            with self.assertRaises(sqlite3.ProgrammingError, msg=module.__name__):
+                conn.execute("SELECT 1")
+
+    def test_the_connection_is_closed_when_the_block_fails(self):
+        with self.assertRaises(RuntimeError):
+            with scan_store.session(self.data_dir) as conn:
+                raise RuntimeError("boom")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+
+
 class AddMissingColumnsTests(_Case):
     def test_only_missing_columns_are_added(self):
         conn = sqlite3.connect(str(self.path.parent.mkdir(parents=True) or self.path))

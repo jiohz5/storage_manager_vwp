@@ -137,15 +137,12 @@ def evaluate_all(
     since = now - timedelta(hours=config.settings.freshness_window_hours)
 
     results: List[FreshnessStatus] = []
-    conn = store.connect(data_dir)
-    try:
+    with store.session(data_dir) as conn:
         for account in config_module.enabled_accounts(config):
             samples = store.samples_since(conn, account.account_id, since)
             results.append(
                 evaluate_account(account.account_id, samples, config.settings, now)
             )
-    finally:
-        conn.close()
     return results
 
 

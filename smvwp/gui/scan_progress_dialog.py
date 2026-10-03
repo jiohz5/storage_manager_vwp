@@ -105,16 +105,13 @@ class ScanProgressDialog(QDialog):
             self.table.setRowCount(0)
             return
 
-        conn = scan_store.connect(self._data_dir)
-        try:
+        with scan_store.session(self._data_dir) as conn:
             state = scan_store.get_account_state(conn, account_id)
             generation = state.working_generation
             counts = scan_store.checkpoint_progress(conn, account_id, kind, generation)
             rows = scan_store.recent_checkpoints(conn, account_id, kind, generation)
             # 진행 중인 스캔은 아직 완료 시각이 없다 - 그때는 회차 번호로 물러난다.
             scan_at = scan_store.generation_completed_at(conn, account_id, generation)
-        finally:
-            conn.close()
 
         self.summary_label.setText(
             i18n.t(

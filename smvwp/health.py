@@ -356,8 +356,7 @@ def check_all(data_dir, config) -> HealthSummary:
     from . import config as config_module
     from . import scan_store
 
-    conn = scan_store.connect(data_dir)
-    try:
+    with scan_store.session(data_dir) as conn:
         cache: Dict[str, Optional[Dict[str, int]]] = {}
 
         def sizes(account_id: str):
@@ -387,6 +386,4 @@ def check_all(data_dir, config) -> HealthSummary:
                     project_sizes, backup_sizes,
                 )
             )
-    finally:
-        conn.close()
     return summarize(groups)

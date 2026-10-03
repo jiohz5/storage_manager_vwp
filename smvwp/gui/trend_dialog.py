@@ -52,11 +52,8 @@ class _HistoryReader(ThreadWorker):
 
     def _work(self, account_id: str, days: int):
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        conn = store.connect(self._data_dir)
-        try:
+        with store.session(self._data_dir) as conn:
             samples = store.samples_since(conn, account_id, since)
-        finally:
-            conn.close()
         # 창을 명시해서 넘긴다. 안 그러면 표본이 하루치뿐일 때 그 하루가
         # 화면을 꽉 채워 "90일 추세" 라며 하루를 보여 준다.
         series = trend.build(samples, since=since, until=datetime.now(timezone.utc))

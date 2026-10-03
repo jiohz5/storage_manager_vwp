@@ -23,8 +23,9 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterator, Optional
 
 from . import paths
 
@@ -77,6 +78,23 @@ def connect(
         conn.close()
         raise
     return conn
+
+
+@contextmanager
+def session(connect_fn: Callable[[Path], sqlite3.Connection], data_dir: Path) -> Iterator[sqlite3.Connection]:
+    """연결을 열고, 블록이 끝나면 **닫는다.**
+
+    `with conn:` 과 헷갈리면 안 된다 - sqlite3 연결의 `with` 는 커밋/되돌리기만
+    하고 **닫지 않는다.** 그렇게 쓰면 연결이 남아 윈도우에서는 파일을 못 지우고,
+    NFS 위에서는 잠금이 오래 남는다. 그래서 이름을 따로 둔다.
+
+    각 DB 모듈의 `session(data_dir)` 이 이것을 부른다."""
+
+    conn = connect_fn(data_dir)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def apply_journal_mode(conn: sqlite3.Connection, data_dir: Path) -> str:

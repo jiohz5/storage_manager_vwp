@@ -78,8 +78,7 @@ class _TreeLoader(ThreadWorker):
         return self.start(account_id)
 
     def _work(self, account_id: str):
-        conn = scan_store.connect(self._data_dir)
-        try:
+        with scan_store.session(self._data_dir) as conn:
             state = scan_store.get_account_state(conn, account_id)
             generation = state.last_completed_generation
             if not generation:
@@ -105,8 +104,6 @@ class _TreeLoader(ThreadWorker):
                 conn, account_id, generation, previous
             )
             total = scan_store.measured_total_kb(conn, account_id, generation)
-        finally:
-            conn.close()
 
         roots = tree_view.build_tree(
             entries,

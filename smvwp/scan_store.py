@@ -330,6 +330,12 @@ def connect(data_dir: Path) -> sqlite3.Connection:
     return sqlite_db.connect(db_path(data_dir), data_dir, _initialize)
 
 
+def session(data_dir: Path):
+    """`with scan_store.session(data_dir) as conn:` - 블록이 끝나면 연결을 닫는다."""
+
+    return sqlite_db.session(connect, data_dir)
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

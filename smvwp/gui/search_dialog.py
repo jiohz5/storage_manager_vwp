@@ -53,13 +53,10 @@ class _IndexWorker(ThreadWorker):
         return self.start(account_id, account_path)
 
     def _work(self, account_id: str, account_path: Path):
-        conn = search_index.connect(self._data_dir)
-        try:
+        with search_index.session(self._data_dir) as conn:
             return search_index.index_account(
                 conn, account_id, account_path, should_stop=lambda: self._stop
             )
-        finally:
-            conn.close()
 
 
 class SearchDialog(QDialog):
@@ -196,11 +193,8 @@ class SearchDialog(QDialog):
         self.indexing_check.setChecked(account.search_indexing)
         self.indexing_check.blockSignals(False)
 
-        conn = search_index.connect(self._data_dir)
-        try:
+        with search_index.session(self._data_dir) as conn:
             count = search_index.entry_count(conn, account.account_id)
-        finally:
-            conn.close()
 
         size_text = i18n.t(
             "search.db_size", size=formatting.format_bytes(search_index.db_size_bytes(self._data_dir))
@@ -230,11 +224,8 @@ class SearchDialog(QDialog):
                 else i18n.t("search.indexing_in_progress")
             )
         else:
-            conn = search_index.connect(self._data_dir)
-            try:
+            with search_index.session(self._data_dir) as conn:
                 search_index.clear_account(conn, account.account_id)
-            finally:
-                conn.close()
             self._refresh_state()
 
     def _run_search(self) -> None:
@@ -272,8 +263,7 @@ class SearchDialog(QDialog):
         self.status_label.repaint()
 
         limit = self._config.settings.search_result_limit
-        conn = search_index.connect(self._data_dir)
-        try:
+        with search_index.session(self._data_dir) as conn:
             indexed = search_index.entry_count(conn, account.account_id)
             hits = search_index.search(
                 conn,
@@ -282,8 +272,6 @@ class SearchDialog(QDialog):
                 mode=self.mode_combo.currentData(),
                 limit=limit,
             )
-        finally:
-            conn.close()
 
         self.results.setRowCount(len(hits))
         for row, hit in enumerate(hits):

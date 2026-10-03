@@ -102,8 +102,7 @@ def record(
     try:
         from . import scan_store
 
-        conn = scan_store.connect(Path(data_dir))
-        try:
+        with scan_store.session(Path(data_dir)) as conn:
             conn.execute(
                 "INSERT INTO usage_events "
                 "(happened_at, user_name, host_name, action, detail) "
@@ -117,8 +116,6 @@ def record(
                 ),
             )
             conn.commit()
-        finally:
-            conn.close()
         return True
     except Exception:
         logger.debug("사용 기록 실패 (%s)", action, exc_info=True)
