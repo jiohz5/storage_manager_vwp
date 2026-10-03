@@ -375,6 +375,7 @@ storage_manager_vwp/
       theme.py                                        # 폰트·팔레트·타이포·QSS
       main_window.py                                  # 창 - 홈 탭, 메뉴, 신호 배선
       scan_tab.py                                     # 야간 상세 스캔 탭 (창과는 신호로만)
+      scan_pages.py                                   # 그 탭의 하위 쪽 넷 - 그리기만, 고른 것은 신호로
       account_detail_dialog.py                         # 계정 하나를 한 창에서 (홈에서 더블클릭)
       action_dialog.py                                 # '무엇부터 할까' 한 줄의 안내 창
       account_dialog.py                                # 계정 등록/설정

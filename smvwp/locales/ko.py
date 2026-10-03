@@ -660,7 +660,7 @@ STRINGS = {
     "scan.btn.progress_tooltip": (
         "선택한 계정이 어디까지 훑었는지 경로 단위로 봅니다 (읽기 전용)."
     ),
-    "scan.current_target": "지금: {account} · {kind} · {path}",
+    "scan.current_target": "지금: {account} · {path}",
     "scan.scanning_now": "상세 스캔 진행 중 · {path}",
     "progress.title": "상세 스캔 진행 상황",
     "progress.btn.refresh": "새로고침",

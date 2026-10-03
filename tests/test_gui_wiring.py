@@ -84,6 +84,10 @@ class SelfAttributeTests(unittest.TestCase):
     def test_scan_tab(self):
         self._check("scan_tab.py", "ScanTab")
 
+    def test_scan_pages(self):
+        for name in ("SummaryPage", "AccountsPage", "GrowthPage", "LargeFilesPage"):
+            self._check("scan_pages.py", name)
+
     def test_account_dialog(self):
         self._check("account_dialog.py", "AccountDialog")
 
@@ -109,6 +113,17 @@ class TabBoundaryTests(unittest.TestCase):
 
     def test_scan_tab_does_not_touch_the_tab_strip(self):
         self.assertNotIn("self.tabs", self._source("scan_tab.py"))
+
+    def test_scan_pages_only_draw(self):
+        """쪽은 그리기만 한다 - 탭의 계정 선택·탭 띠·다른 쪽을 직접 만지지 않는다.
+
+        쪽이 탭 내부를 만지기 시작하면 쪽을 따로 고칠 수 없게 되어, 1,400줄
+        클래스 하나를 쪽으로 나눈 의미가 사라진다. 고른 것은 신호로 알린다."""
+
+        text = self._source("scan_pages.py")
+        for name in ("scan_account_combo", "detail_tabs", "detail_stack",
+                     "_get_config", "home_scan_banner", "status_bar_label"):
+            self.assertNotIn(name, text, f"쪽이 {name} 을(를) 직접 만집니다")
 
     def test_main_window_does_not_reach_into_scan_widgets(self):
         """창이 탭 내부 위젯을 직접 만지면 탭을 고칠 때마다 창이 깨진다."""
@@ -185,6 +200,10 @@ class SelfCallArityTests(unittest.TestCase):
     def test_scan_tab(self):
         self._check("scan_tab.py", "ScanTab")
 
+    def test_scan_pages(self):
+        for name in ("SummaryPage", "AccountsPage", "GrowthPage", "LargeFilesPage"):
+            self._check("scan_pages.py", name)
+
     def test_account_dialog(self):
         self._check("account_dialog.py", "AccountDialog")
 
@@ -210,6 +229,54 @@ class TranslationKeyTests(unittest.TestCase):
                         missing.append(f"{path.name}: {key} ({language})")
         i18n.set_language("ko")
         self.assertEqual(missing, [], "없는 번역 키: " + ", ".join(missing[:10]))
+
+    def test_every_call_fills_every_blank(self):
+        """문구의 빈칸(`{account}` 등)을 부르는 쪽이 다 채우는가.
+
+        하나라도 빠지면 `str.format` 이 실패하고, `i18n.t` 는 화면을 죽이지
+        않으려고 **원문을 그대로** 돌려준다. 그래서 `지금: {account} · {kind}
+        · {path}` 가 상태 줄에 그대로 떴다 - 인자 하나(`kind`)를 걷어 내면서
+        문구의 빈칸은 그대로 둔 탓이다. 키가 있는지만 보는 검사로는 안 잡혔다.
+
+        운영 코드 전체에서 키가 글자 그대로 적힌 호출만 본다. `**값` 으로 넘기는
+        호출은 무엇이 들어가는지 소스로 알 수 없어 건너뛴다."""
+
+        import string
+
+        from smvwp import i18n
+
+        root = GUI.parent
+        problems = []
+        for path in sorted(root.rglob("*.py")):
+            if "locales" in path.parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "t" and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "i18n" and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and isinstance(node.args[0].value, str)):
+                    continue
+                if any(keyword.arg is None for keyword in node.keywords):
+                    continue
+                given = {keyword.arg for keyword in node.keywords}
+                key = node.args[0].value
+                for language in (i18n.KOREAN, i18n.ENGLISH):
+                    template = i18n._CATALOG[language].get(key)
+                    if template is None:
+                        continue
+                    needed = {
+                        field.split(".")[0].split("[")[0]
+                        for _, field, _, _ in string.Formatter().parse(template)
+                        if field
+                    }
+                    if needed - given:
+                        problems.append(
+                            f"{path.relative_to(root.parent)}:{node.lineno} {key} "
+                            f"({language}) 빈칸 {sorted(needed - given)}"
+                        )
+        self.assertEqual(problems, [], " / ".join(problems))
 
 
 class InitOrderTests(unittest.TestCase):
@@ -288,6 +355,10 @@ class InitOrderTests(unittest.TestCase):
 
     def test_scan_tab(self):
         self._check("scan_tab.py", "ScanTab")
+
+    def test_scan_pages(self):
+        for name in ("SummaryPage", "AccountsPage", "GrowthPage", "LargeFilesPage"):
+            self._check("scan_pages.py", name)
 
     def test_account_dialog(self):
         self._check("account_dialog.py", "AccountDialog")

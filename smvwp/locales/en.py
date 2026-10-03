@@ -648,7 +648,7 @@ STRINGS = {
     "scan.btn.progress_tooltip": (
         "Shows how far the selected account has been walked, path by path (read-only)."
     ),
-    "scan.current_target": "Now: {account} - {kind} - {path}",
+    "scan.current_target": "Now: {account} - {path}",
     "scan.scanning_now": "Detail scan running - {path}",
     "progress.title": "Detail scan progress",
     "progress.btn.refresh": "Refresh",

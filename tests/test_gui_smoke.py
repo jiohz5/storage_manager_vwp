@@ -431,7 +431,7 @@ class LargeFilesTableTests(_GuiCase):
             [("/a/huge", 900_000, 100_000), ("/a/mid", 400_000, 400_000)],
             measured_kb=2_000_000,
         )
-        table = self.tab.large_table
+        table = self.tab.large_page.table
         self.assertEqual(table.rowCount(), 2)
         self.assertIn("huge", table.item(0, 0).text())
 
@@ -440,10 +440,10 @@ class LargeFilesTableTests(_GuiCase):
 
         from smvwp import tiers
         from PyQt5.QtGui import QColor
-        from smvwp.gui.scan_tab import LARGE_PATH
+        from smvwp.gui.scan_pages import LARGE_PATH
 
         self._snapshot_with([("/a/huge", 500_000, 500_000)], measured_kb=1_000_000)
-        item = self.tab.large_table.item(0, LARGE_PATH)
+        item = self.tab.large_page.table.item(0, LARGE_PATH)
         self.assertEqual(
             item.foreground().color().name(), QColor(tiers.color(tiers.WARN)).name()
         )
@@ -452,42 +452,42 @@ class LargeFilesTableTests(_GuiCase):
     def test_an_ordinary_file_is_not_marked(self):
         """전부 칠하면 아무것도 강조되지 않는다."""
 
-        from smvwp.gui.scan_tab import LARGE_PATH
+        from smvwp.gui.scan_pages import LARGE_PATH
 
         from smvwp import tiers
         from PyQt5.QtGui import QColor
 
         self._snapshot_with([("/a/ok", 1_000, 1_000)], measured_kb=10_000_000)
-        item = self.tab.large_table.item(0, LARGE_PATH)
+        item = self.tab.large_page.table.item(0, LARGE_PATH)
         self.assertNotEqual(
             item.foreground().color().name(), QColor(tiers.color(tiers.WARN)).name()
         )
 
     def test_a_file_missing_from_the_previous_list_says_so(self):
         from smvwp import i18n
-        from smvwp.gui.scan_tab import LARGE_CHANGE
+        from smvwp.gui.scan_pages import LARGE_CHANGE
 
         i18n.set_language("ko")
         self._snapshot_with([("/a/new", 500_000, None)], measured_kb=10_000_000)
         self.assertEqual(
-            self.tab.large_table.item(0, LARGE_CHANGE).text(), i18n.t("large.new")
+            self.tab.large_page.table.item(0, LARGE_CHANGE).text(), i18n.t("large.new")
         )
 
     def test_no_files_gives_a_plain_message_not_an_empty_table(self):
         self._snapshot_with([], measured_kb=1_000_000)
-        self.assertEqual(self.tab.large_table.rowCount(), 0)
-        self.assertTrue(self.tab.large_caption.text())
+        self.assertEqual(self.tab.large_page.table.rowCount(), 0)
+        self.assertTrue(self.tab.large_page.caption.text())
 
     def test_unknown_account_total_does_not_show_a_fake_share(self):
         """총량을 모를 때 0% 로 쓰면 '작다'고 잘못 읽힌다."""
 
         from smvwp import i18n
-        from smvwp.gui.scan_tab import LARGE_SHARE
+        from smvwp.gui.scan_pages import LARGE_SHARE
 
         i18n.set_language("ko")
         self._snapshot_with([("/a/x", 500_000, None)], measured_kb=None)
         self.assertEqual(
-            self.tab.large_table.item(0, LARGE_SHARE).text(), i18n.t("common.none")
+            self.tab.large_page.table.item(0, LARGE_SHARE).text(), i18n.t("common.none")
         )
 
 
@@ -543,14 +543,14 @@ class ScanDigestSmokeTests(_GuiCase):
 
     def findings_text(self):
         return [
-            self.tab.findings_list.item(row).text()
-            for row in range(self.tab.findings_list.count())
+            self.tab.summary_page.findings_list.item(row).text()
+            for row in range(self.tab.summary_page.findings_list.count())
         ]
 
     def test_the_four_cards_exist(self):
         for card in (
-            self.tab.card_run, self.tab.card_delta,
-            self.tab.card_biggest, self.tab.card_findings,
+            self.tab.summary_page.card_run, self.tab.summary_page.card_delta,
+            self.tab.summary_page.card_biggest, self.tab.summary_page.card_findings,
         ):
             self.assertTrue(card.isVisibleTo(self.tab))
 
@@ -559,15 +559,15 @@ class ScanDigestSmokeTests(_GuiCase):
         self.tab._refresh_digest(
             self.snapshot(self.account(measured=900 * gb, previous=700 * gb))
         )
-        self.assertIn("GB", self.tab.card_delta.value.text())
-        self.assertIn("+", self.tab.card_delta.value.text())
+        self.assertIn("GB", self.tab.summary_page.card_delta.value.text())
+        self.assertIn("+", self.tab.summary_page.card_delta.value.text())
 
     def test_without_a_previous_scan_the_card_says_dash_not_zero(self):
         """0 을 세우면 '안 늘었다'가 되는데 사실은 '견줄 것이 없다'이다."""
 
         gb = 1024 * 1024
         self.tab._refresh_digest(self.snapshot(self.account(measured=900 * gb)))
-        self.assertEqual(self.tab.card_delta.value.text(), "-")
+        self.assertEqual(self.tab.summary_page.card_delta.value.text(), "-")
 
     def test_the_biggest_account_is_named(self):
         gb = 1024 * 1024
@@ -575,7 +575,7 @@ class ScanDigestSmokeTests(_GuiCase):
             self.account(name="small", measured=110 * gb, previous=100 * gb),
             self.account(name="huge", measured=900 * gb, previous=200 * gb),
         ))
-        self.assertEqual(self.tab.card_biggest.value.text(), "huge")
+        self.assertEqual(self.tab.summary_page.card_biggest.value.text(), "huge")
 
     def test_a_failure_shows_up_in_the_list(self):
         self.tab._refresh_digest(
@@ -599,16 +599,18 @@ class ScanDigestSmokeTests(_GuiCase):
                  "ended_at": "2026-09-09T20:10:00+00:00"},
         ))
         text = " ".join([
-            self.tab.card_run.value.text(), self.tab.card_run.detail.text(),
-            self.tab.card_delta.detail.text(), self.tab.card_biggest.detail.text(),
-            self.tab.card_findings.detail.text(), self.tab.findings_caption.text(),
+            self.tab.summary_page.card_run.value.text(), self.tab.summary_page.card_run.detail.text(),
+            self.tab.summary_page.card_delta.detail.text(), self.tab.summary_page.card_biggest.detail.text(),
+            self.tab.summary_page.card_findings.detail.text(), self.tab.summary_page.findings_caption.text(),
         ] + self.findings_text())
         self.assertNotIn("digest.", text)
 
     def test_an_unknown_run_status_is_shown_as_is(self):
         """번역이 없는 상태값이 `digest.status.xyz` 로 뜨면 읽는 사람이 당황한다."""
 
-        self.assertEqual(self.tab._status_text("weird_state"), "weird_state")
+        from smvwp.gui.scan_pages import status_text
+
+        self.assertEqual(status_text("weird_state"), "weird_state")
 
 
 class PriorityPanelTests(_GuiCase):
@@ -750,19 +752,19 @@ class ScanTabHeightTests(_GuiCase):
     def test_the_findings_list_is_no_longer_capped(self):
         """탭 하나를 통째로 쓰므로 남는 만큼 보여 준다."""
 
-        listing = self.window._scan_tab.findings_list
+        listing = self.window._scan_tab.summary_page.findings_list
         self.assertGreater(listing.maximumHeight(), 1000)
 
     def test_the_summary_tab_opens_first(self):
         """카드는 늘 보이던 자리에서 첫 탭으로 내려왔다 - 위에 늘 떠 있으면
         세부 탭마다 300px 씩 빼앗았다. 대신 창을 열면 요약이 먼저 보인다."""
 
-        from smvwp.gui.scan_tab import TAB_SUMMARY
+        from smvwp.gui.scan_pages import TAB_SUMMARY
 
         tab = self.window._scan_tab
         self.assertEqual(tab.detail_tabs.currentIndex(), TAB_SUMMARY)
-        for card in (tab.card_run, tab.card_delta, tab.card_biggest,
-                     tab.card_findings):
+        for card in (tab.summary_page.card_run, tab.summary_page.card_delta, tab.summary_page.card_biggest,
+                     tab.summary_page.card_findings):
             self.assertTrue(card.isVisibleTo(tab))
 
 
@@ -843,11 +845,11 @@ class ScanTabLayoutTests(_GuiCase):
     def test_growth_and_large_files_each_get_the_full_width(self):
         """반폭씩 나누면 경로 뒤쪽이 잘린다."""
 
-        from smvwp.gui.scan_tab import TAB_GROWTH, TAB_LARGE
+        from smvwp.gui.scan_pages import TAB_GROWTH, TAB_LARGE
 
         full = self.tab.detail_stack.width()
-        for index, table in ((TAB_GROWTH, self.tab.growth_table),
-                             (TAB_LARGE, self.tab.large_table)):
+        for index, table in ((TAB_GROWTH, self.tab.growth_page.table),
+                             (TAB_LARGE, self.tab.large_page.table)):
             self.page(index)
             self.assertGreater(table.width(), full * 0.9, table)
 
@@ -881,11 +883,11 @@ class ScanTabLayoutTests(_GuiCase):
         self.assertGreaterEqual(combo.height(), combo.sizeHint().height())
 
     def test_a_long_finding_wraps_instead_of_scrolling_sideways(self):
-        from smvwp.gui.scan_tab import TAB_SUMMARY
+        from smvwp.gui.scan_pages import TAB_SUMMARY
 
         self.show(self.window.minimumSize().width(), 760)
         self.page(TAB_SUMMARY)
-        listing = self.tab.findings_list
+        listing = self.tab.summary_page.findings_list
         listing.addItem("아주 긴 문장 " * 40)
         for _ in range(3):
             _app().processEvents()
@@ -896,24 +898,24 @@ class ScanTabLayoutTests(_GuiCase):
 
     # -- 경로 ------------------------------------------------------------
     def test_paths_are_shown_under_the_account_with_the_full_path_on_hover(self):
-        from smvwp.gui.scan_tab import TAB_GROWTH
+        from smvwp.gui.scan_pages import TAB_GROWTH
 
         self.page(TAB_GROWTH)
         account = self.tab._selected_account()
-        cell = self.tab.growth_table.item(0, 0)
+        cell = self.tab.growth_page.table.item(0, 0)
         self.assertTrue(cell.text().startswith("LAYOUT/"), cell.text())
         self.assertTrue(cell.toolTip().startswith(account.path), cell.toolTip())
         # 무엇을 기준으로 줄였는지는 설명 줄에 한 번 적는다.
-        self.assertIn(account.path, self.tab.growth_caption.text())
+        self.assertIn(account.path, self.tab.growth_page.caption.text())
 
     # -- 오가기 ------------------------------------------------------------
     def test_clicking_a_finding_opens_that_accounts_tab(self):
         """요약에서 근거로 곧장 가는 길이 없으면 계정 이름을 외워 다시 찾아야 한다."""
 
-        from smvwp.gui.scan_tab import FINDING_ACCOUNT_ROLE, FINDING_TAB_ROLE, TAB_LARGE
+        from smvwp.gui.scan_pages import FINDING_ACCOUNT_ROLE, FINDING_TAB_ROLE, TAB_LARGE
 
         bak = self.config.accounts[1]
-        listing = self.tab.findings_list
+        listing = self.tab.summary_page.findings_list
         target = next(
             listing.item(row) for row in range(listing.count())
             if listing.item(row).data(FINDING_ACCOUNT_ROLE) == bak.account_id
@@ -922,14 +924,14 @@ class ScanTabLayoutTests(_GuiCase):
         listing.itemClicked.emit(target)
         self.assertEqual(self.tab.detail_tabs.currentIndex(), TAB_LARGE)
         self.assertEqual(self.tab.scan_account_combo.currentData(), bak.account_id)
-        self.assertIn(bak.name, self.tab.large_caption.text())
+        self.assertIn(bak.name, self.tab.large_page.caption.text())
 
     def test_double_clicking_an_account_row_opens_its_growth_paths(self):
-        from smvwp.gui.scan_tab import TAB_ACCOUNTS, TAB_GROWTH
+        from smvwp.gui.scan_pages import TAB_ACCOUNTS, TAB_GROWTH
 
         bak = self.config.accounts[1]
         self.page(TAB_ACCOUNTS)
-        table = self.tab.scan_accounts_table
+        table = self.tab.accounts_page.table
         table.selectRow(1)
         table.cellDoubleClicked.emit(1, 0)
         self.assertEqual(self.tab.detail_tabs.currentIndex(), TAB_GROWTH)
@@ -1613,6 +1615,86 @@ class ManyAccountsTests(_GuiCase):
         ):
             shortcut.activated.emit()
         self.assertEqual(opened, [0])
+
+
+class GrowthPageSortTests(_GuiCase):
+    """증가 경로 표는 헤더를 눌러 정렬할 수 있어야 한다.
+
+    채우는 동안 정렬을 껐다가 다시 켜야 하는데, 증감이 있는 경우(= 스캔이 두 번
+    이상 돈 평소의 경우)에는 다시 켜기 전에 함수가 먼저 돌아가 버려서 **정렬이
+    꺼진 채 남았다.** 헤더를 눌러도 아무 일이 없었고, 정렬이 되는 것은 스캔이 한
+    번뿐인 계정뿐이었다."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.scan_pages import GrowthPage
+
+        self.page = GrowthPage()
+        self.page.retranslate()
+        self.addCleanup(self.page.close)
+        self.account = self.config.accounts[0]
+
+    def snapshot(self, growth=(), top=()):
+        from smvwp.nightly_scan import AccountScanSnapshot, StatusSnapshot
+
+        entry = AccountScanSnapshot(
+            account_id=self.account.account_id, account_name=self.account.name,
+            last_completed_generation=3, top_paths=list(top), growth=list(growth),
+            pending_baseline_count=0, current_scan_at="2026-10-01T00:00:00+00:00",
+            previous_scan_at="2026-09-30T00:00:00+00:00",
+        )
+        return StatusSnapshot(
+            is_running=False, window_description="", latest_run=None, accounts=[entry]
+        )
+
+    def growth(self):
+        root = self.account.path
+        return self.snapshot(growth=[
+            {"path": f"{root}/small", "current_kb": 100 * self.GB, "previous_kb": 90 * self.GB},
+            {"path": f"{root}/big", "current_kb": 500 * self.GB, "previous_kb": 100 * self.GB},
+            {"path": f"{root}/new", "current_kb": 50 * self.GB, "previous_kb": None},
+        ])
+
+    def first_column(self):
+        table = self.page.table
+        return [table.item(row, 0).text() for row in range(table.rowCount())]
+
+    def test_sorting_is_back_on_after_showing_growth(self):
+        self.page.show_account(self.growth(), self.account)
+        self.assertTrue(self.page.table.isSortingEnabled())
+
+    def test_the_default_order_is_most_grown_first(self):
+        """새 경로는 통째로 는 것으로 본다 (저장소가 고른 순서와 같다)."""
+
+        self.page.show_account(self.growth(), self.account)
+        self.assertEqual(self.first_column(), ["big", "new", "small"])
+
+    def test_a_sort_the_person_chose_survives_a_refresh(self):
+        """갱신할 때마다 기본값으로 되돌리면 헤더를 누른 의미가 없다."""
+
+        from PyQt5.QtCore import Qt
+
+        from smvwp.gui.scan_pages import GROWTH_PATH
+
+        self.page.show_account(self.growth(), self.account)
+        # 사람이 경로 헤더를 눌러 내림차순으로 바꾼다 (기본과 확실히 다른 순서).
+        self.page.table.horizontalHeader().sectionClicked.emit(GROWTH_PATH)
+        self.page.table.sortByColumn(GROWTH_PATH, Qt.DescendingOrder)
+        self.assertEqual(self.first_column(), ["small", "new", "big"])
+
+        self.page.show_account(self.growth(), self.account)
+        self.assertEqual(self.first_column(), ["small", "new", "big"])
+
+    def test_without_a_previous_scan_the_biggest_comes_first(self):
+        root = self.account.path
+        self.page.show_account(self.snapshot(top=[
+            {"path": f"{root}/x", "size_kb": 10 * self.GB},
+            {"path": f"{root}/y", "size_kb": 90 * self.GB},
+        ]), self.account)
+        self.assertTrue(self.page.table.isSortingEnabled())
+        self.assertEqual(self.first_column(), ["y", "x"])
 
 
 if __name__ == "__main__":  # pragma: no cover
