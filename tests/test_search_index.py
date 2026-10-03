@@ -167,14 +167,10 @@ class SearchTests(unittest.TestCase):
 
 class AdminAuthTests(unittest.TestCase):
     def test_default_pin_works_when_nothing_stored(self):
-        session = admin_auth.AdminSession()
-        self.assertTrue(session.unlock(admin_auth.DEFAULT_PIN))
-        self.assertTrue(session.is_unlocked)
+        self.assertTrue(admin_auth.verify_pin(admin_auth.DEFAULT_PIN, ""))
 
-    def test_wrong_pin_keeps_locked(self):
-        session = admin_auth.AdminSession()
-        self.assertFalse(session.unlock("0000"))
-        self.assertFalse(session.is_unlocked)
+    def test_wrong_pin_is_rejected(self):
+        self.assertFalse(admin_auth.verify_pin("0000", ""))
 
     def test_hash_round_trip(self):
         stored = admin_auth.hash_pin("4321")
@@ -206,12 +202,6 @@ class AdminAuthTests(unittest.TestCase):
 
     def test_malformed_stored_hash_is_rejected(self):
         self.assertFalse(admin_auth.verify_pin("4321", "garbage-without-separator"))
-
-    def test_lock_clears_session(self):
-        session = admin_auth.AdminSession()
-        session.unlock(admin_auth.DEFAULT_PIN)
-        session.lock()
-        self.assertFalse(session.is_unlocked)
 
 
 if __name__ == "__main__":

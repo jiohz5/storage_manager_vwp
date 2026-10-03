@@ -692,7 +692,7 @@ def set_backup_link(config: AppConfig, account_id: str, backup_account_id: str) 
             raise ConfigError("연결할 백업 계정을 찾을 수 없습니다")
         if target.account_id == account_id:
             raise ConfigError("자기 자신을 백업 계정으로 연결할 수 없습니다")
-        if target.kind != ACCOUNT_KIND_BACKUP:
+        if not target.kind_is_backup:
             raise ConfigError("연결 대상은 성격이 '백업'인 계정이어야 합니다")
     if account.backup_account_id == backup_account_id:
         return False

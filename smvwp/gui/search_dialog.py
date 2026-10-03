@@ -64,7 +64,6 @@ class SearchDialog(QDialog):
         super().__init__(parent)
         self._data_dir = data_dir
         self._config = config
-        self._session = admin_auth.AdminSession()
         self.setWindowTitle(i18n.t("search.title"))
         self.resize(860, 560)
 
@@ -90,7 +89,7 @@ class SearchDialog(QDialog):
         )
         if not ok:
             return False
-        if not self._session.unlock(pin, self._config.settings.admin_pin_hash):
+        if not admin_auth.verify_pin(pin, self._config.settings.admin_pin_hash):
             QMessageBox.warning(
                 self.parent(), i18n.t("search.pin_title"), i18n.t("search.pin_wrong")
             )

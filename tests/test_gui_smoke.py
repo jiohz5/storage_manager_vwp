@@ -1697,5 +1697,42 @@ class GrowthPageSortTests(_GuiCase):
         self.assertEqual(self.first_column(), ["y", "x"])
 
 
+class SearchPinTests(_GuiCase):
+    """검색 창은 열 때마다 PIN 을 묻고, 틀리면 열리지 않는다."""
+
+    ASK = "smvwp.gui.search_dialog.QInputDialog.getText"
+    WARN = "smvwp.gui.search_dialog.QMessageBox.warning"
+
+    def dialog(self):
+        from smvwp.gui.search_dialog import SearchDialog
+
+        dialog = SearchDialog(self.data_dir, self.config)
+        self.addCleanup(dialog.close)
+        return dialog
+
+    def test_default_pin_opens_when_none_is_set(self):
+        from smvwp import admin_auth
+
+        with patch(self.ASK, return_value=(admin_auth.DEFAULT_PIN, True)):
+            self.assertTrue(self.dialog()._prompt_for_pin())
+
+    def test_wrong_pin_warns_and_stays_shut(self):
+        from PyQt5.QtWidgets import QDialog
+
+        with patch(self.ASK, return_value=("0000", True)), patch(self.WARN) as warned:
+            self.assertEqual(self.dialog().exec_(), QDialog.Rejected)
+        warned.assert_called_once()
+
+    def test_changed_pin_replaces_the_default(self):
+        from smvwp import admin_auth
+
+        self.config.settings.admin_pin_hash = admin_auth.hash_pin("9182")
+        dialog = self.dialog()
+        with patch(self.ASK, return_value=(admin_auth.DEFAULT_PIN, True)), patch(self.WARN):
+            self.assertFalse(dialog._prompt_for_pin())
+        with patch(self.ASK, return_value=("9182", True)):
+            self.assertTrue(dialog._prompt_for_pin())
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

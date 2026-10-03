@@ -366,7 +366,7 @@ def check_all(data_dir, config) -> HealthSummary:
 
         groups = []
         for account in config_module.enabled_accounts(config):
-            if account.kind != config_module.ACCOUNT_KIND_PROJECT:
+            if not account.kind_is_project:
                 # 백업 계정에는 프로젝트의 사본이 들어온다. 거기서도 run
                 # 디렉터리를 찾으면 같은 과제가 두 번 보고된다.
                 continue

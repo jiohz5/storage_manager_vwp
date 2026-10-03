@@ -13,6 +13,9 @@
 PIN은 평문으로 비교하지 않고 해시로 저장한다. 이것이 위 성격을 바꾸지는
 않지만(공격자는 DB를 직접 읽으면 되므로), 설정 파일을 어깨너머로 봤다고 바로
 PIN이 노출되지는 않게 하는 최소한의 조치다.
+
+PIN은 검색 창을 열 때마다 묻는다. 풀린 상태는 어디에도 남기지 않는다 -
+디스크에도, 창을 닫은 뒤의 메모리에도.
 """
 
 from __future__ import annotations
@@ -62,25 +65,3 @@ def verify_pin(pin: str, stored: str) -> bool:
         return False
     candidate = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt, _ITERATIONS)
     return hmac.compare_digest(candidate.hex(), digest_hex)
-
-
-class AdminSession:
-    """현재 실행 세션에서만 유효한 잠금 해제 상태.
-
-    프로세스가 끝나면 사라진다 - 디스크에 "해제됨"을 남기지 않는다. 앱을 다시
-    켜면 다시 PIN을 물어야 한다."""
-
-    def __init__(self) -> None:
-        self._unlocked = False
-
-    @property
-    def is_unlocked(self) -> bool:
-        return self._unlocked
-
-    def unlock(self, pin: str, stored_hash: str = "") -> bool:
-        if verify_pin(pin, stored_hash):
-            self._unlocked = True
-        return self._unlocked
-
-    def lock(self) -> None:
-        self._unlocked = False

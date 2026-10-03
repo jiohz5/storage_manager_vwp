@@ -302,12 +302,6 @@ class AdminPinChangeTests(unittest.TestCase):
         # 기본 PIN은 더 이상 통하지 않아야 한다.
         self.assertFalse(admin_auth.verify_pin(admin_auth.DEFAULT_PIN, stored))
 
-    def test_session_uses_stored_hash(self):
-        stored = admin_auth.hash_pin("9182")
-        session = admin_auth.AdminSession()
-        self.assertFalse(session.unlock(admin_auth.DEFAULT_PIN, stored))
-        self.assertTrue(session.unlock("9182", stored))
-
     def test_pin_hash_persists_through_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp) / "data"
