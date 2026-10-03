@@ -1,6 +1,7 @@
 """야간 상세 스캔의 급증 알림과 검색 인덱스 통합."""
 
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 from smvwp import admin_auth
 from smvwp import config as config_module
-from smvwp import nightly_scan, notifications, search_index, tiers
+from smvwp import detail_scan, nightly_scan, notifications, scan_store, search_index, tiers
 from smvwp.config import Account
 from tests import support
 
@@ -139,6 +140,17 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
     """야간 스캔 -> 급증 알림 -> 검색 인덱스 갱신까지 한 흐름."""
 
     def setUp(self):
+        # 우선순위 접두사(nice) 탐색은 `nice -n 19 true` 를 실제로 띄우고 그
+        # 결과를 모듈 전역에 캐시한다. 아래 가짜 실행기는 du/find 만 받으므로,
+        # 앞선 시험이 캐시를 채워 두지 않으면(이 파일만 돌릴 때) 탐색에서 터져
+        # 스캔이 통째로 실패했다. 전체를 돌리면 이름순으로 앞서는 시험이 캐시를
+        # 채워 가려져 있었다. 탐색을 끄고, 캐시도 비우고 시작해 비우고 끝낸다.
+        detail_scan.reset_priority_prefix()
+        self.addCleanup(detail_scan.reset_priority_prefix)
+        no_nice = patch.dict(os.environ, {detail_scan.DISABLE_PRIORITY_ENV: "1"})
+        no_nice.start()
+        self.addCleanup(no_nice.stop)
+
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.data_dir = self.root / "data"
@@ -172,12 +184,24 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
             raise AssertionError(f"예상치 못한 명령: {command}")
 
         with patch("smvwp.detail_scan.subprocess.run", side_effect=runner):
-            return nightly_scan.run_nightly_scan(
+            summary = nightly_scan.run_nightly_scan(
                 self.data_dir,
                 self.config,
                 bypass_window=True,
                 top_level_lister=lambda p: list(self.top_dirs),
             )
+        # 스캔이 실제로 재고 끝났는지부터 본다. 실패한 스캔은 "알림이 없어야
+        # 한다" 시험들을 거저 통과시킨다 - 위의 nice 문제가 그렇게 가려져 있었다.
+        # 계정 상태는 체크포인트가 전부 실패해도 'done' 이라 그것만으로는 모른다.
+        outcome = summary.accounts[0]
+        with scan_store.session(self.data_dir) as conn:
+            failed = scan_store.failed_count(conn, outcome.account_id, outcome.baseline_generation)
+            measured = scan_store.measured_total_kb(
+                conn, outcome.account_id, outcome.baseline_generation
+            )
+        self.assertEqual((outcome.baseline_status, failed), ("done", 0))
+        self.assertIsNotNone(measured)
+        return summary
 
     def _growth_events(self):
         outbox = notifications.outbox_dir(self.data_dir)
