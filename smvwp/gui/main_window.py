@@ -17,6 +17,7 @@ DESIGN.md 2부 6절은 "대시보드 단일 화면(탭 없음)"으로 결정했�
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -65,6 +66,8 @@ from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
 from .reports_dialog import ReportsDialog
 from .search_dialog import SearchDialog
+
+logger = logging.getLogger(__name__)
 
 # 홈 왼쪽 칸(요약·동작)의 폭. 표가 열둘이라 남는 가로는 전부 표에 준다.
 HOME_LEFT_WIDTH = 300
@@ -785,6 +788,7 @@ class MainWindow(QMainWindow):
                 for item in freshness.evaluate_all(self._data_dir, self._config)
             }
         except Exception:  # pragma: no cover - 방어적 처리
+            logger.exception("수집 신선도 판정 실패")
             return {}
 
     def _freshness_warning(self) -> Optional[str]:

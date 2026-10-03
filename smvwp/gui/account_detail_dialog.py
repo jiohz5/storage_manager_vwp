@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -43,6 +44,8 @@ from .. import formatting, i18n, quota, tiers
 from ..scheduler import ThreadWorker
 from . import theme, widgets
 from .trend_view import TrendChart
+
+logger = logging.getLogger(__name__)
 
 TAB_KEYS = ("detail.tab.large", "detail.tab.growth", "detail.tab.health")
 (TAB_LARGE, TAB_GROWTH, TAB_HEALTH) = range(3)
@@ -377,7 +380,7 @@ class AccountDetailDialog(QDialog):
                     formatting.format_forecast_tooltip(detail.forecast, window_hours)
                 )
             except Exception:  # pragma: no cover - 툴팁이 창을 죽이면 안 된다
-                pass
+                logger.exception("예측 툴팁을 만들지 못했습니다")
 
     def _show_scan(self, detail) -> None:
         scan = detail.scan

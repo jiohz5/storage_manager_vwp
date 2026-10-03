@@ -160,4 +160,19 @@ else
     printf '  python을 찾지 못해 건너뜁니다\n'
 fi
 
+# cron 출력과 창의 오류 기록. 끝부분만 - 무엇이 마지막으로 잘못됐는지가 궁금하다.
+line "9. 최근 기록 (logs/ 의 파일마다 끝 20줄)"
+if [ -n "$DATA" ] && [ -d "$DATA/logs" ]; then
+    found=0
+    for f in "$DATA"/logs/*.log; do
+        [ -f "$f" ] || continue
+        found=1
+        printf '  -- %s\n' "$(basename "$f")"
+        tail -n 20 "$f" 2>/dev/null | sed 's/^/    /'
+    done
+    [ "$found" -eq 1 ] || printf '  (기록 없음)\n'
+else
+    printf '  데이터 디렉터리를 몰라 건너뜁니다\n'
+fi
+
 printf '\n########## 끝 ##########\n'

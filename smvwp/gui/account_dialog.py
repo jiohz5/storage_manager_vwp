@@ -10,6 +10,7 @@ argv 배열이어야 특수문자가 재해석되지 않기 때문이고, 잘못
 
 from __future__ import annotations
 
+import logging
 import json
 from pathlib import Path
 from typing import List
@@ -39,6 +40,8 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import formatting, i18n, readability, scan_store
 from . import theme
+
+logger = logging.getLogger(__name__)
 
 # 계정 경로의 관례 접두사. 이름을 입력하면 `<접두사><이름>`으로 경로를 채워
 # 준다. 사내 관례가 다른 곳에 반입한다면 이 한 줄만 고치면 된다 (설정 항목으로
@@ -521,6 +524,7 @@ class AccountDialog(QDialog):
             with scan_store.session(self._data_dir) as conn:
                 return scan_store.last_baseline_times(conn)
         except Exception:  # pragma: no cover - 방어적 처리
+            logger.exception("마지막 스캔 시각을 읽지 못했습니다")
             return {}
 
     def _toggle_settings(self, expanded: bool) -> None:

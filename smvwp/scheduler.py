@@ -12,6 +12,7 @@ df 호출이 느려질 수 있으므로(네트워크 파일시스템 등) 실제
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from . import dashboard, nightly_scan
 from .cycle import run_collection_cycle
+
+logger = logging.getLogger(__name__)
 
 
 def emit_safely(owner, signal_name: str, *payload) -> None:
@@ -124,6 +127,9 @@ class ThreadWorker(QObject):
         try:
             return ("finished", self._work(*args))
         except Exception as exc:  # 스레드 밖으로 새면 조용히 죽는다
+            # 화면에는 한 줄만 간다. 어디서 났는지는 로그에만 남으므로 여기서
+            # 전체를 남긴다 - 예전에는 str(exc) 한 줄 말고는 아무것도 없었다.
+            logger.exception("%s 작업 실패", self.THREAD_NAME)
             return ("failed", str(exc))
 
     def _loop(self, args) -> None:

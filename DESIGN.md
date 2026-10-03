@@ -352,6 +352,7 @@ storage_manager_vwp/
     reports.py                          # 일간/주간/정리 후보 보고서
     readability.py                       # 계정 경로 읽기 권한 표본 조사
     diagnostics.py                        # Python/모듈/GUI툴킷/데이터 디렉터리 진단
+    applog.py                              # 창의 오류 기록(logs/gui-<호스트>.log) + 예외에 창이 꺼지지 않게
     scan_window.py                         # 22:00~06:00 시간창 계산
     scan_lock.py                            # 실행 잠금 + run ID 매칭 안전 중지
     scan_store/                              # 스캔 DB (detail_scan.db) - 밖에서는 scan_store.X

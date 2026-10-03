@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -57,6 +58,8 @@ from .scan_pages import (
     status_text,
 )
 from .scan_progress_dialog import ScanProgressDialog
+
+logger = logging.getLogger(__name__)
 
 # 스캔이 도는 동안에는 촘촘히, 멈춰 있으면 느슨하게 본다. 조회 하나가 계정마다
 # 십여 개의 쿼리라 NFS 위에서는 이 간격이 그대로 부담이 된다.
@@ -608,6 +611,7 @@ class ScanTab(QFrame):
         try:
             self._cron_status = cron_status.read_status()
         except Exception:  # pragma: no cover - 진단 표시가 창을 죽이면 안 된다
+            logger.exception("cron 상태를 읽지 못했습니다")
             self._cron_status = None
         finally:
             self._cron_checking = False
@@ -707,6 +711,6 @@ class ScanTab(QFrame):
         try:
             nightly_scan.mark_interrupted_run(self._data_dir)
         except Exception:  # pragma: no cover - 종료 경로에서 예외로 막히면 안 된다
-            pass
+            logger.exception("창을 닫으며 스캔 실행을 마감하지 못했습니다")
         if terminated:
             self.status_message.emit(i18n.t("scan.stopped_on_close", count=terminated))

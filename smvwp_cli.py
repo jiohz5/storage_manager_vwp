@@ -169,6 +169,12 @@ def command_gui(args) -> int:
         QMessageBox.critical(None, "시작 실패", str(exc))
         return 1
 
+    # 창의 오류는 데이터 디렉터리의 logs/ 에 남긴다 (`smvwp.applog` 참고).
+    from smvwp import applog
+
+    applog.log_to_file(applog.gui_log_path(data_dir))
+    applog.keep_running_on_errors()
+
     from smvwp.gui.main_window import MainWindow
 
     window = MainWindow(data_dir, config)

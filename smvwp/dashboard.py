@@ -62,6 +62,8 @@ def read_dashboard(data_dir: Path, config) -> DashboardData:
         }
         failed = False
     except Exception:
+        # 화면은 "예측을 계산하지 못했습니다" 로 알린다. 왜인지는 여기에만 남는다.
+        logger.exception("FULL 예측 계산 실패")
         forecasts = {}
         failed = True
 

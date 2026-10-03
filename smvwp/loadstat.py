@@ -38,6 +38,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -45,6 +46,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 PROC_STAT = Path("/proc/stat")
 PROC_SELF_STAT = Path("/proc/self/stat")
@@ -473,6 +476,19 @@ class Recorder:
             1, int(round(server_interval_seconds / self.interval_seconds))
         )
         self._tick = 0
+        self._failures_noted = set()
+
+    def _note_failure(self, what: str) -> None:
+        """측정 실패는 스캔을 막지 않는다. 다만 **종류마다 처음 한 번은** 남긴다.
+
+        예전에는 아무것도 남기지 않아, 측정이 밤새 실패해도 아침에 보이는 것은
+        "리소스 표본이 없다" 뿐이었다. 매번 남기면 30초마다 같은 줄이 쌓인다."""
+
+        if what in self._failures_noted:
+            return
+        self._failures_noted.add(what)
+        logger.warning("리소스 측정 실패 (%s) - 이번 실행에서는 다시 남기지 않습니다",
+                       what, exc_info=True)
 
     # -- 표본 만들기 -------------------------------------------------
     def _take(self, phase: str) -> Snapshot:
@@ -548,6 +564,7 @@ class Recorder:
         try:
             snapshot = self._take(PHASE_DURING)
         except Exception:  # pragma: no cover - 측정 실패가 스캔을 막으면 안 된다
+            self._note_failure("system")
             return
         with self._lock:
             self._samples.append(snapshot)
@@ -558,6 +575,7 @@ class Recorder:
         try:
             server = self._server_monitor.sample()
         except Exception:  # pragma: no cover - 측정이 스캔을 막으면 안 된다
+            self._note_failure("server")
             return
         with self._lock:
             self._server_samples.append(server)
