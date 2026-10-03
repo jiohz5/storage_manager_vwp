@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from smvwp import probe
@@ -396,6 +397,44 @@ class CpuMeterTests(unittest.TestCase):
         with probe.CpuMeter() as meter:
             time.sleep(0.2)
         self.assertLess(meter.result.cores, 0.3)
+
+
+class CheckBuilderTests(unittest.TestCase):
+    """잰 값을 점검 글자로 바꾸는 부분. 측정 없이 값만 넣어 경계를 본다."""
+
+    def tree(self, **overrides):
+        values = dict(
+            file_count=20, dir_count=4, max_depth_seen=3, hardlink_files=0,
+            unreadable=0, root_size_kb=100, logical_bytes=100 * 1024,
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_du_is_averaged_before_and_after(self):
+        speed, size = probe._du_walk_checks(10.0, 30.0, 1000, 10.0, 1000)
+        self.assertEqual(speed.raw, "10.0+30.0/10.0")
+        self.assertEqual(speed.digit, 3)          # 평균 20초 / 순회 10초 = 2배 (2.0~4.0 구간)
+        self.assertEqual(size.digit, 1)           # 크기 차이 0%
+
+    def test_without_du_both_checks_are_unmeasured(self):
+        speed, size = probe._du_walk_checks(None, None, None, 10.0, 1000)
+        self.assertEqual((speed.digit, size.digit), (0, 0))
+
+    def test_pair_without_a_partner_is_zero_not_a_guess(self):
+        check = probe._pair_check("L", None, missing="짝이 될 계정이 없음")
+        self.assertEqual((check.digit, check.note), (0, "짝이 될 계정이 없음"))
+        self.assertEqual(probe._pair_check("K", 0.9).digit, 3)
+
+    def test_tree_shape(self):
+        q, r, s, t, u, v = probe._tree_checks(self.tree())
+        self.assertEqual([c.letter for c in (q, r, s, t, u, v)], list("QRSTUV"))
+        self.assertEqual((t.digit, u.digit, v.digit), (1, 1, 1))
+        self.assertEqual(probe._tree_checks(self.tree(logical_bytes=0))[-1].digit, 0)
+
+    def test_cache_drift_compares_the_two_single_thread_runs(self):
+        checks = {c.letter: c for c in probe._sweep_checks([100.0, 150.0], (1, 2), 150.0)}
+        self.assertEqual(checks["P"].raw, "50%")
+        self.assertEqual(checks["O"].raw, "150/s")
 
 
 class SaturationTests(unittest.TestCase):

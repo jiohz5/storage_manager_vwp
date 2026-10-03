@@ -972,6 +972,10 @@ def run_probe(
     (예전에는 순회를 먼저 하고 `du` 를 나중에 한 번만 돌렸다. "그래도 순회가
     빠르면 보수적으로 안전하다"고 적어 두었는데, **반대 결과가 나오면 아무
     결론도 못 낸다**는 점을 놓친 설계였다.)
+
+    여기에는 **재는 일**만 순서대로 둔다. 잰 값을 점검 글자로 바꾸는 일은 아래
+    `_..._checks` 들이 한다 - 값만 받는 함수라 측정 없이 따로 시험할 수 있다.
+    점검은 마지막에 글자순으로 정렬되므로 만드는 순서는 상관없다.
     """
 
     say = log or (lambda _message: None)
@@ -987,10 +991,7 @@ def run_probe(
     # 조건이 이쪽이라, 절대값으로는 이 값이 가장 쓸모 있다.
     say("[0/5] du -sk 기준 (순회 앞, 가장 차가운 상태)")
     du_before, du_kb_before = run_du_sk(str(target), du_timeout)
-    if du_before is None:
-        say("      du 를 실행하지 못했습니다 (없거나 실패)")
-    else:
-        say(f"      {du_before:,.1f}초" + (f" · {du_kb_before:,} KB" if du_kb_before else ""))
+    _say_du(say, du_before, du_kb_before)
 
     # --- 1. 전체 순회 한 번 (모양과 크기는 여기서 다 나온다) --------------
     say("[1/5] 전체 순회 (스레드 %d)" % workers)
@@ -1017,45 +1018,10 @@ def run_probe(
     # 그 상태에서 나온 승패는 아무것도 말해 주지 않는다.
     say("[2/5] du -sk 비교 (순회 뒤)")
     du_after, du_kb_after = run_du_sk(str(target), du_timeout)
-    if du_after is None:
-        say("      du 를 실행하지 못했습니다 (없거나 실패)")
-    else:
-        say(f"      {du_after:,.1f}초" + (f" · {du_kb_after:,} KB" if du_kb_after else ""))
-
-    du_times = [value for value in (du_before, du_after) if value]
-    du_seconds = sum(du_times) / len(du_times) if du_times else None
-    du_kb = du_kb_after or du_kb_before
-
-    # H: 같은 트리에서 순회가 du 보다 몇 배인가 (앞뒤 du 평균 기준).
-    speed = (du_seconds / walk_seconds) if (du_seconds and walk_seconds > 0) else None
-    if du_before and du_after:
-        raw = f"{du_before:.1f}+{du_after:.1f}/{walk_seconds:.1f}"
-    elif du_seconds:
-        raw = f"{du_seconds:.1f}/{walk_seconds:.1f}"
-    else:
-        raw = None
-    checks.append(Check(
-        "H", "순회 대 du 배속",
-        0 if speed is None else (5 if speed < 1.0 else bucket(speed, [1.2, 2.0, 4.0])),
-        (
-            f"{speed:.2f}배 (du {du_before:.1f}초/{du_after:.1f}초 평균)"
-            if speed and du_before and du_after
-            else (f"{speed:.2f}배" if speed else "du 실행 불가")
-        ),
-        raw,
+    _say_du(say, du_after, du_kb_after)
+    checks.extend(_du_walk_checks(
+        du_before, du_after, du_kb_after or du_kb_before, walk_seconds, full.root_size_kb
     ))
-
-    # J: 크기가 같은가. 이게 어긋나면 위의 속도 이야기는 의미가 없다.
-    if du_kb and full.root_size_kb:
-        gap = abs(full.root_size_kb - du_kb) / du_kb * 100
-        checks.append(Check(
-            "J", "크기 일치",
-            bucket(gap, [0.001, 0.1, 1.0]),
-            f"차이 {gap:.3f}%",
-            f"{gap:.3f}%",
-        ))
-    else:
-        checks.append(Check("J", "크기 일치", 0 if du_kb is None else 5, "du 값 없음"))
 
     # --- 3. 스레드 확장 ----------------------------------------------------
     sweep = QUICK_THREAD_SWEEP if quick else THREAD_SWEEP
@@ -1077,15 +1043,6 @@ def run_probe(
             f"      x{count}: {piece.rate:,.0f} 항목/초"
             + (f" · CPU {cores:.2f}코어" if cores is not None else "")
         )
-
-    base = rates[0] if rates else 0
-    saturated_at = _saturation_point(rates, sweep)
-    checks.append(Check(
-        "I", "스레드 확장 포화점",
-        SATURATION_DIGITS.get(saturated_at, 0),
-        f"x{saturated_at} 이후로는 늘지 않음" if saturated_at else "재지 못함",
-        "/".join(f"{rate / base:.2f}" for rate in rates) if base else None,
-    ))
 
     # --- 3b. 프로세스 축 -------------------------------------------------
     #
@@ -1110,12 +1067,140 @@ def run_probe(
             process_rates.append(piece.rate)
             say(f"      proc x{count}: {piece.rate:,.0f} 항목/초")
 
-    # P: 처음 x1 과 마지막 x1 의 차이. 캐시가 데워지면서 뒤 측정이 유리해지는
-    # 흐름이 얼마나 되는지 - 위 확장 결과를 얼마나 믿을지가 여기서 갈린다.
+    # 처음 x1 을 한 번 더 잰다. 캐시가 데워지면서 뒤 측정이 유리해지는 흐름이
+    # 얼마나 되는지 - 위 확장 결과를 얼마나 믿을지가 여기서 갈린다 (P).
     say("[4/5] 캐시 영향 재확인 (x1 다시)")
     again = timed_walk(str(target), sweep[0], slice_seconds)
-    drift = abs(again.rate - base) / base * 100 if base else None
     say(f"      x{sweep[0]} 재측정: {again.rate:,.0f} 항목/초")
+    checks.extend(_sweep_checks(rates, sweep, again.rate))
+
+    # --- 4. 동시성 (이 진단의 핵심) ---------------------------------------
+    say(f"[5/5] 동시성 비교 (조각당 {slice_seconds:.0f}초, 짝마다 5조각)")
+
+    # K: 같은 볼륨 두 갈래. 이미 실측으로 "안 늘어난다"를 봤지만, 이 장비에서
+    # 다시 확인해 두어야 아래 L·M 을 비교할 기준이 생긴다.
+    pair = pick_subtrees(str(target), 2, sizes=entry_sizes)
+    if len(pair) == 2:
+        say("  K 같은 볼륨 두 갈래")
+        # K·L·M 은 **같은 방식으로** 재야 나란히 놓고 읽을 수 있다 - 셋 다
+        # "각자 `workers` 스레드로 혼자 vs 동시"다. 그래야 0.5/0.8/1.0 같은
+        # 값들이 서로 비교되는 숫자가 된다.
+        efficiency = pair_efficiency(pair[0], pair[1], workers, slice_seconds, say)
+        checks.append(_pair_check("K", efficiency))
+    else:
+        checks.append(_pair_check("K", None, missing="하위 디렉터리가 2개 미만"))
+
+    # 자동 탐색은 **비어 있는 쪽만** 채운다. 하나만 직접 준 경우에도 나머지
+    # 하나를 찾아 주어야 한다 (예전에는 둘 다 비었을 때만 찾아, `--peer` 만
+    # 주면 M 이 통째로 빠졌다).
+    if volume_key is not None and (peer_same_filer is None or peer_other_filer is None):
+        found_same, found_other = find_peers(target, accounts, volume_key)
+        peer_same_filer = peer_same_filer or found_same
+        peer_other_filer = peer_other_filer or found_other
+
+    # L: 같은 파일러의 다른 볼륨. **아직 답이 없는 질문이 이것이다** - 볼륨
+    # 한도는 각자 안 넘는데 파일러 한 대의 NIC/CPU 를 나눠 쓰기 때문이다.
+    if peer_same_filer:
+        say(f"  L 같은 파일러 다른 볼륨 ({peer_same_filer})")
+        efficiency = pair_efficiency(str(target), peer_same_filer, workers, slice_seconds, say)
+        checks.append(_pair_check("L", efficiency))
+    else:
+        checks.append(_pair_check("L", None, missing="짝이 될 계정이 없음"))
+
+    # M: 다른 파일러. 여기서도 안 늘면 병목은 저장소가 아니라 이 서버 쪽이다
+    # (NIC, CPU, 커널 RPC 계층).
+    if peer_other_filer:
+        say(f"  M 다른 파일러 ({peer_other_filer})")
+        efficiency = pair_efficiency(str(target), peer_other_filer, workers, slice_seconds, say)
+        checks.append(_pair_check("M", efficiency))
+    else:
+        checks.append(_pair_check("M", None, missing="짝이 될 계정이 없음"))
+
+    # --- 5. 트리 모양 (순회 한 번에서 다 나온다) ----------------------------
+    checks.extend(_tree_checks(full))
+    checks.extend(system_checks(_peak_rss_kb()))
+
+    result.checks = sorted(checks, key=lambda check: check.letter)
+    result.cpu = cpu_checks(
+        cpu_topology(),
+        cpu_single,
+        cpu_parallel,
+        rates,
+        sweep,
+        process_rates,
+        process_counts,
+    )
+    return result
+
+
+def _say_du(say: Callable[[str], None], seconds: Optional[float], kb: Optional[int]) -> None:
+    if seconds is None:
+        say("      du 를 실행하지 못했습니다 (없거나 실패)")
+    else:
+        say(f"      {seconds:,.1f}초" + (f" · {kb:,} KB" if kb else ""))
+
+
+def _du_walk_checks(
+    du_before: Optional[float],
+    du_after: Optional[float],
+    du_kb: Optional[int],
+    walk_seconds: float,
+    walked_kb: Optional[int],
+) -> List[Check]:
+    """H(순회 대 du 배속)와 J(크기 일치). du 는 앞뒤 평균으로 본다."""
+
+    du_times = [value for value in (du_before, du_after) if value]
+    du_seconds = sum(du_times) / len(du_times) if du_times else None
+
+    # H: 같은 트리에서 순회가 du 보다 몇 배인가 (앞뒤 du 평균 기준).
+    speed = (du_seconds / walk_seconds) if (du_seconds and walk_seconds > 0) else None
+    if du_before and du_after:
+        raw = f"{du_before:.1f}+{du_after:.1f}/{walk_seconds:.1f}"
+    elif du_seconds:
+        raw = f"{du_seconds:.1f}/{walk_seconds:.1f}"
+    else:
+        raw = None
+    checks = [Check(
+        "H", "순회 대 du 배속",
+        0 if speed is None else (5 if speed < 1.0 else bucket(speed, [1.2, 2.0, 4.0])),
+        (
+            f"{speed:.2f}배 (du {du_before:.1f}초/{du_after:.1f}초 평균)"
+            if speed and du_before and du_after
+            else (f"{speed:.2f}배" if speed else "du 실행 불가")
+        ),
+        raw,
+    )]
+
+    # J: 크기가 같은가. 이게 어긋나면 위의 속도 이야기는 의미가 없다.
+    if du_kb and walked_kb:
+        gap = abs(walked_kb - du_kb) / du_kb * 100
+        checks.append(Check(
+            "J", "크기 일치",
+            bucket(gap, [0.001, 0.1, 1.0]),
+            f"차이 {gap:.3f}%",
+            f"{gap:.3f}%",
+        ))
+    else:
+        checks.append(Check("J", "크기 일치", 0 if du_kb is None else 5, "du 값 없음"))
+    return checks
+
+
+def _sweep_checks(
+    rates: Sequence[float], sweep: Sequence[int], again_rate: float
+) -> List[Check]:
+    """I(스레드 확장 포화점), P(캐시 영향), N(단일 스레드 지연), O(최대 처리량)."""
+
+    base = rates[0] if rates else 0
+    saturated_at = _saturation_point(rates, sweep)
+    checks = [Check(
+        "I", "스레드 확장 포화점",
+        SATURATION_DIGITS.get(saturated_at, 0),
+        f"x{saturated_at} 이후로는 늘지 않음" if saturated_at else "재지 못함",
+        "/".join(f"{rate / base:.2f}" for rate in rates) if base else None,
+    )]
+
+    # P: 처음 x1 과 마지막 x1 의 차이.
+    drift = abs(again_rate - base) / base * 100 if base else None
     checks.append(Check(
         "P", "캐시 영향",
         bucket(drift, [10, 30]),
@@ -1139,73 +1224,42 @@ def run_probe(
         f"{best_rate:,.0f} 항목/초" if best_rate else "재지 못함",
         f"{best_rate:,.0f}/s" if best_rate else None,
     ))
+    return checks
 
-    # --- 4. 동시성 (이 진단의 핵심) ---------------------------------------
-    say(f"[5/5] 동시성 비교 (조각당 {slice_seconds:.0f}초, 짝마다 5조각)")
 
-    # K: 같은 볼륨 두 갈래. 이미 실측으로 "안 늘어난다"를 봤지만, 이 장비에서
-    # 다시 확인해 두어야 아래 L·M 을 비교할 기준이 생긴다.
-    pair = pick_subtrees(str(target), 2, sizes=entry_sizes)
-    if len(pair) == 2:
-        say("  K 같은 볼륨 두 갈래")
-        # K·L·M 은 **같은 방식으로** 재야 나란히 놓고 읽을 수 있다 - 셋 다
-        # "각자 `workers` 스레드로 혼자 vs 동시"다. 그래야 0.5/0.8/1.0 같은
-        # 값들이 서로 비교되는 숫자가 된다.
-        efficiency = pair_efficiency(pair[0], pair[1], workers, slice_seconds, say)
-        checks.append(Check(
-            "K", "같은 볼륨 동시",
-            bucket(efficiency, [0.6, 0.85]),
-            f"각자 속도의 {efficiency:.2f}배 유지" if efficiency else "재지 못함",
-            f"{efficiency:.2f}" if efficiency else None,
-        ))
-    else:
-        checks.append(Check("K", "같은 볼륨 동시", 0, "하위 디렉터리가 2개 미만"))
+# K·L·M 의 이름. 셋은 같은 방식으로 재고 같은 잣대로 읽는다 (`pair_efficiency`).
+PAIR_TITLES = {
+    "K": "같은 볼륨 동시",
+    "L": "같은 파일러 다른 볼륨 동시",
+    "M": "다른 파일러 동시",
+}
 
-    # 자동 탐색은 **비어 있는 쪽만** 채운다. 하나만 직접 준 경우에도 나머지
-    # 하나를 찾아 주어야 한다 (예전에는 둘 다 비었을 때만 찾아, `--peer` 만
-    # 주면 M 이 통째로 빠졌다).
-    if volume_key is not None and (peer_same_filer is None or peer_other_filer is None):
-        found_same, found_other = find_peers(target, accounts, volume_key)
-        peer_same_filer = peer_same_filer or found_same
-        peer_other_filer = peer_other_filer or found_other
 
-    # L: 같은 파일러의 다른 볼륨. **아직 답이 없는 질문이 이것이다** - 볼륨
-    # 한도는 각자 안 넘는데 파일러 한 대의 NIC/CPU 를 나눠 쓰기 때문이다.
-    if peer_same_filer:
-        say(f"  L 같은 파일러 다른 볼륨 ({peer_same_filer})")
-        efficiency = pair_efficiency(str(target), peer_same_filer, workers, slice_seconds, say)
-        checks.append(Check(
-            "L", "같은 파일러 다른 볼륨 동시",
-            bucket(efficiency, [0.6, 0.85]),
-            f"각자 속도의 {efficiency:.2f}배 유지" if efficiency else "재지 못함",
-            f"{efficiency:.2f}" if efficiency else None,
-        ))
-    else:
-        checks.append(Check("L", "같은 파일러 다른 볼륨 동시", 0, "짝이 될 계정이 없음"))
+def _pair_check(letter: str, efficiency: Optional[float], missing: Optional[str] = None) -> Check:
+    """동시에 돌렸을 때 각자 속도를 얼마나 지키는가. 재지 못했으면 `missing` 이 사유."""
 
-    # M: 다른 파일러. 여기서도 안 늘면 병목은 저장소가 아니라 이 서버 쪽이다
-    # (NIC, CPU, 커널 RPC 계층).
-    if peer_other_filer:
-        say(f"  M 다른 파일러 ({peer_other_filer})")
-        efficiency = pair_efficiency(str(target), peer_other_filer, workers, slice_seconds, say)
-        checks.append(Check(
-            "M", "다른 파일러 동시",
-            bucket(efficiency, [0.6, 0.85]),
-            f"각자 속도의 {efficiency:.2f}배 유지" if efficiency else "재지 못함",
-            f"{efficiency:.2f}" if efficiency else None,
-        ))
-    else:
-        checks.append(Check("M", "다른 파일러 동시", 0, "짝이 될 계정이 없음"))
+    title = PAIR_TITLES[letter]
+    if missing is not None:
+        return Check(letter, title, 0, missing)
+    return Check(
+        letter, title,
+        bucket(efficiency, [0.6, 0.85]),
+        f"각자 속도의 {efficiency:.2f}배 유지" if efficiency else "재지 못함",
+        f"{efficiency:.2f}" if efficiency else None,
+    )
 
-    # --- 5. 트리 모양 ------------------------------------------------------
+
+def _tree_checks(full) -> List[Check]:
+    """Q~V: 트리 모양. 순회 한 번(`walker.walk_tree` 결과)에서 다 나온다."""
+
     files = full.file_count
     dirs = full.dir_count
-    checks.append(Check(
+    checks = [Check(
         "Q", "파일 수 규모",
         bucket(files, [100_000, 1_000_000, 10_000_000]),
         f"{files:,}개",
         f"{files:,}",
-    ))
+    )]
     fanout = (files / dirs) if dirs else None
     checks.append(Check(
         "R", "디렉터리당 평균 파일",
@@ -1245,21 +1299,7 @@ def run_probe(
         ))
     else:
         checks.append(Check("V", "논리 크기 대 점유", 0, "재지 못함"))
-
-    checks.extend(system_checks(_peak_rss_kb()))
-
-    result.checks = sorted(checks, key=lambda check: check.letter)
-    result.cpu = cpu_checks(
-        cpu_topology(),
-        cpu_single,
-        cpu_parallel,
-        rates,
-        sweep,
-        process_rates,
-        process_counts,
-    )
-    return result
-
+    return checks
 
 # ---------------------------------------------------------------- 출력
 
