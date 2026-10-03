@@ -420,19 +420,15 @@ def _process_search_index(
     if stop_or_deadline():
         return "interrupted", 0
 
-    conn = None
     try:
-        conn = search_index.connect(data_dir)
-        count = search_index.index_account(
-            conn, account.account_id, Path(account.path), should_stop=stop_or_deadline
-        )
+        with search_index.session(data_dir) as conn:
+            count = search_index.index_account(
+                conn, account.account_id, Path(account.path), should_stop=stop_or_deadline
+            )
         return ("interrupted" if stop_or_deadline() else "done"), count
     except Exception:  # pragma: no cover - 방어적 처리
         logger.exception("검색 인덱싱 실패: %s", account.name)
         return "error", 0
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def resolve_parallel_accounts(
@@ -595,29 +591,28 @@ def _run_accounts_parallel(
         볼륨끼리의 동시성은 바깥 풀이 낸다."""
 
         produced: List[AccountOutcome] = []
-        worker_conn = scan_store.connect(data_dir)
-        active.enter()
-        try:
-            for account in group:
-                # 순서를 기다리는 동안 시간창이 끝났을 수 있다.
-                if should_stop() or deadline_reached():
-                    break
-                produced.append(_process_account(
-                    worker_conn,
-                    data_dir,
-                    account,
-                    settings,
-                    clock,
-                    should_stop,
-                    deadline_reached,
-                    top_level_lister,
-                    load,
-                    run_id,
-                ))
-            return produced
-        finally:
-            active.leave()
-            worker_conn.close()
+        with scan_store.session(data_dir) as worker_conn:
+            active.enter()
+            try:
+                for account in group:
+                    # 순서를 기다리는 동안 시간창이 끝났을 수 있다.
+                    if should_stop() or deadline_reached():
+                        break
+                    produced.append(_process_account(
+                        worker_conn,
+                        data_dir,
+                        account,
+                        settings,
+                        clock,
+                        should_stop,
+                        deadline_reached,
+                        top_level_lister,
+                        load,
+                        run_id,
+                    ))
+                return produced
+            finally:
+                active.leave()
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=len(groups), thread_name_prefix="smvwp-vol"
@@ -738,141 +733,27 @@ def run_nightly_scan(
             reason=f"이미 실행 중인 스캔이 있어 시작하지 못했습니다{holder}",
         )
 
-    scan_lock.clear_stop_request(data_dir)
-
-    accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
-    # 계정을 저장소(볼륨)별로 묶는다. 같은 볼륨을 동시에 두들겨 봐야 서로를
-    # 방해할 뿐이고, 다른 볼륨이면 그만큼 그대로 벌어진다
-    # (`group_accounts_by_volume` 의 실측 근거 참고).
-    #
-    # `parallel_accounts` 는 이제 **동시에 도는 볼륨 수의 상한**이다. 볼륨이
-    # 그보다 많으면 앞에서부터 그만큼만 동시에 가고, 나머지는 그 묶음 안에서
-    # 순서를 기다린다.
-    groups = group_accounts_by_volume(accounts)
-    run_parallel = parallel_accounts > 1 and len(groups) > 1
-    if run_parallel and parallel_accounts < len(groups):
-        # 상한을 넘는 묶음은 앞쪽 묶음에 이어 붙인다 - 버리지 않는다.
-        merged = groups[:parallel_accounts]
-        for index, extra in enumerate(groups[parallel_accounts:]):
-            merged[index % parallel_accounts].extend(extra)
-        groups = merged
-    # 기록에 남기는 것은 **설정값이 아니라 실제로 동시에 돈 수**다. 둘은
-    # 볼륨 묶음이 생기면서 갈라졌다 - `--parallel 4` 로 시작해도 계정이 전부
-    # 한 볼륨에 있으면 실제로는 하나씩 돈다. 이 값은 리소스 시계열을 읽는
-    # 기준이라, 설정값을 남기면 "동시 4일 때 부하가 이랬다"고 잘못 읽는다.
-    effective_parallel = len(groups) if run_parallel else 1
-
-    conn = scan_store.connect(data_dir)
-    outcomes: List[AccountOutcome] = []
-    status = STATUS_COMPLETED
-    # 체크포인트 하나가 끝날 때마다 CPU 점유를 표본으로 모은다 (작은 파일
-    # 두 개를 읽는 것이 전부라 재는 행위가 부하가 되지는 않는다).
-    load = loadstat.Accumulator()
-    active = _ActiveCounter()
-    # 체크포인트 주기와 별개로 **일정 시간마다** 시스템 전체 리소스를 찍는다.
-    # 체크포인트 하나가 15분까지 갈 수 있어, 그 안에서 부하가 어떻게 움직였는지는
-    # 주기 표본이 아니면 볼 수 없다.
-    # 같은 시각에 서버에서 **무엇이** 돌았는지도 함께 남긴다. 부하 숫자만
-    # 있으면 "스캔 때문에 바빴나, 원래 바빴나"를 나중에 가릴 수 없다.
-    server_monitor = (
-        servermon.ServerMonitor(with_cmdline=settings.record_process_cmdline)
-        if servermon.procstat.available()
-        else None
-    )
-    recorder = loadstat.Recorder(
-        interval_seconds=settings.load_sample_interval_seconds,
-        accumulator=load,
-        active_accounts=active,
-        server_monitor=server_monitor,
-    )
     try:
-        scan_store.start_run(conn, run_id, triggered_by)
-        scan_store.record_parallelism(conn, run_id, effective_parallel, weekend_night)
-        # 기준값은 반드시 **스캔을 시작하기 전에** 잡는다. 이 표본이 없으면
-        # 나중에 "스캔 때문에 튄 것"과 "원래 그랬던 것"을 구분할 수 없다.
-        recorder.baseline(warmup_seconds=baseline_warmup_seconds)
-        recorder.start()
-
-        if bypass_window:
-            # 낮에 손으로 시작한 스캔은 시간창을 무시하고 돈다. 그런데
-            # **야간 창이 열리면 물러나야 한다** - 안 그러면 22:00 에 뜬 cron 이
-            # 잠금을 못 잡고 그날 밤이 통째로 날아간다. 사람이 낮에 눌러 둔 것
-            # 하나가 밤 전체를 먹는 셈이다.
-            #
-            # 물러나도 잃는 것은 없다. 진행한 체크포인트는 이미 저장돼 있고,
-            # 곧이어 뜨는 야간 실행이 거기서 이어받는다.
-            night_start = settings.detail_scan_window_start_hour
-            night_end = settings.detail_scan_window_end_hour
-            if scan_window.is_within_window(local_now, night_start, night_end):
-                # 야간 창 **안에서** 시작한 수동 실행은 양보할 상대가 없다 -
-                # 이것이 곧 그날 밤의 실행이다. 여기서 물러나면 눌러도 아무
-                # 일이 일어나지 않는 것처럼 보인다.
-                deadline_reached = lambda: False
-            else:
-                deadline_reached = lambda: scan_window.is_within_window(
-                    clock(), night_start, night_end
-                )
-        else:
-            window_end = scan_window.next_window_end(local_now, settings.detail_scan_window_end_hour)
-            deadline_reached = lambda: clock() >= window_end
-
-        should_stop = lambda: scan_lock.is_stop_requested(data_dir, run_id)
-
-        if run_parallel:
-            status = _run_accounts_parallel(
-                data_dir,
-                accounts,
-                settings,
-                clock,
-                should_stop,
-                deadline_reached,
-                top_level_lister,
-                load,
-                run_id,
-                outcomes,
-                active,
-                groups=groups,
-            )
-        else:
-            status = _run_accounts_serial(
-                conn,
-                data_dir,
-                accounts,
-                settings,
-                clock,
-                should_stop,
-                deadline_reached,
-                top_level_lister,
-                load,
-                run_id,
-                outcomes,
-                active,
-            )
-    except Exception:  # pragma: no cover - 방어적 처리, 다음 실행에서 체크포인트로 재개
-        logger.exception("야간 상세 스캔 중 예외 발생")
-        status = STATUS_ERROR
+        status, outcomes, effective_parallel = _scan_under_lock(
+            data_dir,
+            config,
+            run_id,
+            triggered_by,
+            local_now,
+            bypass_window,
+            clock,
+            top_level_lister,
+            parallel_accounts,
+            baseline_warmup_seconds,
+            weekend_night,
+        )
     finally:
-        # 기록기를 먼저 세운다. 스캔이 끝난 뒤의 표본은 "스캔 중"이 아니므로
-        # 시계열에 섞이면 평균과 최고치를 함께 흐린다.
-        recorder.stop()
-        scan_store.set_current_target(conn, run_id, None, None, None)
-        scan_store.finish_run(conn, run_id, status, load=load.summary())
-        try:
-            scan_store.save_load_samples(conn, run_id, recorder.samples())
-            scan_store.prune_load_samples(conn, settings.load_sample_retention_days)
-            for server_sample in recorder.server_samples():
-                scan_store.save_server_sample(
-                    conn, server_sample, source=scan_store.SOURCE_SCAN, run_id=run_id
-                )
-            # 스캔 중 표본은 촘촘해서 금방 쌓인다 - 상시 표본보다 짧게 둔다.
-            scan_store.prune_server_samples(
-                conn,
-                settings.load_sample_retention_days,
-                source=scan_store.SOURCE_SCAN,
-            )
-        except Exception:  # pragma: no cover - 측정 기록 실패가 스캔을 실패로 만들지 않는다
-            logger.exception("리소스 표본 저장 실패")
-        conn.close()
+        # 무엇이 실패해도 잠금은 푼다. 예전에는 이 줄이 실행 기록을 마무리하는
+        # 일(`finish_run` 등) 뒤에 있어, 거기서 예외가 나면(NFS 위의 "database
+        # is locked" 같은) 여기까지 오지 못했다. cron 실행이면 프로세스가
+        # 끝나며 낡은 잠금으로 판정되지만, **창 안에서 돈 실행은 창이 살아 있는
+        # 한 '실행 중'으로 남아** 그 창도 그날 밤 cron 도 스캔을 시작하지
+        # 못했다 (`scan_lock` 은 pid 로 살아 있는지 본다).
         scan_lock.release_lock(data_dir, run_id)
 
     # 아래 후처리는 모두 "이미 저장된 스캔 결과"를 소비하기만 한다. 여기서
@@ -899,6 +780,163 @@ def run_nightly_scan(
     )
 
 
+def _scan_under_lock(
+    data_dir: Path,
+    config: config_module.AppConfig,
+    run_id: str,
+    triggered_by: str,
+    local_now: datetime,
+    bypass_window: bool,
+    clock: Callable[[], datetime],
+    top_level_lister: Callable[[str], List[str]],
+    parallel_accounts: int,
+    baseline_warmup_seconds: float,
+    weekend_night: bool,
+) -> "tuple[str, List[AccountOutcome], int]":
+    """잠금을 쥔 채 하는 일 - 계정을 돌고 실행 기록을 마무리한다.
+
+    `(상태, 계정별 결과, 실제로 동시에 돈 수)` 를 돌려준다. 잠금은 부르는 쪽
+    (`run_nightly_scan`)이 푼다 - 여기서 무엇이 터져도 풀려야 하기 때문이다.
+    """
+
+    settings = config.settings
+    scan_lock.clear_stop_request(data_dir)
+
+    accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
+    # 계정을 저장소(볼륨)별로 묶는다. 같은 볼륨을 동시에 두들겨 봐야 서로를
+    # 방해할 뿐이고, 다른 볼륨이면 그만큼 그대로 벌어진다
+    # (`group_accounts_by_volume` 의 실측 근거 참고).
+    #
+    # `parallel_accounts` 는 이제 **동시에 도는 볼륨 수의 상한**이다. 볼륨이
+    # 그보다 많으면 앞에서부터 그만큼만 동시에 가고, 나머지는 그 묶음 안에서
+    # 순서를 기다린다.
+    groups = group_accounts_by_volume(accounts)
+    run_parallel = parallel_accounts > 1 and len(groups) > 1
+    if run_parallel and parallel_accounts < len(groups):
+        # 상한을 넘는 묶음은 앞쪽 묶음에 이어 붙인다 - 버리지 않는다.
+        merged = groups[:parallel_accounts]
+        for index, extra in enumerate(groups[parallel_accounts:]):
+            merged[index % parallel_accounts].extend(extra)
+        groups = merged
+    # 기록에 남기는 것은 **설정값이 아니라 실제로 동시에 돈 수**다. 둘은
+    # 볼륨 묶음이 생기면서 갈라졌다 - `--parallel 4` 로 시작해도 계정이 전부
+    # 한 볼륨에 있으면 실제로는 하나씩 돈다. 이 값은 리소스 시계열을 읽는
+    # 기준이라, 설정값을 남기면 "동시 4일 때 부하가 이랬다"고 잘못 읽는다.
+    effective_parallel = len(groups) if run_parallel else 1
+
+    outcomes: List[AccountOutcome] = []
+    status = STATUS_COMPLETED
+    # 체크포인트 하나가 끝날 때마다 CPU 점유를 표본으로 모은다 (작은 파일
+    # 두 개를 읽는 것이 전부라 재는 행위가 부하가 되지는 않는다).
+    load = loadstat.Accumulator()
+    active = _ActiveCounter()
+    # 체크포인트 주기와 별개로 **일정 시간마다** 시스템 전체 리소스를 찍는다.
+    # 체크포인트 하나가 15분까지 갈 수 있어, 그 안에서 부하가 어떻게 움직였는지는
+    # 주기 표본이 아니면 볼 수 없다.
+    # 같은 시각에 서버에서 **무엇이** 돌았는지도 함께 남긴다. 부하 숫자만
+    # 있으면 "스캔 때문에 바빴나, 원래 바빴나"를 나중에 가릴 수 없다.
+    server_monitor = (
+        servermon.ServerMonitor(with_cmdline=settings.record_process_cmdline)
+        if servermon.procstat.available()
+        else None
+    )
+    recorder = loadstat.Recorder(
+        interval_seconds=settings.load_sample_interval_seconds,
+        accumulator=load,
+        active_accounts=active,
+        server_monitor=server_monitor,
+    )
+    with scan_store.session(data_dir) as conn:
+        try:
+            scan_store.start_run(conn, run_id, triggered_by)
+            scan_store.record_parallelism(conn, run_id, effective_parallel, weekend_night)
+            # 기준값은 반드시 **스캔을 시작하기 전에** 잡는다. 이 표본이 없으면
+            # 나중에 "스캔 때문에 튄 것"과 "원래 그랬던 것"을 구분할 수 없다.
+            recorder.baseline(warmup_seconds=baseline_warmup_seconds)
+            recorder.start()
+
+            if bypass_window:
+                # 낮에 손으로 시작한 스캔은 시간창을 무시하고 돈다. 그런데
+                # **야간 창이 열리면 물러나야 한다** - 안 그러면 22:00 에 뜬 cron 이
+                # 잠금을 못 잡고 그날 밤이 통째로 날아간다. 사람이 낮에 눌러 둔 것
+                # 하나가 밤 전체를 먹는 셈이다.
+                #
+                # 물러나도 잃는 것은 없다. 진행한 체크포인트는 이미 저장돼 있고,
+                # 곧이어 뜨는 야간 실행이 거기서 이어받는다.
+                night_start = settings.detail_scan_window_start_hour
+                night_end = settings.detail_scan_window_end_hour
+                if scan_window.is_within_window(local_now, night_start, night_end):
+                    # 야간 창 **안에서** 시작한 수동 실행은 양보할 상대가 없다 -
+                    # 이것이 곧 그날 밤의 실행이다. 여기서 물러나면 눌러도 아무
+                    # 일이 일어나지 않는 것처럼 보인다.
+                    deadline_reached = lambda: False
+                else:
+                    deadline_reached = lambda: scan_window.is_within_window(
+                        clock(), night_start, night_end
+                    )
+            else:
+                window_end = scan_window.next_window_end(local_now, settings.detail_scan_window_end_hour)
+                deadline_reached = lambda: clock() >= window_end
+
+            should_stop = lambda: scan_lock.is_stop_requested(data_dir, run_id)
+
+            if run_parallel:
+                status = _run_accounts_parallel(
+                    data_dir,
+                    accounts,
+                    settings,
+                    clock,
+                    should_stop,
+                    deadline_reached,
+                    top_level_lister,
+                    load,
+                    run_id,
+                    outcomes,
+                    active,
+                    groups=groups,
+                )
+            else:
+                status = _run_accounts_serial(
+                    conn,
+                    data_dir,
+                    accounts,
+                    settings,
+                    clock,
+                    should_stop,
+                    deadline_reached,
+                    top_level_lister,
+                    load,
+                    run_id,
+                    outcomes,
+                    active,
+                )
+        except Exception:  # pragma: no cover - 방어적 처리, 다음 실행에서 체크포인트로 재개
+            logger.exception("야간 상세 스캔 중 예외 발생")
+            status = STATUS_ERROR
+        finally:
+            # 기록기를 먼저 세운다. 스캔이 끝난 뒤의 표본은 "스캔 중"이 아니므로
+            # 시계열에 섞이면 평균과 최고치를 함께 흐린다.
+            recorder.stop()
+            scan_store.set_current_target(conn, run_id, None, None, None)
+            scan_store.finish_run(conn, run_id, status, load=load.summary())
+            try:
+                scan_store.save_load_samples(conn, run_id, recorder.samples())
+                scan_store.prune_load_samples(conn, settings.load_sample_retention_days)
+                for server_sample in recorder.server_samples():
+                    scan_store.save_server_sample(
+                        conn, server_sample, source=scan_store.SOURCE_SCAN, run_id=run_id
+                    )
+                # 스캔 중 표본은 촘촘해서 금방 쌓인다 - 상시 표본보다 짧게 둔다.
+                scan_store.prune_server_samples(
+                    conn,
+                    settings.load_sample_retention_days,
+                    source=scan_store.SOURCE_SCAN,
+                )
+            except Exception:  # pragma: no cover - 측정 기록 실패가 스캔을 실패로 만들지 않는다
+                logger.exception("리소스 표본 저장 실패")
+    return status, outcomes, effective_parallel
+
+
 def _notify_growth(
     data_dir: Path,
     config: config_module.AppConfig,
@@ -919,47 +957,47 @@ def _notify_growth(
     state = notifications.load_notify_state(data_dir)
     sent = 0
 
-    conn = scan_store.connect(data_dir)
     try:
-        for outcome in outcomes:
-            if outcome.baseline_status != "done":
-                continue
-            account = accounts_by_id.get(outcome.account_id)
-            if account is None:
-                continue
-            current = outcome.baseline_generation
-            previous = current - 1
-            if previous < 1:
-                continue  # 첫 기준선 - 비교 대상이 없다
+        with scan_store.session(data_dir) as conn:
+            for outcome in outcomes:
+                if outcome.baseline_status != "done":
+                    continue
+                account = accounts_by_id.get(outcome.account_id)
+                if account is None:
+                    continue
+                current = outcome.baseline_generation
+                previous = current - 1
+                if previous < 1:
+                    continue  # 첫 기준선 - 비교 대상이 없다
 
-            rows = scan_store.growth_delta(
-                conn, account.account_id, current, previous, settings.detail_scan_top_n
-            )
-            for row in rows:
-                # previous_kb가 None이면 이전 세대에 없던 새 경로다. 새로 생긴
-                # 큰 디렉터리도 알릴 가치가 있으므로 현재 크기 전체를 증가분
-                # 으로 본다 (maybe_notify_growth가 그렇게 처리한다).
-                result = notifications.maybe_notify_growth(
-                    data_dir,
-                    account,
-                    row["path"],
-                    row["current_kb"],
-                    row["previous_kb"],
-                    state,
-                    min_increase_kb=settings.growth_alert_min_kb,
-                    cooldown_minutes=settings.notification_cooldown_minutes,
-                    now=now,
-                    mode=settings.notification_mode,
-                    command=settings.notification_command,
-                    webhook_url=settings.notification_webhook_url,
-                    timeout_seconds=settings.notification_timeout_seconds,
+                rows = scan_store.growth_delta(
+                    conn, account.account_id, current, previous, settings.detail_scan_top_n
                 )
-                if result is not None:
-                    sent += 1
+                for row in rows:
+                    # previous_kb가 None이면 이전 세대에 없던 새 경로다. 새로 생긴
+                    # 큰 디렉터리도 알릴 가치가 있으므로 현재 크기 전체를 증가분
+                    # 으로 본다 (maybe_notify_growth가 그렇게 처리한다).
+                    result = notifications.maybe_notify_growth(
+                        data_dir,
+                        account,
+                        row["path"],
+                        row["current_kb"],
+                        row["previous_kb"],
+                        state,
+                        min_increase_kb=settings.growth_alert_min_kb,
+                        cooldown_minutes=settings.notification_cooldown_minutes,
+                        now=now,
+                        mode=settings.notification_mode,
+                        command=settings.notification_command,
+                        webhook_url=settings.notification_webhook_url,
+                        timeout_seconds=settings.notification_timeout_seconds,
+                    )
+                    if result is not None:
+                        sent += 1
     except Exception:  # pragma: no cover - 방어적 처리
+        # 연결을 못 열어도 여기서 멈춘다 - 스캔 결과는 이미 저장됐고, 알림을
+        # 못 보낸 것이 스캔을 실패로 만들지는 않는다.
         logger.exception("급증 알림 발송 실패 (스캔 결과는 이미 저장됨)")
-    finally:
-        conn.close()
 
     notifications.save_notify_state(data_dir, state)
     return sent
@@ -974,16 +1012,12 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 
     if not search_index.db_path(data_dir).exists():
         return
-    conn = None
     try:
-        conn = search_index.connect(data_dir)
-        active = [account.account_id for account in config.accounts if account.search_indexing]
-        search_index.prune_orphans(conn, active)
+        with search_index.session(data_dir) as conn:
+            active = [account.account_id for account in config.accounts if account.search_indexing]
+            search_index.prune_orphans(conn, active)
     except Exception:  # pragma: no cover - 방어적 처리
         logger.exception("검색 인덱스 정리 실패")
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def _generate_reports(data_dir: Path, config: config_module.AppConfig, now: datetime) -> None:

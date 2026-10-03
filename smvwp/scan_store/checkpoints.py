@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .db import (
     BASELINE,
@@ -96,6 +96,17 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
         account_id=row["account_id"],
         last_completed_generation=row["last_completed_generation"],
     )
+
+
+def last_baseline_times(conn: sqlite3.Connection) -> Dict[str, Optional[str]]:
+    """계정별 마지막 기준선 완주 시각 `{account_id: ISO 시각 또는 None}`."""
+
+    return {
+        row["account_id"]: row["last_baseline_completed_at"]
+        for row in conn.execute(
+            "SELECT account_id, last_baseline_completed_at FROM account_scan_state"
+        )
+    }
 
 
 def mark_generation_completed(conn: sqlite3.Connection, account_id: str, generation: int) -> None:

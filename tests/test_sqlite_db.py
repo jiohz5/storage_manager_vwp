@@ -5,11 +5,13 @@
 개선을 하나도 받지 못했다.
 """
 
+import ast
 import sqlite3
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import List
 from unittest.mock import patch
 
 from smvwp import scan_store, search_index, sqlite_db, store
@@ -174,6 +176,62 @@ class JournalModeReportTests(_Case):
 
     def test_a_missing_file_reports_nothing(self):
         self.assertIsNone(sqlite_db.journal_mode(self.data_dir / "nope.db"))
+
+
+def direct_connects(source: str, filename: str) -> List[str]:
+    """`store/scan_store/search_index.connect(...)` 를 직접 부르는 자리 `파일:줄 (함수)`."""
+
+    found = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.functions = []
+
+        def visit_FunctionDef(self, node):
+            self.functions.append(node.name)
+            self.generic_visit(node)
+            self.functions.pop()
+
+        def visit_Call(self, node):
+            func = node.func
+            if (
+                isinstance(func, ast.Attribute)
+                and func.attr == "connect"
+                and isinstance(func.value, ast.Name)
+                and func.value.id in {"store", "scan_store", "search_index"}
+            ):
+                where = self.functions[-1] if self.functions else "<module>"
+                found.append(f"{filename}:{node.lineno} ({where})")
+            self.generic_visit(node)
+
+    Visitor().visit(ast.parse(source))
+    return found
+
+
+class OpenThroughSessionTests(unittest.TestCase):
+    """실행 코드는 연결을 `session()` 으로 연다 - 닫는 것을 잊을 수 없게.
+
+    `connect()` 를 직접 부르면 닫는 것은 부르는 쪽 몫이 되고, 예외 경로에서 잊기
+    쉽다. 야간 스캔 본체가 그랬다 - 실행 기록을 마무리하다 터지면 연결과 스캔
+    잠금을 함께 놓쳐, 창이 살아 있는 동안 다음 스캔이 시작되지 못했다."""
+
+    # 못 열면 그 절만 건너뛰는 보고서용 문. 여기서만 직접 연다.
+    ALLOWED = {"smvwp/reports.py:_scan_db"}
+
+    def test_production_code_opens_connections_through_session(self):
+        root = Path(__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted((root / "smvwp").rglob("*.py")):
+            name = path.relative_to(root).as_posix()
+            for hit in direct_connects(path.read_text(encoding="utf-8"), name):
+                function = hit.rsplit("(", 1)[1].rstrip(")")
+                if f"{name}:{function}" not in self.ALLOWED:
+                    offenders.append(hit)
+        self.assertEqual(offenders, [], "session() 으로 여세요: " + " / ".join(offenders))
+
+    def test_the_check_sees_a_direct_connect(self):
+        sample = "def f(data_dir):\n    conn = scan_store.connect(data_dir)\n    conn.close()\n"
+        self.assertEqual(direct_connects(sample, "x.py"), ["x.py:2 (f)"])
 
 
 if __name__ == "__main__":  # pragma: no cover

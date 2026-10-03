@@ -145,28 +145,21 @@ def read(
 def _read_samples(detail, data_dir, account_id, trend_days, now) -> None:
     """지금 얼마인가 + 추세. 둘은 같은 연결로 읽는다 (왕복을 아낀다)."""
 
-    conn = None
     try:
-        conn = store.connect(data_dir)
-        detail.sample = store.latest_samples(conn).get(account_id)
+        with store.session(data_dir) as conn:
+            detail.sample = store.latest_samples(conn).get(account_id)
+            try:
+                since = now - timedelta(days=trend_days)
+                samples = store.samples_since(conn, account_id, since)
+                # 창을 명시한다. 안 그러면 표본이 하루치뿐인 계정의 하루가 화면을
+                # 꽉 채워 "90일 추세" 라며 하루를 보여 준다.
+                detail.series = trend.build(samples, since=since, until=now)
+            except Exception:
+                logger.exception("추세 읽기 실패 (%s)", account_id)
+                detail.failures.append(PART_TREND)
     except Exception:
         logger.exception("표본 읽기 실패 (%s)", account_id)
         detail.failures.append(PART_SAMPLE)
-        if conn is not None:
-            conn.close()
-        return
-
-    try:
-        since = now - timedelta(days=trend_days)
-        samples = store.samples_since(conn, account_id, since)
-        # 창을 명시한다. 안 그러면 표본이 하루치뿐인 계정의 하루가 화면을 꽉
-        # 채워 "90일 추세" 라며 하루를 보여 준다.
-        detail.series = trend.build(samples, since=since, until=now)
-    except Exception:
-        logger.exception("추세 읽기 실패 (%s)", account_id)
-        detail.failures.append(PART_TREND)
-    finally:
-        conn.close()
 
 
 def _read_forecast(detail, data_dir, config, account_id) -> None:

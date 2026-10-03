@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime
@@ -274,9 +275,42 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertLess(runner.du_count, len(self.top_dirs))
         self.assertFalse(scan_lock.is_locked(self.data_dir))
 
+    def test_lock_is_released_even_when_closing_the_run_fails(self):
+        """실행 기록을 마무리하다 터져도 잠금은 풀린다.
 
-if __name__ == "__main__":
-    unittest.main()
+        예전에는 `finish_run` 등이 예외를 내면 잠금을 푸는 줄까지 오지 못했다.
+        cron 실행이면 프로세스가 끝나며 낡은 잠금이 되지만, **창 안에서 돈
+        실행은 창이 살아 있는 한 '실행 중'으로 남아** 그 창도 그날 밤 cron 도
+        스캔을 시작하지 못했다. 이 시험 프로세스가 곧 '살아 있는 창'이다."""
+
+        locked = sqlite3.OperationalError("database is locked")
+        with self._patch_commands(FakeCommandRunner()), \
+                patch("smvwp.nightly_scan.scan_store.finish_run", side_effect=locked):
+            with self.assertRaises(sqlite3.OperationalError):
+                nightly_scan.run_nightly_scan(
+                    self.data_dir,
+                    self.config,
+                    bypass_window=True,
+                    clock=lambda: datetime(2026, 7, 31, 23, 0),
+                    top_level_lister=self.lister,
+                )
+        self.assertFalse(scan_lock.is_locked(self.data_dir))
+
+    def test_lock_is_released_when_the_scan_db_cannot_open(self):
+        broken = sqlite3.OperationalError("unable to open database file")
+        # 패키지가 다시 내보낸 이름과 원래 자리를 둘 다 막는다 - 어느 쪽으로
+        # 부르든 실패해야 한다.
+        with patch("smvwp.scan_store.connect", side_effect=broken), \
+                patch("smvwp.scan_store.db.connect", side_effect=broken):
+            with self.assertRaises(sqlite3.OperationalError):
+                nightly_scan.run_nightly_scan(
+                    self.data_dir,
+                    self.config,
+                    bypass_window=True,
+                    clock=lambda: datetime(2026, 7, 31, 23, 0),
+                    top_level_lister=self.lister,
+                )
+        self.assertFalse(scan_lock.is_locked(self.data_dir))
 
 
 class MarkInterruptedRunTests(unittest.TestCase):
@@ -328,3 +362,7 @@ class MarkInterruptedRunTests(unittest.TestCase):
     def test_no_runs_at_all_is_not_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertFalse(nightly_scan.mark_interrupted_run(Path(tmp)))
+
+
+if __name__ == "__main__":
+    unittest.main()

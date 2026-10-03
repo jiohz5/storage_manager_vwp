@@ -518,20 +518,10 @@ class AccountDialog(QDialog):
         이 열은 참고 정보이지 등록/삭제의 전제가 아니다."""
 
         try:
-            conn = scan_store.connect(self._data_dir)
+            with scan_store.session(self._data_dir) as conn:
+                return scan_store.last_baseline_times(conn)
         except Exception:  # pragma: no cover - 방어적 처리
             return {}
-        try:
-            return {
-                row["account_id"]: row["last_baseline_completed_at"]
-                for row in conn.execute(
-                    "SELECT account_id, last_baseline_completed_at FROM account_scan_state"
-                )
-            }
-        except Exception:  # pragma: no cover
-            return {}
-        finally:
-            conn.close()
 
     def _toggle_settings(self, expanded: bool) -> None:
         self.settings_panel.setVisible(expanded)

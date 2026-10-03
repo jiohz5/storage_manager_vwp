@@ -21,7 +21,9 @@ DESIGN.md 1부 2-1의 가장 중요한 원칙: **자동 삭제 없음**. 이 모
 
 from __future__ import annotations
 
+import logging
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +31,8 @@ from typing import Dict, List, Optional
 
 from . import config as config_module
 from . import formatting, i18n, large_files, loadreport, loadstat, scan_store, store, tiers, workflow
+
+logger = logging.getLogger(__name__)
 
 DAILY = "daily"
 WEEKLY = "weekly"
@@ -220,6 +224,26 @@ def _scan_label(completed_at, fallback_generation=None) -> str:
     return i18n.t("common.none")
 
 
+
+@contextmanager
+def _scan_db(data_dir: Path):
+    """보고서의 절 하나가 스캔 DB 를 연다. 못 열면 None 을 준다.
+
+    스캔 DB 를 못 여는 것이 보고서 전체를 막으면 안 된다 - 그 절만 빠지고
+    나머지는 나온다. 예전에는 여섯 절이 같은 try 를 저마다 들고 있었고, 못 열었을
+    때 아무것도 남기지 않아 "왜 이 절이 비었나"를 알 길이 없었다."""
+
+    try:
+        conn = scan_store.connect(data_dir)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("스캔 DB 를 열지 못해 보고서의 이 절을 건너뜁니다")
+        yield None
+        return
+    try:
+        yield conn
+    finally:
+        conn.close()
+
 def _append_scan_section(lines: List[str], data_dir: Path, config: config_module.AppConfig) -> None:
     """계정별 `du` 진행 상황과 마지막으로 처리한 경로.
 
@@ -231,12 +255,9 @@ def _append_scan_section(lines: List[str], data_dir: Path, config: config_module
     if not config.accounts:
         return
 
-    try:
-        conn = scan_store.connect(data_dir)
-    except Exception:  # pragma: no cover - 스캔 DB가 없어도 일간 보고서는 나와야 한다
-        return
-
-    try:
+    with _scan_db(data_dir) as conn:
+        if conn is None:
+            return
         body: List[str] = []
         for account in config.accounts:
             state = scan_store.get_account_state(conn, account.account_id)
@@ -252,8 +273,6 @@ def _append_scan_section(lines: List[str], data_dir: Path, config: config_module
             lines.append(i18n.t("reports.scan_progress_heading"))
             lines.append("-" * 72)
             lines.extend(body)
-    finally:
-        conn.close()
 
 
 def _append_progress(lines: List[str], conn, account_id: str, generation: int) -> None:
@@ -708,12 +727,9 @@ def _append_new_tasks_section(
         lines.append(i18n.t("reports.new_tasks_no_project_accounts"))
         return
 
-    try:
-        conn = scan_store.connect(data_dir)
-    except Exception:  # pragma: no cover - 스캔 DB가 없어도 일간 보고서는 나와야 한다
-        return
-
-    try:
+    with _scan_db(data_dir) as conn:
+        if conn is None:
+            return
         body: List[str] = []
         total = 0
         unverified = 0
@@ -729,8 +745,6 @@ def _append_new_tasks_section(
                 if stages:
                     body.append(f"      {i18n.t('reports.new_task_stages', stages=', '.join(stages))}")
                 body.append(f"      {path}")
-    finally:
-        conn.close()
 
     lines.append("")
     lines.append(i18n.t("reports.new_tasks_heading"))
@@ -880,13 +894,10 @@ def _append_large_files_section(
     손댈 값어치가 있는 것이 그쪽이다.
     """
 
-    try:
-        conn = scan_store.connect(data_dir)
-    except Exception:  # pragma: no cover - 한 절이 보고서 전체를 막으면 안 된다
-        return
-
     rows_by_account = []
-    try:
+    with _scan_db(data_dir) as conn:
+        if conn is None:
+            return
         for account in config.accounts:
             state = scan_store.get_account_state(conn, account.account_id)
             current = state.last_completed_generation
@@ -904,8 +915,6 @@ def _append_large_files_section(
             ]
             if notable:
                 rows_by_account.append((account.name, notable))
-    finally:
-        conn.close()
 
     if not rows_by_account:
         return
@@ -944,11 +953,9 @@ def _append_company_section(lines: List[str], data_dir: Path) -> None:
     읽히는데, 사실은 "아직 못 재고 있다"이다.
     """
 
-    try:
-        conn = scan_store.connect(data_dir)
-    except Exception:  # pragma: no cover - 방어적 처리
-        return
-    try:
+    with _scan_db(data_dir) as conn:
+        if conn is None:
+            return
         run = _pick_scan_run(scan_store.last_runs(conn, limit=5))
         if run is None:
             return
@@ -958,8 +965,6 @@ def _append_company_section(lines: List[str], data_dir: Path) -> None:
         )
         mounts = scan_store.mount_activity(conn, run_id=run_id)
         samples = scan_store.server_samples(conn, run_id=run_id, limit=5000)
-    finally:
-        conn.close()
 
     if not busiest and not mounts:
         return
@@ -1020,12 +1025,9 @@ def _append_company_section(lines: List[str], data_dir: Path) -> None:
 
 
 def _append_resource_section(lines: List[str], data_dir: Path) -> None:
-    try:
-        conn = scan_store.connect(data_dir)
-    except Exception:  # pragma: no cover
-        return
-
-    try:
+    with _scan_db(data_dir) as conn:
+        if conn is None:
+            return
         runs = scan_store.last_runs(conn, limit=5)
         run = _pick_scan_run(runs)
         if run is None:
@@ -1036,8 +1038,6 @@ def _append_resource_section(lines: List[str], data_dir: Path) -> None:
             other for other in runs
             if other["run_id"] != run["run_id"] and _has_samples(conn, other["run_id"])
         ][:3]
-    finally:
-        conn.close()
 
     if not rows:
         return
@@ -1216,13 +1216,10 @@ def _snapshots_for(conn, run_id: str) -> List["loadstat.Snapshot"]:
 def collect_night_loads(data_dir: Path, days: int = NIGHT_COMPARE_DAYS) -> List[NightLoad]:
     """최근 실행들을 밤 하나씩의 부하 요약으로 정리한다 (최신순)."""
 
-    try:
-        conn = scan_store.connect(data_dir)
-    except Exception:  # pragma: no cover - 스캔 DB가 없어도 보고서는 나와야 한다
-        return []
-
     result: List[NightLoad] = []
-    try:
+    with _scan_db(data_dir) as conn:
+        if conn is None:
+            return []
         for row in scan_store.recent_runs(conn, days):
             changes = {change.metric: change for change in loadstat.changes(_snapshots_for(conn, row["run_id"]))}
             load = changes.get("load_avg")
@@ -1243,8 +1240,6 @@ def collect_night_loads(data_dir: Path, days: int = NIGHT_COMPARE_DAYS) -> List[
                     iowait_peak=iowait.peak if iowait else None,
                 )
             )
-    finally:
-        conn.close()
     return result
 
 
