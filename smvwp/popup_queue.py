@@ -16,13 +16,12 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List
 
-from . import notifications
+from . import atomic, notifications
 
 
 def read_state_file(data_dir: Path) -> Path:
@@ -57,16 +56,8 @@ def _load_read_ids(data_dir: Path) -> set:
 
 
 def _save_read_ids(data_dir: Path, read_ids: set) -> None:
-    path = read_state_file(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
     payload = {"read_event_ids": sorted(read_ids), "updated_at": datetime.now(timezone.utc).isoformat()}
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(str(temp_path), str(path))
+    atomic.write_json(read_state_file(data_dir), payload)
 
 
 def list_pending(data_dir: Path, max_age_days: int = 7) -> List[PendingPopup]:

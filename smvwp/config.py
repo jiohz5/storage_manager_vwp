@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from . import i18n, paths
+from . import atomic, i18n, paths
 
 
 class ConfigError(ValueError):
@@ -573,25 +573,14 @@ def _guard_read_only_invariant(data_dir: Path, config: AppConfig) -> None:
 def save_config(data_dir: Path, config: AppConfig) -> None:
     paths.ensure_writable(data_dir)
     file_path = config_file(data_dir)
-    temp_path = file_path.with_suffix(".json.tmp")
     payload = {
         "settings": asdict(config.settings),
         "accounts": [asdict(account) for account in config.accounts],
     }
-    encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
     try:
-        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(str(temp_path), str(file_path))
+        atomic.write_json(file_path, payload)
     except OSError as exc:
         raise ConfigError(f"{file_path}에 쓸 수 없습니다: {exc}") from exc
-    finally:
-        try:
-            temp_path.unlink()
-        except FileNotFoundError:
-            pass
 
 
 def add_account(

@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import posixpath
 import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Mapping, Optional
@@ -91,7 +92,11 @@ def ensure_writable(data_dir: Path) -> None:
     except OSError as exc:
         raise DataDirError(f"데이터 디렉터리를 만들 수 없습니다: {data_dir}: {exc}") from exc
 
-    probe = data_dir / ".write_probe.tmp"
+    # 이름을 프로세스마다 다르게 만든다. 예전에는 하나로 고정해서, 두 프로세스가
+    # 동시에 확인하면(cron 의 수집과 야간 스캔은 22:00 에 함께 뜬다) 먼저 지운 쪽
+    # 때문에 늦은 쪽의 지우기가 "파일 없음" 으로 실패했고, 그것이 "쓸 수 없습니다"
+    # 로 바뀌어 설정 읽기가 통째로 멈췄다 - 그 밤의 스캔이 시작되지 않았다.
+    probe = data_dir / f".write_probe.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
     try:
         probe.write_text("ok", encoding="utf-8")
         probe.unlink()

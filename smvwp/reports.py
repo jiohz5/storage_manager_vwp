@@ -29,7 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import config as config_module
+from . import atomic, config as config_module
 from . import formatting, i18n, large_files, loadreport, loadstat, scan_store, store, tiers, workflow
 
 logger = logging.getLogger(__name__)
@@ -52,10 +52,7 @@ def latest_path(data_dir: Path, kind: str, language: str) -> Path:
 
 
 def _write_text(path: Path, text: str) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    temp_path.write_text(text, encoding="utf-8", newline="\n")
-    temp_path.replace(path)
+    atomic.write_text(path, text)
     return path
 
 

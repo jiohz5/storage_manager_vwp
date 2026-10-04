@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import atomic
+
 
 class LockError(Exception):
     pass
@@ -46,17 +48,6 @@ class LockInfo:
     pid: int
     triggered_by: str
     started_at: str
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(str(temp_path), str(path))
 
 
 def _pid_alive(pid: int) -> bool:
@@ -162,7 +153,7 @@ def release_lock(data_dir: Path, run_id: str) -> None:
 
 
 def request_stop(data_dir: Path, run_id: str) -> None:
-    _atomic_write_json(
+    atomic.write_json(
         stop_request_file(data_dir),
         {"run_id": run_id, "requested_at": datetime.now(timezone.utc).isoformat()},
     )

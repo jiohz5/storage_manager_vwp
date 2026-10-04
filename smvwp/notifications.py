@@ -25,7 +25,6 @@ cooldown 규칙:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -36,7 +35,7 @@ from pathlib import Path
 from typing import Dict, Optional, Sequence
 
 from . import config as config_module
-from . import i18n, procio, tiers
+from . import atomic, i18n, procio, tiers
 from .config import Account
 from .store import SampleRecord
 
@@ -88,17 +87,6 @@ class NotificationEvent:
     urgent: bool = False
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    encoded = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        handle.write(encoded)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(str(temp_path), str(path))
-
-
 def _event_filename(event: NotificationEvent) -> str:
     safe_ts = event.generated_at.replace(":", "").replace("+", "_")
     return f"{safe_ts}_{event.account_id}_{event.tier}_{event.event_id[:8]}.json"
@@ -108,7 +96,7 @@ def write_event(data_dir: Path, event: NotificationEvent) -> Path:
     target_dir = outbox_dir(data_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / _event_filename(event)
-    _atomic_write_json(path, asdict(event))
+    atomic.write_json(path, asdict(event))
     return path
 
 
@@ -194,7 +182,7 @@ def write_audit(data_dir: Path, event: NotificationEvent, result: DeliveryResult
     target_dir = audit_dir(data_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     path = target_dir / _event_filename(event)
-    _atomic_write_json(path, {"event": asdict(event), "delivery": asdict(result)})
+    atomic.write_json(path, {"event": asdict(event), "delivery": asdict(result)})
     return path
 
 
@@ -243,7 +231,7 @@ def load_notify_state(data_dir: Path) -> Dict[str, dict]:
 
 
 def save_notify_state(data_dir: Path, state: Dict[str, dict]) -> None:
-    _atomic_write_json(notify_state_file(data_dir), state)
+    atomic.write_json(notify_state_file(data_dir), state)
 
 
 def build_event(
