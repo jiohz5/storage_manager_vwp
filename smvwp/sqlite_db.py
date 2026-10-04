@@ -62,12 +62,16 @@ def connect(
     """
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    # 파일이 없었으면 기억과 상관없이 다시 만든다. 창이 떠 있는 동안 누가 DB 파일을
+    # 지우면 연결이 빈 파일을 새로 만드는데, '이미 만들었다' 는 기억만 믿으면 창을
+    # 다시 켤 때까지 모든 화면이 `no such table` 이다.
+    existed = path.exists()
     conn = sqlite3.connect(str(path), timeout=CONNECT_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     key = str(path)
     try:
         with _INIT_LOCK:
-            if key not in _INITIALIZED:
+            if key not in _INITIALIZED or not existed:
                 apply_journal_mode(conn, data_dir)
                 initialize(conn)
                 conn.commit()

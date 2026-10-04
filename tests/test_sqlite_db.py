@@ -43,6 +43,22 @@ class InitializeOnceTests(_Case):
             sqlite_db.connect(self.path, self.data_dir, initialize).close()
         self.assertEqual(len(calls), 1)
 
+    def test_a_db_file_deleted_while_running_is_rebuilt(self):
+        """창이 떠 있는 동안 누가 DB 파일을 지우면, 다음 연결이 빈 파일을 새로
+        만든다. 예전에는 '이 프로세스에서 이미 만들었다' 는 기억 때문에 스키마를 다시
+        만들지 않아, 창을 다시 켤 때까지 모든 화면이 `no such table` 이었다."""
+
+        def initialize(conn):
+            conn.execute("CREATE TABLE IF NOT EXISTS t (x)")
+
+        sqlite_db.connect(self.path, self.data_dir, initialize).close()
+        self.path.unlink()
+        conn = sqlite_db.connect(self.path, self.data_dir, initialize)
+        try:
+            conn.execute("SELECT COUNT(*) FROM t").fetchone()
+        finally:
+            conn.close()
+
     def test_every_store_goes_through_the_shared_rule(self):
         """검색 색인만 따로 짠 연결 함수를 쓰고 있었다."""
 
