@@ -281,6 +281,13 @@ class ParallelWalker:
                             )
                             continue
                         info = entry.stat(follow_symlinks=False)
+                    except (FileNotFoundError, NotADirectoryError):
+                        # 나열과 stat 사이에 지워졌다. 밤에 도는 작업이 임시 파일을
+                        # 만들고 지우는 트리에서는 늘 있는 일이고 권한 문제가 아니다 -
+                        # 없어진 것은 세지 않는 것이 맞는 값이다. 예전에는 '읽지
+                        # 못한 항목' 으로 세어, 그 경로가 "권한이 없는 폴더가 섞여
+                        # 있다" 는 안내와 함께 '일부만 읽힘' 이 되었다.
+                        continue
                     except OSError:
                         unreadable += 1
                         continue
@@ -296,6 +303,11 @@ class ParallelWalker:
                     files += 1
                     if file_blocks >= _MIN_BLOCKS:
                         big.append((file_blocks * 512 // 1024, entry.path))
+        except (FileNotFoundError, NotADirectoryError):
+            # 큐에 넣은 뒤 디렉터리가 사라졌다 - 위와 같은 이유로 세지 않는다.
+            # 다만 **시작한 경로 자체**가 없는 것은 잘못 준 경로일 수 있으므로 센다.
+            if node.parent is None:
+                unreadable += 1
         except OSError:
             unreadable += 1
 

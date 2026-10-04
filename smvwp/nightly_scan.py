@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -336,8 +337,16 @@ def _process_baseline(
     state = scan_store.get_account_state(conn, account.account_id)
     generation = state.working_generation
 
+    # 체크포인트를 깔 때만이 아니라 **이어 잴 때도** 먼저 본다. 마운트가 빠진 밤에
+    # 이어 재면 깔려 있던 체크포인트가 전부 '사라진 경로' 로 0 이 되어 결국 빈
+    # 세대가 완료된다.
+    top_dirs = top_level_lister(account.path)
+    reason = _unavailable_reason(conn, account, state, top_dirs)
+    if reason is not None:
+        logger.warning("%s: %s - 이 밤은 건너뛰고 지난 결과를 그대로 둡니다", account.name, reason)
+        return BASELINE_UNAVAILABLE, generation
+
     if not scan_store.is_seeded(conn, account.account_id, scan_store.BASELINE, generation):
-        top_dirs = top_level_lister(account.path)
         scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, generation, top_dirs)
 
     engine, checkpoint_workers, walk_workers = _engine_plan(settings)
@@ -380,6 +389,33 @@ def _process_baseline(
     return "done", generation
 
 
+def _unavailable_reason(conn, account, state, top_dirs) -> Optional[str]:
+    """계정 경로를 이 밤에 볼 수 없으면 그 까닭. 볼 수 있으면 None.
+
+    여기서 빈 세대를 '완료' 로 남기면 다음 밤의 비교 기준이 빈 세대가 된다 - 경로가
+    돌아오는 순간 모든 디렉터리가 '새로 생김' 이 되고, 큰 것마다 급증 알림이
+    나간다. 마운트가 빠지거나, 경로가 지워지거나 이름이 바뀌거나, 권한이 바뀐
+    밤이 그렇다."""
+
+    if top_dirs:
+        return None
+    try:
+        with os.scandir(account.path):
+            pass
+    except OSError as exc:
+        return f"계정 경로를 열 수 없습니다 ({exc.strerror or exc})"
+    previous = state.last_completed_generation
+    if previous and scan_store.measured_total_kb(conn, account.account_id, previous) is not None:
+        # 지난 세대에는 디렉터리가 있었는데 지금은 하나도 없다. 마운트가 빠지면
+        # 마운트 지점이 빈 디렉터리로 남아 꼭 이렇게 보인다.
+        return "계정 경로가 비어 있습니다 (지난 스캔에는 디렉터리가 있었습니다 - 마운트가 빠졌을 수 있습니다)"
+    return None
+
+
+# 계정 경로를 이 밤에 볼 수 없어 건너뛰었다 (`_unavailable_reason`).
+BASELINE_UNAVAILABLE = "unavailable"
+
+
 def _process_account(
     conn,
     data_dir: Path,
@@ -396,7 +432,9 @@ def _process_account(
         conn, data_dir, account, settings, clock, should_stop, deadline_reached,
         top_level_lister, load, run_id
     )
-    if baseline_status == "interrupted":
+    # 검색 인덱싱은 기준선을 끝낸 계정만. 경로를 못 보는 밤에 인덱싱이 돌면
+    # '아무것도 없다' 로 완주해 그 계정의 인덱스를 통째로 지운다.
+    if baseline_status != DRAIN_DONE:
         return AccountOutcome(
             account_id=account.account_id,
             account_name=account.name,

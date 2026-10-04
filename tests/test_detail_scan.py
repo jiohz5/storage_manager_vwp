@@ -159,6 +159,29 @@ class ProcessOneCheckpointTests(unittest.TestCase):
         self.assertEqual(row["status"], "done")
         self.assertEqual(row["size_kb"], 777)
 
+    @patch("smvwp.detail_scan.subprocess.run")
+    def test_a_checkpoint_whose_directory_is_gone_finishes_at_zero(self, mock_run):
+        """큐에 넣은 뒤 디렉터리가 사라졌다 (낮 동안 지워졌거나, 어젯밤 남긴 체크포인트).
+
+        잴 것이 없는 것이지 실패가 아니다. 예전에는 '크기를 재지 못한 경로' 로
+        남았고, 화면과 문서는 그것을 권한 문제처럼 안내했다."""
+
+        gone = str(Path(self._tmp.name) / "deleted_today")
+        mock_run.return_value = _completed(
+            "", returncode=1, stderr=f"du: cannot access '{gone}': No such file or directory"
+        )
+        scan_store.seed_checkpoints(self.conn, "acct-1", scan_store.BASELINE, 1, [gone])
+        checkpoint = scan_store.next_pending(self.conn, "acct-1", scan_store.BASELINE, 1)
+
+        status = detail_scan.process_one_checkpoint(self.conn, checkpoint, timeout_seconds=60)
+
+        self.assertEqual(status, scan_store.STATUS_DONE)
+        row = self.conn.execute(
+            "SELECT status, size_kb, error_message FROM scan_checkpoints WHERE id = ?",
+            (checkpoint["id"],),
+        ).fetchone()
+        self.assertEqual((row["status"], row["size_kb"], row["error_message"]), ("done", 0, None))
+
     @patch("smvwp.detail_scan.list_immediate_subdirs")
     @patch("smvwp.detail_scan.subprocess.run")
     def test_timeout_with_children_splits(self, mock_run, mock_list_subdirs):

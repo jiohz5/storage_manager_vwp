@@ -371,6 +371,14 @@ def process_one_checkpoint(
         path, timeout_seconds, max_depth=max_depth, engine=engine, workers=workers
     )
 
+    if not outcome.root_size_kb and not outcome.timed_out and not os.path.lexists(path):
+        # 큐에 넣은 뒤 디렉터리가 사라졌다 (낮 동안 지워졌거나, 어젯밤 남긴
+        # 체크포인트). 잴 것이 없는 것이지 실패가 아니다 - 예전에는 '크기를 재지
+        # 못한 경로' 로 남았고, 화면과 문서는 그것을 권한 문제처럼 안내했다.
+        # 잰 값이 없을 때만 확인하므로 정상 경로에는 비용이 없다.
+        scan_store.mark_done(conn, checkpoint["id"], size_kb=0)
+        return scan_store.STATUS_DONE
+
     if outcome.entries:
         scan_store.save_tree_entries(conn, account_id, generation, outcome.entries, path)
     # 큰 파일은 시간 초과로 잘렸어도 이미 본 만큼은 쓸모가 있다. 완주 여부와

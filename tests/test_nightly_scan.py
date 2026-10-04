@@ -318,6 +318,40 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertEqual(runner.du_count, 2)
         self.assertEqual(self.completed_generation(), 2)
 
+    def test_an_account_that_cannot_be_seen_tonight_keeps_last_nights_results(self):
+        """마운트가 빠졌거나 경로가 지워진 밤에 빈 세대를 '완료' 로 남기면, 다음 밤의
+        비교 기준이 빈 세대가 된다 - 경로가 돌아오는 순간 모든 디렉터리가 '새로
+        생김' 이 되고, 100GB 넘는 것마다 급증 알림이 나간다."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        # 마운트가 빠진 밤. 마운트 지점은 빈 디렉터리로 남는다.
+        self.lister = lambda path: []
+        summary, _ = self.run_at(datetime(2026, 8, 1, 23, 0))
+        self.assertEqual(summary.accounts[0].baseline_status, "unavailable")
+        self.assertEqual(self.completed_generation(), 1)
+
+    def test_an_account_path_that_is_gone_is_not_scanned_as_empty(self):
+        self.account_path.rmdir()
+        self.lister = lambda path: []
+        summary, _ = self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.assertEqual(summary.accounts[0].baseline_status, "unavailable")
+        self.assertIsNone(self.completed_generation())
+
+    def test_an_unseen_account_keeps_its_search_index(self):
+        """경로를 못 보는 밤에 검색 인덱싱까지 돌면 '아무것도 없다' 로 완주해 그
+        계정의 인덱스를 통째로 지운다."""
+
+        self.account.search_indexing = True
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.lister = lambda path: []
+        summary, _ = self.run_at(datetime(2026, 8, 1, 23, 0))
+        self.assertEqual(summary.accounts[0].search_status, "skipped")
+
+    def test_a_brand_new_empty_account_is_still_fine(self):
+        self.lister = lambda path: []
+        summary, _ = self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.assertEqual(summary.accounts[0].baseline_status, "done")
+
     def flaky_dir1(self):
         real = detail_scan.process_one_checkpoint
 

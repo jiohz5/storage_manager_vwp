@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from smvwp import walker
 
@@ -191,6 +192,77 @@ class UnreadableTests(unittest.TestCase):
         outcome = walker.walk_tree("/definitely/not/here", max_depth=2)
         self.assertTrue(outcome.partial)
         self.assertGreater(outcome.unreadable, 0)
+
+
+class VanishedEntriesTests(unittest.TestCase):
+    """훑는 사이에 지워진 것은 '읽지 못한 것' 이 아니다.
+
+    밤에 도는 작업이 임시 파일을 만들고 지우는 트리에서는 늘 있는 일이다. 예전에는
+    이것을 권한 문제와 같이 세어 그 경로가 '일부만 읽힘' 이 되었고, 화면과 문서는
+    "권한이 없는 폴더가 섞여 있다" 며 관리자에게 권한을 요청하라고 안내했다.
+    없어진 것은 세지 않는 것이 맞는 값이다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        make_file(self.root / "a" / "keep.dat", 4096)
+        make_file(self.root / "a" / "gone.dat", 4096)
+        (self.root / "b").mkdir()
+
+    def walk_with(self, failing):
+        """`failing(경로)` 가 예외를 주면 그 항목을 읽을 때 그 예외가 난다."""
+
+        real_scandir = os.scandir
+
+        class Entry:
+            def __init__(self, entry):
+                self._entry = entry
+                self.name, self.path = entry.name, entry.path
+
+            def is_dir(self, follow_symlinks=True):
+                return self._entry.is_dir(follow_symlinks=follow_symlinks)
+
+            def stat(self, follow_symlinks=True):
+                error = failing(self.path)
+                if error is not None:
+                    raise error
+                return self._entry.stat(follow_symlinks=follow_symlinks)
+
+        class Listing:
+            def __init__(self, path):
+                error = failing(str(path))
+                if error is not None:
+                    raise error
+                self._inner = real_scandir(path)
+
+            def __enter__(self):
+                return (Entry(entry) for entry in self._inner.__enter__())
+
+            def __exit__(self, *exc):
+                return self._inner.__exit__(*exc)
+
+        with patch("smvwp.walker.os.scandir", side_effect=Listing):
+            return walker.walk_tree(str(self.root), max_depth=2, workers=1)
+
+    def test_a_file_deleted_mid_walk_is_not_unreadable(self):
+        gone = str(self.root / "a" / "gone.dat")
+        outcome = self.walk_with(lambda p: FileNotFoundError(p) if p == gone else None)
+        self.assertEqual(outcome.unreadable, 0)
+        self.assertFalse(outcome.partial)
+        self.assertEqual(outcome.file_count, 1)
+
+    def test_a_directory_deleted_after_it_was_listed_is_not_unreadable(self):
+        gone = str(self.root / "b")
+        outcome = self.walk_with(lambda p: FileNotFoundError(p) if p == gone else None)
+        self.assertEqual(outcome.unreadable, 0)
+        self.assertFalse(outcome.partial)
+
+    def test_permission_problems_still_count(self):
+        locked = str(self.root / "b")
+        outcome = self.walk_with(lambda p: PermissionError(p) if p == locked else None)
+        self.assertEqual(outcome.unreadable, 1)
+        self.assertTrue(outcome.partial)
 
 
 class DirectoryOwnBlocksTests(unittest.TestCase):
