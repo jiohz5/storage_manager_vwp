@@ -43,7 +43,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -208,13 +208,15 @@ def _drain_checkpoints(
 ) -> bool:
     """이 계정의 대기 체크포인트를 작업자 `workers`개로 비운다.
 
-    끝까지 비웠으면 True, 중지·시간창으로 중단됐으면 False.
+    끝까지 비웠으면 `DRAIN_DONE`, 중지·시간창으로 멈췄으면 `DRAIN_INTERRUPTED`,
+    체크포인트 처리가 예상 못한 오류로 끝났으면 `DRAIN_FAILED`.
 
     `handle(conn, checkpoint)`가 체크포인트 하나를 처리한다 (크기 측정).
     """
 
     dispatcher = _CheckpointDispatcher()
     interrupted = threading.Event()
+    failed = threading.Event()
 
     def worker():
         with scan_store.session(data_dir) as conn:
@@ -245,6 +247,15 @@ def _drain_checkpoints(
                     )
                 try:
                     handle(conn, checkpoint)
+                except Exception:
+                    # 예상 못한 오류(예: NFS 위의 "database is locked"). 예전에는
+                    # 작업자가 여럿이면 이 예외가 스레드만 조용히 끝냈고, 다 죽으면
+                    # 아무도 중단을 알리지 않아 체크포인트가 대기 중인데도 세대가
+                    # '완료' 로 기록됐다. 그 체크포인트는 대기로 남아 다음 실행이
+                    # 이어받는다.
+                    logger.exception("체크포인트 처리 실패: %s", checkpoint["path"])
+                    failed.set()
+                    return
                 finally:
                     dispatcher.release(checkpoint["id"])
                 if load is not None:
@@ -262,7 +273,14 @@ def _drain_checkpoints(
         for thread in threads:
             thread.join()
 
-    return not interrupted.is_set()
+    if failed.is_set():
+        return DRAIN_FAILED
+    return DRAIN_INTERRUPTED if interrupted.is_set() else DRAIN_DONE
+
+
+DRAIN_DONE = "done"
+DRAIN_INTERRUPTED = "interrupted"
+DRAIN_FAILED = "error"
 
 
 def _engine_plan(settings) -> "tuple[str, int, int]":
@@ -335,7 +353,7 @@ def _process_baseline(
             workers=walk_workers,
         )
 
-    completed = _drain_checkpoints(
+    drained = _drain_checkpoints(
         data_dir,
         account,
         scan_store.BASELINE,
@@ -347,14 +365,17 @@ def _process_baseline(
         load,
         run_id,
     )
-    if not completed:
-        return "interrupted", generation
+    if drained != DRAIN_DONE:
+        return drained, generation
 
     # 결과는 체크포인트를 처리하면서 이미 baseline_results에 들어갔다
     # (`du -k` 한 번이 서브트리 전체를 주므로). 예전처럼 끝에서 체크포인트를
     # 훑어 만들 필요가 없다 - 그렇게 하면 쪼개진 서브트리의 내부가 통째로
     # 빠진다.
-    scan_store.mark_generation_completed(conn, account.account_id, generation)
+    # 끝낸 시각은 이 스캔의 시계로 남긴다 - "이 밤에 이미 끝냈나" 를 그것으로 본다.
+    scan_store.mark_generation_completed(
+        conn, account.account_id, generation, completed_at=_utc_iso(clock())
+    )
     scan_store.prune_old_generations(conn, account.account_id, settings.detail_scan_keep_generations)
     return "done", generation
 
@@ -803,6 +824,9 @@ def _scan_under_lock(
     scan_lock.clear_stop_request(data_dir)
 
     accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
+    skipped: List[AccountOutcome] = []
+    if not bypass_window:
+        accounts, skipped = _skip_done_tonight(data_dir, accounts, local_now, settings)
     # 계정을 저장소(볼륨)별로 묶는다. 같은 볼륨을 동시에 두들겨 봐야 서로를
     # 방해할 뿐이고, 다른 볼륨이면 그만큼 그대로 벌어진다
     # (`group_accounts_by_volume` 의 실측 근거 참고).
@@ -824,7 +848,7 @@ def _scan_under_lock(
     # 기준이라, 설정값을 남기면 "동시 4일 때 부하가 이랬다"고 잘못 읽는다.
     effective_parallel = len(groups) if run_parallel else 1
 
-    outcomes: List[AccountOutcome] = []
+    outcomes: List[AccountOutcome] = list(skipped)
     status = STATUS_COMPLETED
     # 체크포인트 하나가 끝날 때마다 CPU 점유를 표본으로 모은다 (작은 파일
     # 두 개를 읽는 것이 전부라 재는 행위가 부하가 되지는 않는다).
@@ -935,6 +959,48 @@ def _scan_under_lock(
             except Exception:  # pragma: no cover - 측정 기록 실패가 스캔을 실패로 만들지 않는다
                 logger.exception("리소스 표본 저장 실패")
     return status, outcomes, effective_parallel
+
+
+def _utc_iso(local: datetime) -> str:
+    """스캔 시계(현지 시각)를 실행 기록에 남기는 UTC ISO 로."""
+
+    return local.astimezone(timezone.utc).isoformat()
+
+
+def _skip_done_tonight(data_dir, accounts, local_now, settings):
+    """이 밤에 이미 세대를 끝낸 계정을 뺀다. `(돌 계정, 건너뛴 결과)`.
+
+    같은 밤에 두 번 재면 아침 보고서의 비교 기준이 '어제' 가 아니라 '몇 시간 전'
+    이 된다 - 세대는 기본 둘만 남기므로 어제 세대가 밀려나, 증가 경로·새로 생긴
+    과제·급증 알림이 통째로 비어 보인다. 밤중에 창을 새로 열거나(창의 자동 스캔),
+    cron 과 창의 자동 스캔이 둘 다 켜져 있거나, 다른 장비에도 cron 이 있으면 같은
+    밤에 야간 실행이 또 뜬다. 사람이 손으로 돌린 것(`bypass_window`)은 막지 않는다.
+    """
+
+    start = settings.detail_scan_window_start_hour
+    end = settings.detail_scan_window_end_hour
+    tonight = scan_window.night_key(local_now, start, end)
+    if tonight is None:
+        return accounts, []
+    remaining, skipped = [], []
+    with scan_store.session(data_dir) as conn:
+        for account in accounts:
+            state = scan_store.get_account_state(conn, account.account_id)
+            finished = scan_window.local_time_of(state.last_completed_at) if state.last_completed_at else None
+            if finished is not None and scan_window.night_key(finished, start, end) == tonight:
+                skipped.append(AccountOutcome(
+                    account_id=account.account_id,
+                    account_name=account.name,
+                    baseline_status=BASELINE_SKIPPED,
+                    baseline_generation=state.last_completed_generation,
+                ))
+            else:
+                remaining.append(account)
+    return remaining, skipped
+
+
+# 이 밤에 이미 세대를 끝낸 계정 (`_skip_done_tonight`).
+BASELINE_SKIPPED = "skipped"
 
 
 def _notify_growth(
@@ -1195,8 +1261,21 @@ def get_status_snapshot(
     )
 
 
-def mark_interrupted_run(data_dir: Path) -> bool:
-    """진행 중이던 실행을 `stopped`로 마감하고 잠금을 푼다.
+def stop_own_run(data_dir: Path) -> Optional[str]:
+    """**이 프로세스가** 잠금을 쥔 실행에만 중지를 요청하고 그 run_id 를 준다.
+
+    창을 닫을 때 쓴다. 남의 실행(cron, 다른 창, 다른 장비)이 쥐고 있거나 아무도
+    쥐고 있지 않으면 None - 건드리지 않는다."""
+
+    info = scan_lock.read_lock(data_dir)
+    if info is None or not scan_lock.is_mine(info):
+        return None
+    scan_lock.request_stop(data_dir, info.run_id)
+    return info.run_id
+
+
+def mark_interrupted_run(data_dir: Path, run_id: str) -> bool:
+    """그 실행이 아직 `running` 이면 `stopped`로 마감하고 잠금을 푼다.
 
     창을 닫아 스캔 스레드가 잘리면 `run_nightly_scan`의 `finally`가 돌지 못해
     실행 행이 영영 `running`으로 남는다. 다음에 GUI를 열었을 때 "최근 실행:
@@ -1207,10 +1286,9 @@ def mark_interrupted_run(data_dir: Path) -> bool:
     """
 
     with scan_store.session(data_dir) as conn:
-        row = scan_store.latest_run(conn)
+        row = scan_store.run_by_id(conn, run_id)
         if row is None or row["status"] != "running":
             return False
-        run_id = row["run_id"]
         scan_store.finish_run(conn, run_id, STATUS_STOPPED)
 
     scan_lock.release_lock(data_dir, run_id)

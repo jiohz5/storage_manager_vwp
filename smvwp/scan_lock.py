@@ -79,6 +79,12 @@ def read_lock(data_dir: Path) -> Optional[LockInfo]:
         return None
 
 
+def is_mine(info: LockInfo) -> bool:
+    """이 프로세스가 쥔 잠금인가."""
+
+    return info.pid == os.getpid()
+
+
 def is_locked(data_dir: Path) -> bool:
     """살아있는 프로세스가 쥔 유효한 잠금이 있는지."""
 

@@ -64,6 +64,8 @@ def recent_checkpoints(
 class AccountScanState:
     account_id: str
     last_completed_generation: Optional[int] = None
+    # 그 세대를 끝낸 시각 (ISO, UTC). 야간 실행이 "이 밤에 이미 끝냈나" 를 본다.
+    last_completed_at: Optional[str] = None
 
     @property
     def working_generation(self) -> int:
@@ -95,6 +97,7 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
     return AccountScanState(
         account_id=row["account_id"],
         last_completed_generation=row["last_completed_generation"],
+        last_completed_at=row["last_baseline_completed_at"],
     )
 
 
@@ -109,12 +112,19 @@ def last_baseline_times(conn: sqlite3.Connection) -> Dict[str, Optional[str]]:
     }
 
 
-def mark_generation_completed(conn: sqlite3.Connection, account_id: str, generation: int) -> None:
+def mark_generation_completed(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    completed_at: Optional[str] = None,
+) -> None:
+    """`completed_at` 을 주지 않으면 지금 시각. 야간 스캔은 자기 시계로 준다."""
+
     get_account_state(conn, account_id)  # 행이 없으면 만들어 둠
     conn.execute(
         "UPDATE account_scan_state SET last_completed_generation = ?, "
         "last_baseline_completed_at = ? WHERE account_id = ?",
-        (generation, utc_now_iso(), account_id),
+        (generation, completed_at or utc_now_iso(), account_id),
     )
     conn.commit()
 

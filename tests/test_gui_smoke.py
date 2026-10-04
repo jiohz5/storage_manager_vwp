@@ -1697,6 +1697,64 @@ class GrowthPageSortTests(_GuiCase):
         self.assertEqual(self.first_column(), ["y", "x"])
 
 
+class ShutdownStopsOnlyItsOwnScanTests(_GuiCase):
+    """창을 닫으면 **이 창이 시작한 스캔만** 멈춘다.
+
+    예전에는 잠금을 쥔 실행이면 누구 것이든 멈추고, '가장 최근 실행' 을 stopped 로
+    바꾸고, 그 잠금을 풀었다. 창의 작업 스레드가 후처리(보고서)를 하는 사이 cron 이
+    잠금을 잡았다면, 그때 창을 닫는 것만으로 그 밤의 cron 스캔이 멈췄다."""
+
+    def hold_lock(self, run_id, pid, triggered_by):
+        import json
+
+        from smvwp import scan_lock, scan_store
+
+        scan_lock.lock_file(self.data_dir).write_text(json.dumps({
+            "run_id": run_id, "pid": pid, "triggered_by": triggered_by,
+            "started_at": "2026-10-05T13:00:00+00:00",
+        }), encoding="utf-8")
+        with scan_store.session(self.data_dir) as conn:
+            scan_store.start_run(conn, run_id, triggered_by)
+
+    def close_window_scan(self):
+        from smvwp.gui.scan_tab import ScanTab
+
+        tab = ScanTab(self.data_dir, lambda: self.config)
+        self.addCleanup(tab.deleteLater)
+        # Windows 에서 os.kill(pid, 0) 은 확인이 아니라 그 프로세스를 끝낸다.
+        with patch("smvwp.scan_lock._pid_alive", return_value=True), \
+                patch("smvwp.procio.live_child_pids", return_value=[]):
+            tab._stop_scan_for_shutdown()
+
+    def latest_status(self):
+        from smvwp import scan_store
+
+        with scan_store.session(self.data_dir) as conn:
+            return scan_store.latest_run(conn)["status"]
+
+    def test_a_cron_scan_keeps_running(self):
+        import os
+
+        from smvwp import scan_lock
+
+        self.hold_lock("cron-run", os.getpid() + 1, "cron")
+        self.close_window_scan()
+        self.assertFalse(scan_lock.is_stop_requested(self.data_dir, "cron-run"))
+        self.assertEqual(self.latest_status(), "running")
+        self.assertIsNotNone(scan_lock.read_lock(self.data_dir))
+
+    def test_its_own_scan_stops(self):
+        import os
+
+        from smvwp import scan_lock
+
+        self.hold_lock("gui-run", os.getpid(), "gui")
+        self.close_window_scan()
+        self.assertTrue(scan_lock.is_stop_requested(self.data_dir, "gui-run"))
+        self.assertEqual(self.latest_status(), "stopped")
+        self.assertIsNone(scan_lock.read_lock(self.data_dir))
+
+
 class SearchPinTests(_GuiCase):
     """검색 창은 열 때마다 PIN 을 묻고, 틀리면 열리지 않는다."""
 

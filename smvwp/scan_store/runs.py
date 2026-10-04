@@ -88,6 +88,10 @@ def latest_run(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     ).fetchone()
 
 
+def run_by_id(conn: sqlite3.Connection, run_id: str) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM scan_runs WHERE run_id = ?", (run_id,)).fetchone()
+
+
 # -- 리소스 시계열 ---------------------------------------------------------
 
 def record_parallelism(

@@ -649,11 +649,13 @@ class ScanTab(QFrame):
         """
 
         now = datetime.now()
+        latest = self._scan_snapshot.latest_run if self._scan_snapshot is not None else None
         if not auto_scan.should_start(
             now,
             self._get_config().settings,
             self._scan_worker.is_running(),
             self._auto_scan_started_key,
+            last_run_started_at=(latest or {}).get("started_at"),
         ):
             return
         # 시작을 **먼저** 기록한다. 아래 호출이 잠금 때문에 실패하더라도(cron이
@@ -704,13 +706,18 @@ class ScanTab(QFrame):
         순서가 중요하다. 먼저 중지 요청을 써 둬야, 자식을 죽인 뒤 스캐너가
         잠깐 더 진행하더라도 다음 체크포인트에서 확실히 멈춘다."""
 
-        self._scan_worker.request_stop()
+        # **이 창이 시작한 실행만** 멈춘다. 예전에는 잠금을 쥔 실행이면 누구
+        # 것이든 멈추고 '가장 최근 실행' 을 마감했다 - 창의 작업 스레드가
+        # 후처리(보고서)를 하는 사이 cron 이 잠금을 잡았다면, 창을 닫는 것만으로
+        # 그 밤의 cron 스캔이 멈췄다.
+        run_id = nightly_scan.stop_own_run(self._data_dir)
         # 진행 중이던 디렉터리 하나의 결과는 잃지만, 그 체크포인트는 pending으로
         # 남아 다음 스캔이 거기서 이어받는다. 창을 닫는 사람의 의도는 "그만"이다.
         terminated = procio.terminate_children()
-        try:
-            nightly_scan.mark_interrupted_run(self._data_dir)
-        except Exception:  # pragma: no cover - 종료 경로에서 예외로 막히면 안 된다
-            logger.exception("창을 닫으며 스캔 실행을 마감하지 못했습니다")
+        if run_id is not None:
+            try:
+                nightly_scan.mark_interrupted_run(self._data_dir, run_id)
+            except Exception:  # pragma: no cover - 종료 경로에서 예외로 막히면 안 된다
+                logger.exception("창을 닫으며 스캔 실행을 마감하지 못했습니다")
         if terminated:
             self.status_message.emit(i18n.t("scan.stopped_on_close", count=terminated))

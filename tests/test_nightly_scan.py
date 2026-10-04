@@ -275,6 +275,89 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertLess(runner.du_count, len(self.top_dirs))
         self.assertFalse(scan_lock.is_locked(self.data_dir))
 
+    def run_at(self, when, bypass=False):
+        runner = FakeCommandRunner()
+        with self._patch_commands(runner):
+            summary = nightly_scan.run_nightly_scan(
+                self.data_dir,
+                self.config,
+                bypass_window=bypass,
+                clock=lambda: when,
+                top_level_lister=self.lister,
+            )
+        return summary, runner
+
+    def completed_generation(self):
+        with scan_store.session(self.data_dir) as conn:
+            return scan_store.get_account_state(conn, self.account.account_id).last_completed_generation
+
+    def test_a_second_nightly_run_the_same_night_does_not_rescan(self):
+        """같은 밤에 두 번 재면 아침 보고서의 비교 기준이 '어제' 가 아니라 '몇 시간 전' 이 된다.
+
+        세대는 둘만 남기므로(기본) 어제 세대가 밀려나, 증가 경로·새로 생긴 과제·급증
+        알림이 통째로 비어 보인다. 밤중에 창을 새로 열거나(창의 자동 스캔), cron 과
+        창의 자동 스캔이 둘 다 켜져 있거나, 다른 장비에도 cron 이 있으면 그렇게 된다."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        summary, runner = self.run_at(datetime(2026, 8, 1, 2, 0))
+        self.assertEqual(runner.du_count, 0)
+        self.assertEqual(summary.accounts[0].baseline_status, "skipped")
+        self.assertEqual(self.completed_generation(), 1)
+
+    def test_a_manual_run_may_rescan_the_same_night(self):
+        """사람이 손으로 돌린 것은 막지 않는다 - 다시 재려고 누른 것이다."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        _, runner = self.run_at(datetime(2026, 7, 31, 23, 30), bypass=True)
+        self.assertEqual(runner.du_count, 2)
+        self.assertEqual(self.completed_generation(), 2)
+
+    def test_the_next_night_scans_again(self):
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        _, runner = self.run_at(datetime(2026, 8, 1, 23, 0))
+        self.assertEqual(runner.du_count, 2)
+        self.assertEqual(self.completed_generation(), 2)
+
+    def flaky_dir1(self):
+        real = detail_scan.process_one_checkpoint
+
+        def process(conn, checkpoint, *args, **kwargs):
+            if checkpoint["path"].endswith("dir1"):
+                raise sqlite3.OperationalError("database is locked")
+            return real(conn, checkpoint, *args, **kwargs)
+
+        return patch("smvwp.nightly_scan.detail_scan.process_one_checkpoint", side_effect=process)
+
+    def test_a_worker_that_blows_up_leaves_the_account_unfinished(self):
+        """작업자 하나가 DB 오류로 죽어도 그 세대를 '완료' 로 남기지 않는다.
+
+        예전에는 작업자가 여럿이면 예외가 스레드만 조용히 끝냈고, 다 죽으면 아무도
+        중단을 알리지 않아 체크포인트가 대기 중인데도 세대가 완료로 기록됐다 -
+        다음 밤의 비교 기준이 반쪽 세대가 된다."""
+
+        self.config.settings.checkpoint_workers = 4
+        with self.flaky_dir1():
+            summary, _ = self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.assertEqual(summary.accounts[0].baseline_status, "error")
+        self.assertIsNone(self.completed_generation())
+
+    def test_one_failing_account_does_not_end_the_night(self):
+        """작업자가 하나일 때 예전에는 예외가 실행 전체를 끝냈다 - 남은 계정이 그 밤을 잃었다."""
+
+        self.config.settings.checkpoint_workers = 1
+        other_path = self.tmp_root / "acct2"
+        other_path.mkdir()
+        config_module.add_account(self.config, "project_b", str(other_path), data_dir=self.data_dir)
+        lister = lambda path: [f"{path}/dir1"] if path == str(self.account_path) else [f"{path}/x"]
+        runner = FakeCommandRunner()
+        with self._patch_commands(runner), self.flaky_dir1():
+            summary = nightly_scan.run_nightly_scan(
+                self.data_dir, self.config, clock=lambda: datetime(2026, 7, 31, 23, 0),
+                top_level_lister=lister,
+            )
+        statuses = {o.account_name: o.baseline_status for o in summary.accounts}
+        self.assertEqual(statuses, {"project_a": "error", "project_b": "done"})
+
     def test_lock_is_released_even_when_closing_the_run_fails(self):
         """실행 기록을 마무리하다 터져도 잠금은 풀린다.
 
@@ -329,7 +412,7 @@ class MarkInterruptedRunTests(unittest.TestCase):
             finally:
                 conn.close()
 
-            self.assertTrue(nightly_scan.mark_interrupted_run(data_dir))
+            self.assertTrue(nightly_scan.mark_interrupted_run(data_dir, "run-1"))
 
             conn = scan_store.connect(data_dir)
             try:
@@ -351,7 +434,7 @@ class MarkInterruptedRunTests(unittest.TestCase):
             finally:
                 conn.close()
 
-            self.assertFalse(nightly_scan.mark_interrupted_run(data_dir))
+            self.assertFalse(nightly_scan.mark_interrupted_run(data_dir, "run-1"))
 
             conn = scan_store.connect(data_dir)
             try:
@@ -359,9 +442,24 @@ class MarkInterruptedRunTests(unittest.TestCase):
             finally:
                 conn.close()
 
+    def test_someone_elses_running_row_is_left_alone(self):
+        """창을 닫을 때 마감하는 것은 **그 창이 시작한 실행**뿐이다.
+
+        예전에는 '가장 최근 실행' 을 마감했다 - cron 이 돌고 있으면 그것을 stopped 로
+        바꾸고 잠금까지 풀었다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            with scan_store.session(data_dir) as conn:
+                scan_store.start_run(conn, "cron-run", "cron")
+
+            self.assertFalse(nightly_scan.mark_interrupted_run(data_dir, "gui-run"))
+            with scan_store.session(data_dir) as conn:
+                self.assertEqual(scan_store.latest_run(conn)["status"], "running")
+
     def test_no_runs_at_all_is_not_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertFalse(nightly_scan.mark_interrupted_run(Path(tmp)))
+            self.assertFalse(nightly_scan.mark_interrupted_run(Path(tmp), "run-1"))
 
 
 if __name__ == "__main__":

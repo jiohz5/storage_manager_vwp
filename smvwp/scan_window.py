@@ -13,6 +13,7 @@ DESIGN.md 2부 9절의 열린 질문 - "기존 22:00~06:00 시간창 정책을 �
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Optional
 
 from . import i18n
 
@@ -30,6 +31,48 @@ def is_within_window(now: datetime, start_hour: int = DEFAULT_START_HOUR, end_ho
     if start_hour < end_hour:
         return start_hour <= hour < end_hour
     return hour >= start_hour or hour < end_hour
+
+
+def night_key(
+    now: datetime, start_hour: int = DEFAULT_START_HOUR, end_hour: int = DEFAULT_END_HOUR
+) -> Optional[str]:
+    """이 시각이 속한 밤의 이름. 시간창 밖이면 None.
+
+    **끝나는 아침의 날짜**를 이름으로 쓴다. 22시와 그다음 01시는 날짜가 다르지만
+    같은 밤이므로, 시작 날짜로 이름을 지으면 자정에 밤이 두 개로 갈라진다.
+    """
+
+    if not is_within_window(now, start_hour, end_hour):
+        return None
+    morning = now if now.hour < end_hour else now + timedelta(days=1)
+    return morning.strftime("%Y-%m-%d")
+
+
+def window_opened_at(
+    now: datetime, start_hour: int = DEFAULT_START_HOUR, end_hour: int = DEFAULT_END_HOUR
+) -> Optional[datetime]:
+    """지금 열려 있는 시간창이 열린 시각. 창 밖이면 None."""
+
+    if not is_within_window(now, start_hour, end_hour):
+        return None
+    opened = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+    if opened > now:
+        opened -= timedelta(days=1)
+    return opened
+
+
+def local_time_of(stamp) -> Optional[datetime]:
+    """DB 에 남은 ISO 시각(대개 UTC)을 이 장비의 현지 시각으로. 못 읽으면 None.
+
+    시간창과 밤의 이름은 현지 시각으로 따지는데, 실행 기록은 UTC 로 남는다."""
+
+    try:
+        value = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone().replace(tzinfo=None)
+    return value
 
 
 def next_window_end(now: datetime, end_hour: int = DEFAULT_END_HOUR) -> datetime:

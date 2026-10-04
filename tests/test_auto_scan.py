@@ -6,7 +6,7 @@
 """
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from smvwp import auto_scan
 from smvwp import config as config_module
@@ -45,6 +45,50 @@ class WindowKeyTests(unittest.TestCase):
         self.assertIsNotNone(auto_scan.window_key(datetime(2026, 8, 29, 5, 59)))
         self.assertIsNone(auto_scan.window_key(datetime(2026, 8, 29, 6, 0)))
         self.assertIsNone(auto_scan.window_key(datetime(2026, 8, 28, 21, 59)))
+
+
+def _utc(local: datetime) -> str:
+    """실행 기록은 UTC 로 남는다. 시험 장비의 시간대와 무관하게 만든다."""
+
+    return local.astimezone(timezone.utc).isoformat()
+
+
+class DeferToCronTests(unittest.TestCase):
+    """창의 자동 스캔은 cron 에 자리를 내준다.
+
+    정규 경로는 cron 이고 창은 cron 이 없을 때의 대비다. 그런데 22:00 에 둘이
+    함께 뜨면 먼저 잠금을 잡은 쪽이 밤을 맡는다 - 창이 잡으면 cron 은 20분 기다리다
+    물러나고, 그 뒤 창을 닫는 순간 그 밤이 끝난다. 밤중에 창을 새로 열면 창은 이
+    밤에 시작한 적이 없다고 여겨 이미 끝난 밤을 처음부터 다시 쟀다."""
+
+    def test_waits_a_few_minutes_after_the_window_opens(self):
+        self.assertFalse(
+            auto_scan.should_start(datetime(2026, 8, 28, 22, 1), _settings(), False, None)
+        )
+        self.assertTrue(
+            auto_scan.should_start(datetime(2026, 8, 28, 22, 10), _settings(), False, None)
+        )
+
+    def test_a_run_already_started_tonight_counts(self):
+        """cron 이(어느 장비에서든) 이미 시작했으면 창은 또 시작하지 않는다."""
+
+        tonight = _utc(datetime(2026, 8, 28, 22, 0))
+        self.assertFalse(auto_scan.should_start(
+            datetime(2026, 8, 28, 23, 0), _settings(), False, None, last_run_started_at=tonight
+        ))
+
+    def test_runs_from_other_nights_or_daytime_do_not_count(self):
+        for started in (datetime(2026, 8, 27, 22, 0), datetime(2026, 8, 28, 15, 0)):
+            with self.subTest(started=started):
+                self.assertTrue(auto_scan.should_start(
+                    datetime(2026, 8, 28, 23, 0), _settings(), False, None,
+                    last_run_started_at=_utc(started),
+                ))
+
+    def test_a_broken_timestamp_is_not_a_reason_to_stop(self):
+        self.assertTrue(auto_scan.should_start(
+            datetime(2026, 8, 28, 23, 0), _settings(), False, None, last_run_started_at="?"
+        ))
 
 
 class ShouldStartTests(unittest.TestCase):
