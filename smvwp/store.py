@@ -185,6 +185,13 @@ def _row_to_record(row: sqlite3.Row) -> SampleRecord:
     )
 
 
+def newest_collected_at(conn: sqlite3.Connection) -> Optional[str]:
+    """누가 수집했든 가장 최근 표본의 시각 (ISO, UTC). 표본이 없으면 None."""
+
+    row = conn.execute("SELECT MAX(collected_at) FROM samples").fetchone()
+    return row[0] if row else None
+
+
 def latest_samples(conn: sqlite3.Connection) -> Dict[str, SampleRecord]:
     """계정별 가장 최근 샘플 1건씩을 반환한다 (대시보드 표시용)."""
 

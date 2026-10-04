@@ -399,6 +399,7 @@ STRINGS = {
     "dashboard.collect_failed": "Collection failed: {message}",
     "dashboard.collecting": "Collecting...",
     "dashboard.collected": "Collection done ({count} accounts)",
+    "dashboard.collected_elsewhere": "Showing what was just collected elsewhere (cron)",
     "dashboard.collected_with_failures": "Collection done ({count} accounts, {failed} failed)",
     "dashboard.collect_error": "Collection error: {message}",
     # -- Collection freshness ----------------------------------

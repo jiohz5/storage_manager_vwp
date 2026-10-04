@@ -162,5 +162,83 @@ class DashboardRefreshTests(unittest.TestCase):
         self.assertEqual(len(calls), 2, "수집 뒤의 새로고침이 버려졌다")
 
 
+@unittest.skipUnless(HAVE_QT, "PyQt5 없음")
+class CollectorDefersToOthersTests(unittest.TestCase):
+    """창의 정기 수집은 cron 이 방금 수집했으면 건너뛴다.
+
+    창의 수집 타이머는 cron 이 없을 때의 대비인데, cron 이 있어도 창을 열자마자
+    한 번, 그 뒤 15분마다 돌았다 - 15분에 두 번 수집해 표본과 99% 즉시 알림이 두
+    배가 되고, 두 수집이 겹치면 알림 상태를 서로 덮어썼다."""
+
+    def setUp(self):
+        import tempfile
+
+        from smvwp import config as config_module
+
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.data_dir = Path(tmp.name)
+        self.config = config_module.load_config(self.data_dir)
+
+    def sample_from_cron(self, minutes_ago):
+        from datetime import datetime, timedelta, timezone
+
+        from smvwp import store
+
+        at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        with store.session(self.data_dir) as conn:
+            store.insert_sample(conn, store.SampleRecord(
+                account_id="a1", collected_at=at.isoformat(), ok=True,
+            ))
+
+    def collects(self, manual):
+        from smvwp.scheduler import CollectorWorker
+
+        worker = CollectorWorker(self.data_dir, lambda: self.config)
+        with patch("smvwp.scheduler.run_collection_cycle", return_value=[]) as cycle:
+            result = worker._work(manual)
+        return cycle.called, result
+
+    def test_skips_when_cron_just_collected(self):
+        self.sample_from_cron(minutes_ago=5)
+        called, result = self.collects(manual=False)
+        self.assertFalse(called)
+        self.assertIsNone(result)
+
+    def test_collects_when_nobody_has_for_a_while(self):
+        """cron 이 멈췄으면 창이 이어받는다 - 대비로서의 몫."""
+
+        self.sample_from_cron(minutes_ago=20)
+        self.assertTrue(self.collects(manual=False)[0])
+
+    def test_the_button_always_collects(self):
+        self.sample_from_cron(minutes_ago=1)
+        self.assertTrue(self.collects(manual=True)[0])
+
+    def test_its_own_last_collection_does_not_count(self):
+        """cron 없이 창만 쓸 때 자기 수집 때문에 다음 수집을 건너뛰면 안 된다."""
+
+        from datetime import datetime, timedelta, timezone
+
+        from smvwp import store
+        from smvwp.scheduler import CollectorWorker
+
+        worker = CollectorWorker(self.data_dir, lambda: self.config)
+        mine = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        record = store.SampleRecord(account_id="a1", collected_at=mine, ok=True)
+
+        def cycle(data_dir, config):
+            with store.session(data_dir) as conn:
+                store.insert_sample(conn, record)
+            return [record]
+
+        with patch("smvwp.scheduler.run_collection_cycle", side_effect=cycle) as first:
+            worker._work(False)
+        with patch("smvwp.scheduler.run_collection_cycle", return_value=[]) as second:
+            worker._work(False)
+        self.assertTrue(first.called)
+        self.assertTrue(second.called)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

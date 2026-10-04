@@ -1098,8 +1098,12 @@ class MainWindow(QMainWindow):
         self.status_bar_label.setText(i18n.t("dashboard.collecting"))
         self._scheduler.trigger_now()
 
-    def _on_collection_finished(self, records: List[store.SampleRecord]) -> None:
+    def _on_collection_finished(self, records: Optional[List[store.SampleRecord]]) -> None:
         self._refresh_table_from_store()
+        if records is None:
+            # 다른 곳(cron 등)이 방금 수집해서 건너뛰었다 (`CollectorWorker`).
+            self.status_bar_label.setText(i18n.t("dashboard.collected_elsewhere"))
+            return
         failed = sum(1 for r in records if not r.ok)
         if failed:
             self.status_bar_label.setText(

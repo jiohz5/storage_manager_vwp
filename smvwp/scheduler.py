@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from . import dashboard, nightly_scan
+from . import dashboard, nightly_scan, store
 from .cycle import run_collection_cycle
 
 logger = logging.getLogger(__name__)
@@ -153,11 +155,22 @@ class ThreadWorker(QObject):
         emit_safely(self, *self._compute(args))
 
 
+# 다른 수집기(cron, 다른 장비의 창)가 수집 주기의 이 배 안에 수집했으면 창의
+# 정기 수집은 건너뛴다. 1 보다 조금 크게 잡아 cron 이 몇 초 늦는 것을 덮는다.
+RECENT_COLLECTION_FACTOR = 1.1
+
+
 class CollectorWorker(ThreadWorker):
     """한 번의 수집 사이클을 백그라운드 스레드에서 실행한다.
 
-    결과는 `List[store.SampleRecord]`. 이전 수집이 아직 끝나지 않았으면 겹쳐
-    돌리지 않는다."""
+    결과는 `List[store.SampleRecord]`, 건너뛰었으면 None. 이전 수집이 아직 끝나지
+    않았으면 겹쳐 돌리지 않는다.
+
+    **정기 수집은 남이 방금 했으면 건너뛴다.** 창의 수집 타이머는 cron 이 없을
+    때의 대비인데, cron 이 있어도 창을 열자마자 한 번, 그 뒤 15분마다 돌았다 -
+    15분에 두 번 수집해 표본과 99% 즉시 알림이 두 배가 되고, 두 수집이 겹치면
+    알림 상태를 서로 덮어썼다. cron 이 멈추면 다음 주기부터 창이 이어받는다.
+    사람이 누른 `지금 수집` 은 언제나 수집한다."""
 
     THREAD_NAME = "smvwp-collect"
 
@@ -165,12 +178,40 @@ class CollectorWorker(ThreadWorker):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
+        # 이 창이 마지막으로 남긴 표본 시각. 그보다 새 표본이 있으면 남이 한 것이다.
+        self._own_last: Optional[datetime] = None
 
-    def run_once_async(self) -> bool:
-        return self.start()
+    def run_once_async(self, manual: bool = True) -> bool:
+        return self.start(manual)
 
-    def _work(self):
-        return run_collection_cycle(self._data_dir, self._get_config())
+    def _work(self, manual: bool):
+        config = self._get_config()
+        if not manual and self._collected_elsewhere_recently(config):
+            return None
+        records = run_collection_cycle(self._data_dir, config)
+        stamps = [_parse_utc(record.collected_at) for record in records]
+        stamps = [stamp for stamp in stamps if stamp is not None]
+        if stamps:
+            self._own_last = max(stamps)
+        return records
+
+    def _collected_elsewhere_recently(self, config) -> bool:
+        with store.session(self._data_dir) as conn:
+            newest = _parse_utc(store.newest_collected_at(conn))
+        if newest is None:
+            return False
+        if self._own_last is not None and newest <= self._own_last:
+            return False   # 가장 최근 표본이 이 창의 것이다 (cron 없이 창만 쓰는 경우)
+        window = config.settings.collector_interval_seconds * RECENT_COLLECTION_FACTOR
+        return (datetime.now(timezone.utc) - newest).total_seconds() < window
+
+
+def _parse_utc(stamp) -> Optional[datetime]:
+    try:
+        value = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 class ScanStatusWorker(ThreadWorker):
@@ -253,19 +294,23 @@ class CollectorScheduler:
         if on_failed is not None:
             self._worker.failed.connect(on_failed)
         self._timer = QTimer()
-        self._timer.timeout.connect(self._worker.run_once_async)
+        self._timer.timeout.connect(self._tick)
+
+    def _tick(self) -> None:
+        self._worker.run_once_async(manual=False)
 
     def start(self, run_immediately: bool = True) -> None:
         interval_seconds = self._get_config().settings.collector_interval_seconds
         self._timer.start(interval_seconds * 1000)
         if run_immediately:
-            self._worker.run_once_async()
+            # 창을 열 때의 수집도 정기 수집으로 친다 - cron 이 방금 했으면 그 값을 보여 준다.
+            self._worker.run_once_async(manual=False)
 
     def stop(self) -> None:
         self._timer.stop()
 
     def trigger_now(self) -> None:
-        self._worker.run_once_async()
+        self._worker.run_once_async(manual=True)
 
     def restart_with_current_interval(self) -> None:
         if self._timer.isActive():

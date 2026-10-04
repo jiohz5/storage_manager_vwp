@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from smvwp import admin_auth, search_index
 
@@ -104,6 +105,40 @@ class WalkAndIndexTests(unittest.TestCase):
         search_index.prune_orphans(self.conn, ["acct-1"])
         self.assertGreater(search_index.entry_count(self.conn, "acct-1"), 0)
         self.assertEqual(search_index.entry_count(self.conn, "gone"), 0)
+
+
+class OverlappingPassTests(unittest.TestCase):
+    """창의 인덱싱과 야간 스캔의 인덱싱이 같은 계정을 겹쳐 훑을 때.
+
+    늦게 시작한 쪽이 이미 지나간 항목을 일찍 시작한 쪽이 나중에 덮어쓰며 자기
+    시작 시각을 남겼다. 그러면 늦게 시작한 쪽이 끝나며 정리할 때 그 항목이 '내가
+    시작하기 전에 본 것' 이 되어 지워졌다 - 멀쩡히 있는 파일이 검색에서 사라졌다."""
+
+    def test_overlapping_passes_do_not_drop_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account = root / "acct"
+            account.mkdir()
+            (account / "only.txt").write_text("x", encoding="utf-8")
+            conn = search_index.connect(root / "data")
+            try:
+                stamps = iter(["2026-10-05T02:00:00+00:00", "2026-10-05T01:00:00+00:00"])
+                calls = {"n": 0}
+
+                def later_pass_about_to_clean_up():
+                    calls["n"] += 1
+                    if calls["n"] == 2:   # 다 올리고 정리하기 직전에 일찍 시작한 쪽이 지나간다
+                        search_index.index_account(conn, "acct", account)
+                    return False
+
+                with patch("smvwp.search_index._utc_now", side_effect=lambda: next(stamps)):
+                    search_index.index_account(
+                        conn, "acct", account, should_stop=later_pass_about_to_clean_up
+                    )
+                hits = search_index.search(conn, "acct", "only.txt")
+            finally:
+                conn.close()
+        self.assertEqual([hit.relative_path for hit in hits], ["only.txt"])
 
 
 class SearchTests(unittest.TestCase):

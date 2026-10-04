@@ -229,7 +229,10 @@ def _flush(conn: sqlite3.Connection, batch: List[tuple]) -> None:
         "VALUES (?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(account_id, relative_path) DO UPDATE SET "
         "name = excluded.name, extension = excluded.extension, "
-        "kind = excluded.kind, indexed_at = excluded.indexed_at",
+        # 더 늦은 시각을 남긴다. 두 인덱싱이 겹치면(창 + 야간 스캔) 일찍 시작한
+        # 쪽이 늦게 시작한 쪽이 이미 본 항목을 자기 시각으로 되돌려, 늦게 시작한
+        # 쪽이 끝나며 그 항목을 '오래된 것' 으로 지웠다.
+        "kind = excluded.kind, indexed_at = MAX(indexed_at, excluded.indexed_at)",
         batch,
     )
     conn.commit()

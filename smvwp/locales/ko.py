@@ -419,6 +419,7 @@ STRINGS = {
     "dashboard.collect_failed": "수집 실패: {message}",
     "dashboard.collecting": "수집 중...",
     "dashboard.collected": "수집 완료 ({count}개 계정)",
+    "dashboard.collected_elsewhere": "방금 다른 곳(cron 등)에서 수집한 값을 보여 줍니다",
     "dashboard.collected_with_failures": "수집 완료 ({count}개 계정, 실패 {failed}건)",
     "dashboard.collect_error": "수집 오류: {message}",
     # -- 수집 신선도 --------------------------------------------
