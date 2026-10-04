@@ -785,13 +785,19 @@ def run_nightly_scan(
     run_id = _acquire_with_wait(data_dir, triggered_by, lock_wait_seconds, clock)
     if run_id is None:
         existing = scan_lock.read_lock(data_dir)
-        holder = f" (run_id={existing.run_id}, {existing.triggered_by})" if existing else ""
+        holder = (
+            f" (run_id={existing.run_id}, {existing.triggered_by}, "
+            f"장비={existing.host or scan_lock.this_host()})"
+            if existing else ""
+        )
         return RunSummary(
             started=False,
             status=STATUS_NOT_STARTED,
             reason=f"이미 실행 중인 스캔이 있어 시작하지 못했습니다{holder}",
         )
 
+    keeper = _LockKeeper(data_dir, run_id)
+    keeper.start()
     try:
         status, outcomes, effective_parallel = _scan_under_lock(
             data_dir,
@@ -805,8 +811,10 @@ def run_nightly_scan(
             parallel_accounts,
             baseline_warmup_seconds,
             weekend_night,
+            lock_lost=keeper.lost,
         )
     finally:
+        keeper.stop()
         # 무엇이 실패해도 잠금은 푼다. 예전에는 이 줄이 실행 기록을 마무리하는
         # 일(`finish_run` 등) 뒤에 있어, 거기서 예외가 나면(NFS 위의 "database
         # is locked" 같은) 여기까지 오지 못했다. cron 실행이면 프로세스가
@@ -839,6 +847,51 @@ def run_nightly_scan(
     )
 
 
+class _LockKeeper:
+    """잠금을 쥔 동안 잠금 파일 시각을 갱신하고, 잠금을 잃었는지 알려 준다.
+
+    다른 장비는 pid 로 우리가 살아 있는지 알 수 없어 이 시각을 본다
+    (`scan_lock.FOREIGN_STALE_SECONDS`). 갱신은 따로 도는 스레드가 하므로
+    체크포인트 하나가 15분 걸려도 밀리지 않는다. 잃었는지는 그 사이에도 물을 수
+    있다 - `lost()` 는 주기가 지났으면 그 자리에서 다시 본다."""
+
+    def __init__(self, data_dir: Path, run_id: str):
+        self._data_dir = data_dir
+        self._run_id = run_id
+        self._interval = scan_lock.HEARTBEAT_SECONDS
+        self._checked = time.monotonic()
+        self._lost = False
+        self._guard = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._beat, name="smvwp-scan-lock", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _beat(self) -> None:
+        while not self._stop.wait(max(self._interval, 0.05)):
+            self.lost()
+
+    def lost(self) -> bool:
+        with self._guard:
+            if self._lost:
+                return True
+            now = time.monotonic()
+            if now - self._checked < self._interval:
+                return False
+            self._checked = now
+            if not scan_lock.touch(self._data_dir, self._run_id):
+                self._lost = True
+                logger.warning(
+                    "스캔 잠금을 잃었습니다 (run_id=%s) - 다른 실행과 겹쳐 돌지 않도록 멈춥니다",
+                    self._run_id,
+                )
+            return self._lost
+
+
 def _scan_under_lock(
     data_dir: Path,
     config: config_module.AppConfig,
@@ -851,6 +904,7 @@ def _scan_under_lock(
     parallel_accounts: int,
     baseline_warmup_seconds: float,
     weekend_night: bool,
+    lock_lost: Callable[[], bool] = lambda: False,
 ) -> "tuple[str, List[AccountOutcome], int]":
     """잠금을 쥔 채 하는 일 - 계정을 돌고 실행 기록을 마무리한다.
 
@@ -940,7 +994,8 @@ def _scan_under_lock(
                 window_end = scan_window.next_window_end(local_now, settings.detail_scan_window_end_hour)
                 deadline_reached = lambda: clock() >= window_end
 
-            should_stop = lambda: scan_lock.is_stop_requested(data_dir, run_id)
+            # 잠금을 잃었으면(지워졌거나 다른 장비가 가져갔으면) 멈춘다 - 겹쳐 돌지 않게.
+            should_stop = lambda: lock_lost() or scan_lock.is_stop_requested(data_dir, run_id)
 
             if run_parallel:
                 status = _run_accounts_parallel(

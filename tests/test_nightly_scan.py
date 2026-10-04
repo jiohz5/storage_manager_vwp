@@ -352,6 +352,31 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         summary, _ = self.run_at(datetime(2026, 7, 31, 23, 0))
         self.assertEqual(summary.accounts[0].baseline_status, "done")
 
+    def test_a_scan_that_loses_its_lock_stops_instead_of_running_alongside(self):
+        """잠금을 잃은 실행은 멈춘다 - 다른 장비가 낡은 잠금으로 보고 가져갔거나,
+        누가 잠금 파일을 지웠으면 둘이 겹쳐 돈다. 남의 잠금은 그대로 둔다."""
+
+        import json
+
+        self.config.settings.checkpoint_workers = 1
+
+        def stolen_after_first_du(du_call_no):
+            if du_call_no == 1:
+                scan_lock.lock_file(self.data_dir).write_text(json.dumps({
+                    "run_id": "intruder", "pid": 1, "triggered_by": "cron",
+                    "started_at": "2026-07-31T14:00:00+00:00", "host": "other-host",
+                }), encoding="utf-8")
+
+        runner = FakeCommandRunner(on_du=stolen_after_first_du)
+        with self._patch_commands(runner), patch("smvwp.scan_lock.HEARTBEAT_SECONDS", 0):
+            summary = nightly_scan.run_nightly_scan(
+                self.data_dir, self.config, bypass_window=True,
+                clock=lambda: datetime(2026, 7, 31, 23, 0), top_level_lister=self.lister,
+            )
+        self.assertEqual(summary.status, nightly_scan.STATUS_STOPPED)
+        self.assertEqual(runner.du_count, 1)
+        self.assertEqual(scan_lock.read_lock(self.data_dir).run_id, "intruder")
+
     def flaky_dir1(self):
         real = detail_scan.process_one_checkpoint
 
