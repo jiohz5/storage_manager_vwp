@@ -10,7 +10,6 @@ argv 배열이어야 특수문자가 재해석되지 않기 때문이고, 잘못
 
 from __future__ import annotations
 
-import logging
 import json
 from pathlib import Path
 from typing import List
@@ -39,9 +38,8 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import formatting, i18n, readability, scan_store
+from ..scheduler import ThreadWorker
 from . import theme
-
-logger = logging.getLogger(__name__)
 
 # 계정 경로의 관례 접두사. 이름을 입력하면 `<접두사><이름>`으로 경로를 채워
 # 준다. 사내 관례가 다른 곳에 반입한다면 이 한 줄만 고치면 된다 (설정 항목으로
@@ -123,6 +121,24 @@ def _short_date(iso_text) -> str:
     return formatting.local_date_text(iso_text, fallback="")
 
 
+class _ScanTimesReader(ThreadWorker):
+    """계정별 마지막 기준선 완주 시각을 작업 스레드에서 읽는다.
+
+    화면 스레드에서 읽으면 야간 스캔이 스캔 DB 에 쓰는 동안(NFS 위에서는 잠금
+    대기가 최대 10초) 창이 그만큼 굳는다. 못 읽으면 그 칸이 비어 있을 뿐이다 -
+    참고 정보이지 계정 등록·삭제의 전제가 아니다 (실패는 작업 스레드가 남긴다)."""
+
+    THREAD_NAME = "smvwp-scan-times"
+
+    def __init__(self, data_dir: Path, parent=None):
+        super().__init__(parent)
+        self._data_dir = data_dir
+
+    def _work(self):
+        with scan_store.session(self._data_dir) as conn:
+            return scan_store.last_baseline_times(conn)
+
+
 class AccountDialog(QDialog):
     """계정 목록 관리 + 수집 주기/알림/quota 등 전역 설정."""
 
@@ -137,8 +153,13 @@ class AccountDialog(QDialog):
         # 콤보를 코드로 채우는 동안에는 변경 신호를 무시한다. 안 그러면
         # 목록을 다시 그리는 것만으로 설정이 바뀐 것처럼 처리된다.
         self._loading = False
+        # 마지막 스캔 시각. 처음엔 비어 있고 작업 스레드가 읽어 오면 그 칸만 채운다.
+        self._last_scans: dict = {}
+        self._scan_times = _ScanTimesReader(data_dir, self)
+        self._scan_times.finished.connect(self._on_scan_times)
         self._build_ui()
         self._reload_list()
+        self._scan_times.start()
 
     # -- UI 구성 -----------------------------------------------------
     def _build_ui(self) -> None:
@@ -356,7 +377,7 @@ class AccountDialog(QDialog):
 
     # -- 동작 ---------------------------------------------------------
     def _reload_list(self) -> None:
-        last_scans = self._last_scan_times()
+        last_scans = self._last_scans
         dash = i18n.t("common.none")
         backups = config_module.backup_accounts(self._config, enabled_only=False)
         # 행 수를 0으로 줄였다 늘려 칸 위젯을 확실히 정리한다.
@@ -514,18 +535,22 @@ class AccountDialog(QDialog):
             QMessageBox.critical(self, i18n.t("accounts.save_failed"), str(exc))
             QTimer.singleShot(0, self._reload_list)
 
-    def _last_scan_times(self) -> dict:
-        """계정별 마지막 기준선 완주 시각. 스캔 DB가 없으면 빈 dict.
+    def _on_scan_times(self, times: dict) -> None:
+        """읽어 온 시각으로 '최근 스캔일' 칸만 채운다 (목록은 이미 그려져 있다)."""
 
-        스캔 DB를 못 열어도 계정 관리 자체는 되어야 하므로 조용히 넘어간다 -
-        이 열은 참고 정보이지 등록/삭제의 전제가 아니다."""
-
+        self._last_scans = times or {}
+        dash = i18n.t("common.none")
+        self._loading = True
         try:
-            with scan_store.session(self._data_dir) as conn:
-                return scan_store.last_baseline_times(conn)
-        except Exception:  # pragma: no cover - 방어적 처리
-            logger.exception("마지막 스캔 시각을 읽지 못했습니다")
-            return {}
+            for row in range(self.account_table.rowCount()):
+                name_item = self.account_table.item(row, ACCOUNT_COL_NAME)
+                scanned = self.account_table.item(row, ACCOUNT_COL_SCANNED)
+                if name_item is None or scanned is None:
+                    continue
+                account_id = name_item.data(ACCOUNT_ID_ROLE)
+                scanned.setText(_short_date(self._last_scans.get(account_id)) or dash)
+        finally:
+            self._loading = False
 
     def _toggle_settings(self, expanded: bool) -> None:
         self.settings_panel.setVisible(expanded)

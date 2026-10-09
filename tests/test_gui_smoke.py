@@ -1697,6 +1697,45 @@ class GrowthPageSortTests(_GuiCase):
         self.assertEqual(self.first_column(), ["y", "x"])
 
 
+class AccountDialogScanTimesTests(_GuiCase):
+    """계정 관리 창은 마지막 스캔 시각을 작업 스레드에서 읽는다.
+
+    화면 스레드에서 읽으면 야간 스캔이 스캔 DB 에 쓰는 동안(NFS 위에서는 잠금
+    대기가 최대 10초) 창이 그만큼 굳는다. 목록은 바로 그리고, 그 칸만 나중에 찬다."""
+
+    def test_scan_times_are_read_off_the_window_thread_and_filled_in(self):
+        import threading
+        import time
+
+        from smvwp import scan_store
+        from smvwp.gui.account_dialog import ACCOUNT_COL_SCANNED, AccountDialog
+
+        account = self.config.accounts[0]
+        with scan_store.session(self.data_dir) as conn:
+            scan_store.mark_generation_completed(
+                conn, account.account_id, 1, completed_at="2026-10-08T13:00:00+00:00"
+            )
+        readers = []
+        real = scan_store.last_baseline_times
+
+        def recording(conn):
+            readers.append(threading.current_thread() is threading.main_thread())
+            return real(conn)
+
+        with patch("smvwp.scan_store.last_baseline_times", side_effect=recording):
+            dialog = AccountDialog(self.data_dir, self.config)
+            self.addCleanup(dialog.close)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and dialog.account_table.item(
+                0, ACCOUNT_COL_SCANNED
+            ).text() in ("", "-"):
+                _app().processEvents()
+                time.sleep(0.01)
+
+        self.assertEqual(readers, [False], "화면 스레드에서 스캔 DB 를 읽었다")
+        self.assertIn("2026", dialog.account_table.item(0, ACCOUNT_COL_SCANNED).text())
+
+
 class ShutdownStopsOnlyItsOwnScanTests(_GuiCase):
     """창을 닫으면 **이 창이 시작한 스캔만** 멈춘다.
 
