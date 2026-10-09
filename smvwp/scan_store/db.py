@@ -220,7 +220,10 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_time
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
-    last_baseline_completed_at TEXT
+    last_baseline_completed_at TEXT,
+    unavailable_at TEXT,
+    unavailable_reason TEXT,
+    unavailable_detail TEXT
 );
 """
 
@@ -273,6 +276,12 @@ _COLUMNS_ADDED = {
         # 계정 목록에 "최근 스캔일"을 보여주려면 기준선을 언제 완주했는지가
         # 필요하다. 기존에는 세대 번호만 남기고 시각은 안 남겼다.
         "last_baseline_completed_at": "TEXT",
+        # 계정 경로를 못 봐 그 밤을 건너뛴 때와 까닭 (`nightly_scan._unavailable_reason`).
+        # 창은 cron 로그를 볼 수 없어서, 여기 남겨야 화면과 보고서가 알릴 수 있다.
+        # 경로가 다시 보이면 지운다.
+        "unavailable_at": "TEXT",
+        "unavailable_reason": "TEXT",
+        "unavailable_detail": "TEXT",
     },
 }
 

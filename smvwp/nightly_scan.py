@@ -341,10 +341,18 @@ def _process_baseline(
     # 이어 재면 깔려 있던 체크포인트가 전부 '사라진 경로' 로 0 이 되어 결국 빈
     # 세대가 완료된다.
     top_dirs = top_level_lister(account.path)
-    reason = _unavailable_reason(conn, account, state, top_dirs)
-    if reason is not None:
-        logger.warning("%s: %s - 이 밤은 건너뛰고 지난 결과를 그대로 둡니다", account.name, reason)
+    unseen = _unavailable_reason(conn, account, state, top_dirs)
+    if unseen is not None:
+        reason, detail = unseen
+        logger.warning(
+            "%s: 계정 경로를 볼 수 없어(%s %s) 이 밤은 건너뛰고 지난 결과를 그대로 둡니다",
+            account.name, reason, detail,
+        )
+        # 창은 이 로그를 못 본다 - 화면과 보고서가 알릴 수 있게 남긴다.
+        scan_store.mark_unavailable(conn, account.account_id, reason, detail, _utc_iso(clock()))
         return BASELINE_UNAVAILABLE, generation
+    if state.unavailable_at:
+        scan_store.clear_unavailable(conn, account.account_id)
 
     if not scan_store.is_seeded(conn, account.account_id, scan_store.BASELINE, generation):
         scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, generation, top_dirs)
@@ -389,8 +397,10 @@ def _process_baseline(
     return "done", generation
 
 
-def _unavailable_reason(conn, account, state, top_dirs) -> Optional[str]:
-    """계정 경로를 이 밤에 볼 수 없으면 그 까닭. 볼 수 있으면 None.
+def _unavailable_reason(conn, account, state, top_dirs) -> "Optional[tuple[str, str]]":
+    """계정 경로를 이 밤에 볼 수 없으면 `(까닭, 세부)`. 볼 수 있으면 None.
+
+    까닭은 문장이 아니라 코드다 (`UNAVAILABLE_*`) - 화면이 자기 언어로 말한다.
 
     여기서 빈 세대를 '완료' 로 남기면 다음 밤의 비교 기준이 빈 세대가 된다 - 경로가
     돌아오는 순간 모든 디렉터리가 '새로 생김' 이 되고, 큰 것마다 급증 알림이
@@ -403,17 +413,20 @@ def _unavailable_reason(conn, account, state, top_dirs) -> Optional[str]:
         with os.scandir(account.path):
             pass
     except OSError as exc:
-        return f"계정 경로를 열 수 없습니다 ({exc.strerror or exc})"
+        return UNAVAILABLE_UNREADABLE, str(exc.strerror or exc)
     previous = state.last_completed_generation
     if previous and scan_store.measured_total_kb(conn, account.account_id, previous) is not None:
         # 지난 세대에는 디렉터리가 있었는데 지금은 하나도 없다. 마운트가 빠지면
         # 마운트 지점이 빈 디렉터리로 남아 꼭 이렇게 보인다.
-        return "계정 경로가 비어 있습니다 (지난 스캔에는 디렉터리가 있었습니다 - 마운트가 빠졌을 수 있습니다)"
+        return UNAVAILABLE_EMPTY, ""
     return None
 
 
 # 계정 경로를 이 밤에 볼 수 없어 건너뛰었다 (`_unavailable_reason`).
 BASELINE_UNAVAILABLE = "unavailable"
+# 그 까닭: 경로를 열 수 없다 (없음·권한·마운트 오류) / 지난번엔 디렉터리가 있었는데 비어 보인다.
+UNAVAILABLE_UNREADABLE = "unreadable"
+UNAVAILABLE_EMPTY = "empty"
 
 
 def _process_account(
@@ -1232,6 +1245,10 @@ class AccountScanSnapshot:
     # 낸 속도의 중앙값 x 남은 개수다. 표본이 모자라면 None
     # (`scan_store.estimate_remaining_seconds` 참고).
     eta_seconds: Optional[float] = None
+    # 계정 경로를 못 봐 건너뛴 까닭·세부·때 (`UNAVAILABLE_*`). 없으면 None.
+    unavailable_reason: Optional[str] = None
+    unavailable_detail: str = ""
+    unavailable_at: Optional[str] = None
 
 
 @dataclass
@@ -1289,6 +1306,9 @@ def get_status_snapshot(
                     account_id=account.account_id,
                     account_name=account.name,
                     last_completed_generation=current_gen,
+                    unavailable_reason=state.unavailable_reason,
+                    unavailable_detail=state.unavailable_detail,
+                    unavailable_at=state.unavailable_at,
                     previous_measured_kb=(
                         scan_store.measured_total_kb(
                             conn, account.account_id, previous_gen

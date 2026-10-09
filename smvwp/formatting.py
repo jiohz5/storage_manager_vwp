@@ -18,6 +18,21 @@ from typing import Optional
 from . import i18n, tiers
 
 
+def unavailable_text(reason: str, detail: str, when: str, account: str) -> str:
+    """계정 경로를 못 봐 그 밤을 건너뛴 것을 한 문장으로.
+
+    요약 화면과 일간 보고서가 같이 쓴다. 까닭은 코드로 남아 있다
+    (`nightly_scan.UNAVAILABLE_*`) - 여기서 화면 언어로 말한다."""
+
+    key = "digest.item.unavailable_empty" if reason == "empty" else "digest.item.unavailable_unreadable"
+    return i18n.t(
+        key,
+        account=account,
+        when=local_minute_text(when),
+        detail=detail or i18n.t("common.unknown_value"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # 시각 - 저장은 UTC, 표시는 지역시간
 # ---------------------------------------------------------------------------

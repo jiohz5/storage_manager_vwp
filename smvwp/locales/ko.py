@@ -297,6 +297,8 @@ STRINGS = {
     "digest.findings_hint": "줄을 누르면 그 계정의 해당 탭으로 갑니다.",
     "digest.item.failed": "{account}: 재지 못한 경로 {count}곳 - 권한이나 오류를 확인하세요",
     "digest.item.partial": "{account}: 권한이 없어 덜 세어진 경로 {count}곳 - 실제 크기는 이보다 큽니다",
+    "digest.item.unavailable_unreadable": "{account}: {when} 스캔에서 계정 경로를 열 수 없어 건너뛰었습니다 ({detail}) - 마운트·경로·권한을 확인하세요. 지난 결과를 그대로 보여 줍니다",
+    "digest.item.unavailable_empty": "{account}: {when} 스캔에서 계정 경로가 비어 보여 건너뛰었습니다 - 마운트가 빠졌을 수 있습니다. 지난 결과를 그대로 보여 줍니다",
     "digest.item.large_file": "{account}: {name} - {size} ({change})",
     "digest.item.growth": "{account}: 지난 스캔보다 {delta} 늘었습니다 (지금 {total})",
     "load.title": "서버 부하 이력",

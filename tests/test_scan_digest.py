@@ -34,6 +34,9 @@ class FakeAccount:
     large_files: List[tuple] = field(default_factory=list)
     failed_count: int = 0
     partial_paths: List[str] = field(default_factory=list)
+    unavailable_reason: Optional[str] = None
+    unavailable_detail: str = ""
+    unavailable_at: Optional[str] = None
 
 
 @dataclass
@@ -151,6 +154,24 @@ class RunTests(unittest.TestCase):
 
 
 class FindingTests(unittest.TestCase):
+    def test_an_account_skipped_because_its_path_was_unseen_comes_first(self):
+        """그 밤 계정 경로를 못 봐 통째로 건너뛰었다 - 경로 몇 곳을 못 잰 것보다 크다.
+
+        예전에는 이 사유가 cron 로그에만 남아, 화면은 지난 결과를 아무 말 없이
+        보여 주었다."""
+
+        digest = scan_digest.build(snapshot(
+            FakeAccount(account_id="a1", failed_count=2),
+            FakeAccount(account_id="a2", account_name="backup_b", unavailable_reason="unreadable",
+                        unavailable_detail="No such file or directory",
+                        unavailable_at="2026-10-09T13:05:00+00:00"),
+        ))
+        first = digest.findings[0]
+        self.assertEqual(first.kind, scan_digest.FINDING_UNAVAILABLE)
+        self.assertTrue(first.urgent)
+        self.assertEqual((first.account_id, first.reason, first.detail),
+                         ("a2", "unreadable", "No such file or directory"))
+
     def test_a_failure_is_urgent(self):
         digest = scan_digest.build(snapshot(FakeAccount(failed_count=3)))
         self.assertEqual(digest.findings[0].kind, scan_digest.FINDING_FAILED)

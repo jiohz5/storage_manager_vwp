@@ -330,6 +330,24 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertEqual(summary.accounts[0].baseline_status, "unavailable")
         self.assertEqual(self.completed_generation(), 1)
 
+    def test_the_reason_is_kept_for_the_screen_and_cleared_when_the_path_returns(self):
+        """창은 cron 로그를 못 본다 - 건너뛴 사유를 계정 상태에 남겨 화면이 읽게 한다."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.lister = lambda path: []
+        self.run_at(datetime(2026, 8, 1, 23, 0))
+        with scan_store.session(self.data_dir) as conn:
+            state = scan_store.get_account_state(conn, self.account.account_id)
+        self.assertEqual(state.unavailable_reason, nightly_scan.UNAVAILABLE_EMPTY)
+        self.assertIsNotNone(state.unavailable_at)
+        entry = nightly_scan.get_status_snapshot(self.data_dir, self.config).accounts[0]
+        self.assertEqual(entry.unavailable_reason, nightly_scan.UNAVAILABLE_EMPTY)
+
+        self.lister = lambda path: list(self.top_dirs)
+        self.run_at(datetime(2026, 8, 2, 23, 0))
+        with scan_store.session(self.data_dir) as conn:
+            self.assertIsNone(scan_store.get_account_state(conn, self.account.account_id).unavailable_reason)
+
     def test_an_account_path_that_is_gone_is_not_scanned_as_empty(self):
         self.account_path.rmdir()
         self.lister = lambda path: []

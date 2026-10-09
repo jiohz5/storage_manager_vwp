@@ -276,6 +276,8 @@ STRINGS = {
     "digest.findings_hint": "Click a line to open that account's tab.",
     "digest.item.failed": "{account}: {count} paths could not be measured - check permissions or errors",
     "digest.item.partial": "{account}: {count} paths were read only partly - the real size is larger",
+    "digest.item.unavailable_unreadable": "{account}: the account path could not be opened in the {when} scan, so it was skipped ({detail}) - check the mount, path and permissions. Showing the previous results",
+    "digest.item.unavailable_empty": "{account}: the account path looked empty in the {when} scan, so it was skipped - a mount may be missing. Showing the previous results",
     "digest.item.large_file": "{account}: {name} is {size} ({change})",
     "digest.item.growth": "{account}: grew {delta} since the last scan (now {total})",
     "load.title": "Server load history",

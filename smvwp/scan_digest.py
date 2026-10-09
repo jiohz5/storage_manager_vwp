@@ -52,6 +52,8 @@ FINDING_LARGE_FILE = "large_file"
 FINDING_GROWTH = "growth"
 FINDING_FAILED = "failed"
 FINDING_PARTIAL = "partial"
+# 계정 경로를 못 봐 그 밤을 통째로 건너뛰었다 (`nightly_scan._unavailable_reason`).
+FINDING_UNAVAILABLE = "unavailable"
 
 
 @dataclass
@@ -69,6 +71,10 @@ class Finding:
     # 화면이 이 줄에서 그 계정의 세부로 곧장 가려면 이름이 아니라 id 가
     # 있어야 한다 (이름은 바뀌고, 겹칠 수도 있다).
     account_id: str = ""
+    # 건너뛴 계정의 까닭(코드)·세부·때. 화면이 자기 언어로 문장을 만든다.
+    reason: str = ""
+    detail: str = ""
+    when: str = ""
 
 
 @dataclass
@@ -201,6 +207,19 @@ def _findings(accounts) -> List[Finding]:
     for entry in accounts:
         name = entry.account_name
 
+        reason = getattr(entry, "unavailable_reason", None)
+        if reason:
+            # 계정 경로를 못 봐 그 밤을 통째로 건너뛰었다. 화면의 숫자는 지난
+            # 결과 그대로라, 알리지 않으면 "안 늘었네" 로 읽힌다.
+            urgent.append(
+                Finding(
+                    kind=FINDING_UNAVAILABLE, account=name, account_id=entry.account_id,
+                    urgent=True, reason=reason,
+                    detail=getattr(entry, "unavailable_detail", "") or "",
+                    when=getattr(entry, "unavailable_at", None) or "",
+                )
+            )
+
         if entry.failed_count:
             urgent.append(
                 Finding(
@@ -240,10 +259,11 @@ def _findings(accounts) -> List[Finding]:
                     )
                 )
 
-    # 급한 것 안에서도 순서가 있다. **아예 못 잰 것**이 덜 세어진 것보다
-    # 먼저다 - 앞쪽은 숫자가 아예 없는 것이고, 뒤쪽은 있는데 작은 것이다.
-    # 계정 순서대로 두면 우연히 이름이 앞선 계정의 경고가 위로 온다.
-    urgent.sort(key=lambda item: 0 if item.kind == FINDING_FAILED else 1)
+    # 급한 것 안에서도 순서가 있다. **계정을 통째로 못 본 것**, 경로를 아예 못
+    # 잰 것, 덜 세어진 것 순이다 - 앞쪽일수록 숫자가 더 많이 빠져 있다. 계정
+    # 순서대로 두면 우연히 이름이 앞선 계정의 경고가 위로 온다.
+    order = {FINDING_UNAVAILABLE: 0, FINDING_FAILED: 1}
+    urgent.sort(key=lambda item: order.get(item.kind, 2))
     # 나머지는 큰 것부터.
     normal.sort(key=lambda item: -(item.delta_kb or item.size_kb or 0))
     return (urgent + normal)[:MAX_FINDINGS]

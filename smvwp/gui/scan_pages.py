@@ -47,6 +47,8 @@ FINDING_TABS = {
     scan_digest.FINDING_GROWTH: TAB_GROWTH,
     scan_digest.FINDING_FAILED: TAB_GROWTH,
     scan_digest.FINDING_PARTIAL: TAB_GROWTH,
+    # 계정을 통째로 건너뛴 것은 계정 탭에서 그 계정의 지난 결과와 함께 본다.
+    scan_digest.FINDING_UNAVAILABLE: TAB_ACCOUNTS,
 }
 FINDING_ACCOUNT_ROLE = Qt.UserRole
 FINDING_TAB_ROLE = Qt.UserRole + 1
@@ -352,6 +354,10 @@ class SummaryPage(QWidget):
         표의 한 행이 아니라 문장으로 쓰는 것은 의도다 - 이 목록은 훑어보라고
         있는 것이고, 훑을 때는 열을 따라 읽는 것보다 문장이 빠르다."""
 
+        if finding.kind == scan_digest.FINDING_UNAVAILABLE:
+            return formatting.unavailable_text(
+                finding.reason, finding.detail, finding.when, finding.account
+            )
         if finding.kind == scan_digest.FINDING_FAILED:
             return i18n.t(
                 "digest.item.failed", account=finding.account, count=finding.count

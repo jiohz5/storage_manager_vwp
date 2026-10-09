@@ -315,6 +315,19 @@ class ScanProgressInReportTests(unittest.TestCase):
         self.assertIn("1/4", text)          # 완료 1 / 전체 4
         self.assertIn("/user/project_a/dir0", text)
 
+    def test_an_account_skipped_last_night_says_why(self):
+        """아침에 보고서를 여는 사람이 '왜 이 계정만 어제 그대로지' 를 묻지 않게."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir, config, account = self._setup(tmp)
+            with scan_store.session(data_dir) as conn:
+                scan_store.mark_unavailable(
+                    conn, account.account_id, "unreadable", "Permission denied",
+                    "2026-10-09T13:05:00+00:00",
+                )
+            text = reports.build_daily_report(data_dir, config, datetime.now(timezone.utc))
+        self.assertIn("Permission denied", text)
+
     def test_no_scan_yet_adds_no_section(self):
         """스캔을 한 번도 안 돌린 상태에서 빈 절이 붙으면 지저분하다."""
 

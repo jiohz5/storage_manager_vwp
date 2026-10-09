@@ -66,6 +66,10 @@ class AccountScanState:
     last_completed_generation: Optional[int] = None
     # 그 세대를 끝낸 시각 (ISO, UTC). 야간 실행이 "이 밤에 이미 끝냈나" 를 본다.
     last_completed_at: Optional[str] = None
+    # 계정 경로를 못 봐 건너뛴 때·까닭·세부 (OS 오류 문구). 다시 보이면 비운다.
+    unavailable_at: Optional[str] = None
+    unavailable_reason: Optional[str] = None
+    unavailable_detail: str = ""
 
     @property
     def working_generation(self) -> int:
@@ -98,7 +102,31 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
         account_id=row["account_id"],
         last_completed_generation=row["last_completed_generation"],
         last_completed_at=row["last_baseline_completed_at"],
+        unavailable_at=row["unavailable_at"],
+        unavailable_reason=row["unavailable_reason"],
+        unavailable_detail=row["unavailable_detail"] or "",
     )
+
+
+def mark_unavailable(
+    conn: sqlite3.Connection, account_id: str, reason: str, detail: str, at: str
+) -> None:
+    get_account_state(conn, account_id)  # 행이 없으면 만들어 둠
+    conn.execute(
+        "UPDATE account_scan_state SET unavailable_at = ?, unavailable_reason = ?, "
+        "unavailable_detail = ? WHERE account_id = ?",
+        (at, reason, detail, account_id),
+    )
+    conn.commit()
+
+
+def clear_unavailable(conn: sqlite3.Connection, account_id: str) -> None:
+    conn.execute(
+        "UPDATE account_scan_state SET unavailable_at = NULL, unavailable_reason = NULL, "
+        "unavailable_detail = NULL WHERE account_id = ?",
+        (account_id,),
+    )
+    conn.commit()
 
 
 def last_baseline_times(conn: sqlite3.Connection) -> Dict[str, Optional[str]]:

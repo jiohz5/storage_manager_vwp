@@ -259,6 +259,13 @@ def _append_scan_section(lines: List[str], data_dir: Path, config: config_module
         for account in config.accounts:
             state = scan_store.get_account_state(conn, account.account_id)
             entry: List[str] = []
+            if state.unavailable_reason:
+                # 계정 경로를 못 봐 그 밤을 건너뛰었다 - 아침에 "왜 이 계정만 어제
+                # 그대로지" 를 묻지 않게 맨 앞에 적는다.
+                entry.append("    " + formatting.unavailable_text(
+                    state.unavailable_reason, state.unavailable_detail,
+                    state.unavailable_at, account.name,
+                ))
             _append_progress(entry, conn, account.account_id, state.working_generation)
             if not entry:
                 continue
