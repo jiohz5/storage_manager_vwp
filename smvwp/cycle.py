@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List
 
 from . import collector, config as config_module, forecast_notify, notifications, reports
-from . import popup_queue, scan_store, servermon, store, usage_log
+from . import popup_queue, scan_store, servermon, sqlite_db, store, usage_log
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,13 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
                 scan_store.prune_usage_events(
                     scan_conn, usage_log.DEFAULT_RETENTION_DAYS
                 )
-        except Exception:  # pragma: no cover - 방어적 처리
-            logger.exception("서버 부하 표본 저장 실패 (수집 결과는 이미 저장됨)")
+        except Exception as exc:  # pragma: no cover - 방어적 처리
+            if sqlite_db.is_busy(exc):
+                # 다른 작업이 스캔 DB 를 잡고 있었다 - 고장이 아니다. 표본 한 벌을
+                # 건너뛸 뿐이고 df 표본은 이미 저장됐다.
+                logger.warning("스캔 DB 가 잠겨 있어 이번 서버 부하 표본은 건너뜁니다 (%s)", exc)
+            else:
+                logger.exception("서버 부하 표본 저장 실패 (수집 결과는 이미 저장됨)")
 
     accounts_by_id = {a.account_id: a for a in accounts}
     state = notifications.load_notify_state(data_dir)

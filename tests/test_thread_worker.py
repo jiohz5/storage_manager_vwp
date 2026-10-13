@@ -240,5 +240,42 @@ class CollectorDefersToOthersTests(unittest.TestCase):
         self.assertTrue(second.called)
 
 
+@unittest.skipUnless(HAVE_QT, "PyQt5 없음")
+class BusyDatabaseTests(unittest.TestCase):
+    """읽기 전용 작업자는 DB 가 잠깐 잠겼으면 지난 결과를 그대로 쓴다.
+
+    실기(NFS)에서 창을 연 직후 수집·대시보드·스캔 상태가 한꺼번에 스캔 DB 에 붙어
+    "database is locked" 가 traceback 과 함께 찍히고 화면에 오류가 떴다. 다음
+    차례에 다시 읽으면 되는 일이다."""
+
+    def test_status_keeps_the_last_snapshot_when_the_db_is_busy(self):
+        import sqlite3
+
+        from smvwp.scheduler import ScanStatusWorker
+
+        worker = ScanStatusWorker(Path("."), lambda: None)
+        answers = iter(["snapshot-1", sqlite3.OperationalError("database is locked")])
+
+        def snapshot(*args, **kwargs):
+            answer = next(answers)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with patch("smvwp.scheduler.nightly_scan.get_status_snapshot", side_effect=snapshot):
+            self.assertEqual(worker._compute(()), ("finished", "snapshot-1"))
+            with self.assertLogs("smvwp.scheduler", level="WARNING") as logs:
+                self.assertEqual(worker._compute(()), ("finished", "snapshot-1"))
+        self.assertNotIn("Traceback", " / ".join(logs.output))
+
+    def test_other_errors_still_fail(self):
+        from smvwp.scheduler import ScanStatusWorker
+
+        worker = ScanStatusWorker(Path("."), lambda: None)
+        with patch("smvwp.scheduler.nightly_scan.get_status_snapshot", side_effect=ValueError("x")):
+            with self.assertLogs("smvwp.scheduler", level="ERROR"):
+                self.assertEqual(worker._compute(()), ("failed", "x"))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

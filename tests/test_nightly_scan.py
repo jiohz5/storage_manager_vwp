@@ -395,6 +395,28 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertEqual(runner.du_count, 1)
         self.assertEqual(scan_lock.read_lock(self.data_dir).run_id, "intruder")
 
+    def test_status_remembers_what_only_changes_when_a_generation_completes(self):
+        """창은 스캔 중 5초마다 상태를 읽는다. 상위 경로·증감 조인·큰 파일 변화처럼
+        완료된 세대에만 매인 값을 매번 NFS 에서 다시 읽으면, 그 읽기가 스캔과 수집의
+        커밋을 붙잡아 실기에서 "database is locked" 가 났다."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.run_at(datetime(2026, 8, 1, 23, 0))
+        cache = {}
+        with patch("smvwp.nightly_scan.scan_store.growth_delta",
+                   wraps=scan_store.growth_delta) as growth:
+            first = nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
+            again = nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
+            self.assertEqual(growth.call_count, 1)
+            self.assertEqual(
+                [tuple(row) for row in first.accounts[0].growth],
+                [tuple(row) for row in again.accounts[0].growth],
+            )
+            self.run_at(datetime(2026, 8, 2, 23, 0))   # 세대가 바뀌면 다시 읽는다
+            growth.reset_mock()   # 스캔 자신(급증 알림)이 부른 것은 세지 않는다
+            nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
+            self.assertEqual(growth.call_count, 1)
+
     def flaky_dir1(self):
         real = detail_scan.process_one_checkpoint
 

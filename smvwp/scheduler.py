@@ -20,10 +20,13 @@ from typing import Optional
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from . import dashboard, nightly_scan, store
+from . import dashboard, nightly_scan, sqlite_db, store
 from .cycle import run_collection_cycle
 
 logger = logging.getLogger(__name__)
+
+# 아직 결과가 없다는 표시 (None 도 결과일 수 있다).
+_NOTHING = object()
 
 
 def emit_safely(owner, signal_name: str, *payload) -> None:
@@ -97,12 +100,16 @@ class ThreadWorker(QObject):
 
     THREAD_NAME = "smvwp-worker"
     COALESCE = False
+    # DB 가 잠깐 잠겨 못 읽었으면 지난 결과를 그대로 쓴다 (읽기 전용 작업자만).
+    # 화면에 오류를 띄울 일이 아니다 - 다음 차례에 다시 읽으면 된다.
+    KEEP_LAST_ON_BUSY = False
 
     def __init__(self, parent: QObject = None):
         super().__init__(parent)
         self._lock = threading.Lock()
         self._running = False
         self._pending = None
+        self._last_result = _NOTHING
 
     def is_running(self) -> bool:
         with self._lock:
@@ -127,12 +134,24 @@ class ThreadWorker(QObject):
 
     def _compute(self, args):
         try:
-            return ("finished", self._work(*args))
+            result = self._work(*args)
         except Exception as exc:  # 스레드 밖으로 새면 조용히 죽는다
+            if sqlite_db.is_busy(exc):
+                # 다른 작업이 DB 를 잡고 있었다. 고장이 아니라 traceback 은 남기지
+                # 않는다 - 실기(NFS)에서 창을 연 직후 이것이 오류로 쌓였다.
+                if self.KEEP_LAST_ON_BUSY and self._last_result is not _NOTHING:
+                    logger.warning("%s: DB 가 잠시 잠겨 지난 결과를 그대로 씁니다 (%s)",
+                                   self.THREAD_NAME, exc)
+                    return ("finished", self._last_result)
+                logger.warning("%s: DB 가 잠시 잠겨 있습니다 (%s)", self.THREAD_NAME, exc)
+                return ("failed", str(exc))
             # 화면에는 한 줄만 간다. 어디서 났는지는 로그에만 남으므로 여기서
             # 전체를 남긴다 - 예전에는 str(exc) 한 줄 말고는 아무것도 없었다.
             logger.exception("%s 작업 실패", self.THREAD_NAME)
             return ("failed", str(exc))
+        if self.KEEP_LAST_ON_BUSY:
+            self._last_result = result
+        return ("finished", result)
 
     def _loop(self, args) -> None:
         while True:
@@ -232,11 +251,15 @@ class ScanStatusWorker(ThreadWorker):
     """
 
     THREAD_NAME = "smvwp-scan-status"
+    KEEP_LAST_ON_BUSY = True
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
+        # 완료된 세대에만 매인 값 (`nightly_scan.get_status_snapshot` 의 cache).
+        # 이 작업자만 쓴다 - 한 번에 하나만 돈다.
+        self._settled: dict = {}
 
     def refresh_async(self) -> bool:
         """조회를 시작한다. 이미 돌고 있으면 False (건너뜀)."""
@@ -244,7 +267,9 @@ class ScanStatusWorker(ThreadWorker):
         return self.start()
 
     def _work(self):
-        return nightly_scan.get_status_snapshot(self._data_dir, self._get_config())
+        return nightly_scan.get_status_snapshot(
+            self._data_dir, self._get_config(), cache=self._settled
+        )
 
 
 class DashboardWorker(ThreadWorker):
@@ -266,6 +291,7 @@ class DashboardWorker(ThreadWorker):
 
     THREAD_NAME = "smvwp-dashboard"
     COALESCE = True
+    KEEP_LAST_ON_BUSY = True
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)

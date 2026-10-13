@@ -1259,14 +1259,51 @@ class StatusSnapshot:
     accounts: List[AccountScanSnapshot]
 
 
+def _settled_parts(conn, account_id, current_gen, previous_gen, top_n, max_depth) -> dict:
+    """완료된 세대에만 매인 값들. 세대가 바뀌기 전에는 달라지지 않는다."""
+
+    return {
+        "top_paths": (
+            scan_store.top_paths(conn, account_id, current_gen, top_n, max_depth=max_depth)
+            if current_gen else []
+        ),
+        "growth": (
+            scan_store.growth_delta(conn, account_id, current_gen, previous_gen, top_n)
+            if current_gen and previous_gen else []
+        ),
+        "previous_measured_kb": (
+            scan_store.measured_total_kb(conn, account_id, previous_gen) if previous_gen else None
+        ),
+        "current_scan_at": (
+            scan_store.generation_completed_at(conn, account_id, current_gen) if current_gen else None
+        ),
+        "previous_scan_at": (
+            scan_store.generation_completed_at(conn, account_id, previous_gen) if previous_gen else None
+        ),
+        "large_files": (
+            scan_store.large_file_changes(conn, account_id, current_gen, previous_gen)
+            if current_gen else []
+        ),
+        "partial_paths": (
+            scan_store.partial_paths(conn, account_id, current_gen) if current_gen else []
+        ),
+    }
+
+
 def get_status_snapshot(
     data_dir: Path,
     config: config_module.AppConfig,
     clock: Optional[Callable[[], datetime]] = None,
     top_n: Optional[int] = None,
+    cache: Optional[dict] = None,
 ) -> StatusSnapshot:
     """GUI가 스캔을 직접 돌리지 않고도 현재 상태를 읽기만 해서 보여줄 때
-    쓴다. 여기서는 아무 것도 쓰지 않는다 (읽기 전용 조회)."""
+    쓴다. 여기서는 아무 것도 쓰지 않는다 (읽기 전용 조회).
+
+    `cache` 를 주면 **완료된 세대에만 매인 값**(상위 경로, 증감, 큰 파일 변화, 이전
+    크기, 완료 시각, 덜 센 경로)을 세대가 바뀔 때까지 기억한다. 창은 스캔 중
+    5초마다 이것을 부르는데, 이 값들을 매번 NFS 에서 다시 읽으면 그 읽기가 스캔과
+    수집의 커밋을 붙잡아 실기에서 "database is locked" 가 났다."""
 
     clock = clock or datetime.now
     top_n = top_n or config.settings.detail_scan_top_n
@@ -1281,18 +1318,16 @@ def get_status_snapshot(
             state = scan_store.get_account_state(conn, account.account_id)
             current_gen = state.last_completed_generation
             previous_gen = current_gen - 1 if current_gen else None
-            top = (
-                scan_store.top_paths(
-                    conn, account.account_id, current_gen, top_n,
-                    max_depth=config.settings.growth_list_max_depth,
-                )
-                if current_gen else []
-            )
-            growth = (
-                scan_store.growth_delta(conn, account.account_id, current_gen, previous_gen, top_n)
-                if current_gen and previous_gen
-                else []
-            )
+            key = (current_gen, top_n, config.settings.growth_list_max_depth)
+            remembered = cache.get(account.account_id) if cache is not None else None
+            if remembered is None or remembered[0] != key:
+                remembered = (key, _settled_parts(
+                    conn, account.account_id, current_gen, previous_gen, top_n,
+                    config.settings.growth_list_max_depth,
+                ))
+                if cache is not None:
+                    cache[account.account_id] = remembered
+            settled = remembered[1]
             pending_baseline_count = conn.execute(
                 "SELECT COUNT(*) FROM scan_checkpoints WHERE account_id = ? AND kind = 'baseline' "
                 "AND generation = ? AND status = 'pending'",
@@ -1309,36 +1344,16 @@ def get_status_snapshot(
                     unavailable_reason=state.unavailable_reason,
                     unavailable_detail=state.unavailable_detail,
                     unavailable_at=state.unavailable_at,
-                    previous_measured_kb=(
-                        scan_store.measured_total_kb(
-                            conn, account.account_id, previous_gen
-                        )
-                        if previous_gen else None
-                    ),
-                    current_scan_at=(
-                        scan_store.generation_completed_at(conn, account.account_id, current_gen)
-                        if current_gen else None
-                    ),
-                    previous_scan_at=(
-                        scan_store.generation_completed_at(conn, account.account_id, previous_gen)
-                        if previous_gen else None
-                    ),
-                    top_paths=top,
-                    growth=growth,
-                    large_files=(
-                        scan_store.large_file_changes(
-                            conn, account.account_id, current_gen, previous_gen
-                        )
-                        if current_gen else []
-                    ),
+                    previous_measured_kb=settled["previous_measured_kb"],
+                    current_scan_at=settled["current_scan_at"],
+                    previous_scan_at=settled["previous_scan_at"],
+                    top_paths=settled["top_paths"],
+                    growth=settled["growth"],
+                    large_files=settled["large_files"],
                     pending_baseline_count=pending_baseline_count,
                     baseline_done=baseline_counts["done"] + baseline_counts["error"],
                     baseline_total=baseline_counts["total"],
-                    partial_paths=(
-                        scan_store.partial_paths(conn, account.account_id, current_gen)
-                        if current_gen
-                        else []
-                    ),
+                    partial_paths=settled["partial_paths"],
                     # 실패는 **작업 중인 세대** 기준으로 본다. 전부 실패하면
                     # 완료 세대가 아예 생기지 않아, 완료 세대로 조회하면 정작
                     # 사용자가 겪는 실패가 하나도 안 보인다.

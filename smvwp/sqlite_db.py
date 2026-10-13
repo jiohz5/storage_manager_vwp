@@ -45,7 +45,18 @@ _INITIALIZED = set()
 _INIT_LOCK = threading.Lock()
 
 # 다른 연결이 쓰기 잠금을 쥐고 있을 때 기다리는 시간(초).
-CONNECT_TIMEOUT_SECONDS = 10
+# 잠금을 기다리는 최대 시간. 데이터 디렉터리가 NFS 면 커밋 하나가 왕복 여러 번이라,
+# 창을 연 직후처럼 수집·대시보드·스캔 상태가 한꺼번에 붙으면 10초로는 모자라
+# 실기에서 "database is locked" 가 났다. 화면 스레드는 DB 를 열지 않으므로 길게
+# 기다려도 창이 굳지 않는다.
+CONNECT_TIMEOUT_SECONDS = 30
+
+
+def is_busy(exc: BaseException) -> bool:
+    """다른 연결이 잡고 있어 못 한 것인가 (잠시 뒤 다시 하면 되는 실패)."""
+
+    text = str(exc).lower()
+    return isinstance(exc, sqlite3.OperationalError) and ("locked" in text or "busy" in text)
 
 
 def connect(
