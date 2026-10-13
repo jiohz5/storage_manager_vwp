@@ -1742,6 +1742,47 @@ class WindowStartsWithoutTouchingTheDbTests(_GuiCase):
         self.assertEqual(started, [1])
 
 
+class LoadingProgressTests(_GuiCase):
+    """데이터를 읽는 동안 무엇을 하는지 보여 준다 - 실기에서 15초 동안 아무 표시가
+    없었다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.window.show()
+        _app().processEvents()
+
+    def tearDown(self):
+        self.window.close()
+        super().tearDown()
+
+    def test_home_shows_the_step_while_reading_and_hides_when_done(self):
+        from smvwp import dashboard, i18n
+
+        self.window._refresh_table_from_store()
+        self.assertTrue(self.window.loading_row.isVisible())
+        self.window._on_dashboard_progress(2, len(dashboard.STEPS), dashboard.STEPS[1])
+        self.assertIn(i18n.t(dashboard.STEPS[1]), self.window.loading_label.text())
+        self.assertIn(f"2/{len(dashboard.STEPS)}", self.window.loading_label.text())
+        self.assertEqual(self.window.loading_bar.value(), 1)
+        self.window._on_dashboard_ready(dashboard.DashboardData())
+        self.assertFalse(self.window.loading_row.isVisible())
+
+    def test_a_failed_read_also_hides_it(self):
+        self.window._refresh_table_from_store()
+        self.window._on_dashboard_failed("boom")
+        self.assertFalse(self.window.loading_row.isVisible())
+
+    def test_the_scan_tab_counts_accounts_on_its_first_read(self):
+        tab = self.window._scan_tab
+        tab._on_scan_status_progress(3, 12, "")
+        self.assertFalse(tab.first_load_bar.isHidden())
+        self.assertEqual(tab.first_load_bar.value(), 2)
+        self.assertIn("3/12", tab.scan_status_label.text())
+
+
 class AccountDialogScanTimesTests(_GuiCase):
     """계정 관리 창은 마지막 스캔 시각을 작업 스레드에서 읽는다.
 

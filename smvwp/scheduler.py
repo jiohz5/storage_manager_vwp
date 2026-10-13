@@ -252,6 +252,8 @@ class ScanStatusWorker(ThreadWorker):
 
     THREAD_NAME = "smvwp-scan-status"
     KEEP_LAST_ON_BUSY = True
+    # 계정을 몇째까지 읽었나 `(번호, 전체, "")` - 화면이 첫 읽기 동안 보여 준다.
+    progress = pyqtSignal(int, int, str)
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
@@ -268,7 +270,8 @@ class ScanStatusWorker(ThreadWorker):
 
     def _work(self):
         return nightly_scan.get_status_snapshot(
-            self._data_dir, self._get_config(), cache=self._settled
+            self._data_dir, self._get_config(), cache=self._settled,
+            on_account=lambda index, total: emit_safely(self, "progress", index, total, ""),
         )
 
 
@@ -292,6 +295,8 @@ class DashboardWorker(ThreadWorker):
     THREAD_NAME = "smvwp-dashboard"
     COALESCE = True
     KEEP_LAST_ON_BUSY = True
+    # 읽는 단계 `(번호, 전체, 단계 키)` - 화면이 진행 줄로 보여 준다.
+    progress = pyqtSignal(int, int, str)
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
@@ -305,7 +310,10 @@ class DashboardWorker(ThreadWorker):
 
     def _work(self):
         # 읽는 방법 자체는 `dashboard` 에 있다 - Qt 없이 시험할 수 있어야 한다.
-        return dashboard.read_dashboard(self._data_dir, self._get_config())
+        return dashboard.read_dashboard(
+            self._data_dir, self._get_config(),
+            on_step=lambda index, total, key: emit_safely(self, "progress", index, total, key),
+        )
 
 
 class CollectorScheduler:

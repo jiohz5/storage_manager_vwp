@@ -118,5 +118,76 @@ class ReadDashboardTests(unittest.TestCase):
         self.assertTrue(closed, "실패해도 연결은 닫아야 한다")
 
 
+class ProgressAndSharedReadTests(unittest.TestCase):
+    """실기(NFS)에서 창은 바로 떴지만 홈 데이터가 보이기까지 15초쯤 걸렸고, 그동안
+    아무 표시가 없었다. 단계를 알려 기다릴 수 있게 하고, 같은 표본을 두 번 읽지
+    않는다."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        self.config = config_module.load_config(self.data_dir)
+        for name in ("a", "b"):
+            (root / name).mkdir()
+            config_module.add_account(self.config, name, str(root / name), data_dir=self.data_dir)
+
+    def test_each_step_is_announced_in_order(self):
+        steps = []
+        dashboard.read_dashboard(
+            self.data_dir, self.config, on_step=lambda i, n, key: steps.append((i, n, key))
+        )
+        self.assertEqual(steps, [(i + 1, len(dashboard.STEPS), key)
+                                 for i, key in enumerate(dashboard.STEPS)])
+
+    def test_each_accounts_history_is_read_once(self):
+        """추세와 FULL 예측이 계정마다 같은 30일치를 따로 읽었다."""
+
+        from smvwp import store
+
+        with patch("smvwp.store.samples_since", wraps=store.samples_since) as reads:
+            dashboard.read_dashboard(self.data_dir, self.config)
+        self.assertEqual(reads.call_count, len(self.config.accounts))
+
+    def test_a_slow_read_leaves_the_time_of_each_step(self):
+        """어디를 줄일지 실기의 숫자로 정한다."""
+
+        with patch.object(dashboard, "SLOW_READ_SECONDS", 0.0):
+            with self.assertLogs("smvwp.dashboard", level="WARNING") as logs:
+                dashboard.read_dashboard(self.data_dir, self.config)
+        self.assertIn("초", logs.output[0])
+
+
+class SharedHistoryForecastTests(unittest.TestCase):
+    def test_same_forecast_whether_it_reads_or_is_given_the_history(self):
+        from datetime import datetime, timedelta, timezone
+
+        from smvwp import forecast_notify, store
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            data_dir = root / "data"
+            config = config_module.load_config(data_dir)
+            (root / "a").mkdir()
+            account = config_module.add_account(config, "a", str(root / "a"), data_dir=data_dir)
+            now = datetime.now(timezone.utc)
+            with store.session(data_dir) as conn:
+                for step in range(200):
+                    at = now - timedelta(minutes=15 * step)
+                    used = 900_000 - step * 100
+                    store.insert_sample(conn, store.SampleRecord(
+                        account_id=account.account_id, collected_at=at.isoformat(), ok=True,
+                        total_kb=1_000_000, used_kb=used, avail_kb=1_000_000 - used,
+                        byte_pct=used / 10_000, byte_tier="normal", overall_tier="normal",
+                    ))
+                conn.commit()
+                history = {account.account_id: store.samples_since(
+                    conn, account.account_id, now - timedelta(days=60))}
+            alone = forecast_notify.build_forecasts(data_dir, config, now=now)
+            shared = forecast_notify.build_forecasts(data_dir, config, now=now, history=history)
+        self.assertEqual(alone, shared)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

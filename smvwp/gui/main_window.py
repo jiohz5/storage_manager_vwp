@@ -197,6 +197,7 @@ class MainWindow(QMainWindow):
         )
         self._dashboard_worker.finished.connect(self._on_dashboard_ready)
         self._dashboard_worker.failed.connect(self._on_dashboard_failed)
+        self._dashboard_worker.progress.connect(self._on_dashboard_progress)
         self._refresh_table_from_store()
 
         self._scheduler = CollectorScheduler(
@@ -394,6 +395,22 @@ class MainWindow(QMainWindow):
         list_head.addWidget(self.filter_edit)
         list_head.addWidget(self.collect_btn)
         right.addLayout(list_head)
+
+        # 데이터를 읽는 동안의 진행. 실기(NFS)에서 창은 바로 떴지만 홈 데이터가
+        # 보이기까지 15초쯤 걸렸고, 그동안 아무 표시가 없어 멈춘 줄 알았다.
+        self.loading_row = QWidget()
+        loading_box = QHBoxLayout(self.loading_row)
+        loading_box.setContentsMargins(0, 0, 0, 0)
+        loading_box.setSpacing(10)
+        self.loading_label = QLabel()
+        self.loading_label.setObjectName("caption")
+        self.loading_bar = QProgressBar()
+        self.loading_bar.setTextVisible(False)
+        self.loading_bar.setFixedHeight(6)
+        loading_box.addWidget(self.loading_label)
+        loading_box.addWidget(self.loading_bar, 1)
+        self.loading_row.setVisible(False)
+        right.addWidget(self.loading_row)
 
         self.table = QTableWidget(0, len(COLUMN_KEYS))
         self._configure_table_columns()
@@ -787,8 +804,23 @@ class MainWindow(QMainWindow):
         멈추는 창을 보게 됐다. 결과는 `_on_dashboard_ready` 가 받는다."""
 
         self._dashboard_worker.refresh_async()
+        # 단계가 오기 전에는 '읽고 있다' 만 보여 준다 (막대가 흐른다).
+        self.loading_bar.setRange(0, 0)
+        self.loading_label.setText(i18n.t("dashboard.loading_start"))
+        self.loading_row.setVisible(True)
+        if not self._latest_samples:
+            self.hero_state_label.setText(i18n.t("dashboard.loading_start"))
+
+    def _on_dashboard_progress(self, index: int, total: int, key: str) -> None:
+        self.loading_bar.setRange(0, total)
+        self.loading_bar.setValue(index - 1)
+        self.loading_label.setText(
+            i18n.t("dashboard.loading", step=i18n.t(key), index=index, total=total)
+        )
+        self.loading_row.setVisible(True)
 
     def _on_dashboard_ready(self, data) -> None:
+        self.loading_row.setVisible(False)
         self._latest_samples = data.samples
         self._forecasts = data.forecasts
         # 표를 그리기 **전에** 받아 둔다 - 그리는 쪽이 칸마다 여기서 꺼내 간다.
@@ -801,6 +833,7 @@ class MainWindow(QMainWindow):
             self.status_bar_label.setText(i18n.t("dashboard.forecast_failed"))
 
     def _on_dashboard_failed(self, message: str) -> None:
+        self.loading_row.setVisible(False)
         # 읽기에 실패해도 이미 그려진 화면은 그대로 둔다 - 지우면 사용자는
         # 데이터가 사라진 줄 안다.
         self.status_bar_label.setText(

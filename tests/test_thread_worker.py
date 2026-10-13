@@ -147,7 +147,7 @@ class DashboardRefreshTests(unittest.TestCase):
         gate = threading.Event()
         calls = []
 
-        def read(data_dir, config):
+        def read(data_dir, config, on_step=None):
             calls.append(len(calls))
             if len(calls) == 1:
                 gate.wait(5)

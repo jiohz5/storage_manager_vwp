@@ -122,6 +122,7 @@ class ScanTab(QFrame):
         self._status_worker = ScanStatusWorker(data_dir, get_config, self)
         self._status_worker.finished.connect(self._on_scan_status_ready)
         self._status_worker.failed.connect(self._on_scan_status_failed)
+        self._status_worker.progress.connect(self._on_scan_status_progress)
 
         self._scan_status_timer = QTimer(self)
         self._scan_status_timer.timeout.connect(self.refresh)
@@ -251,6 +252,13 @@ class ScanTab(QFrame):
         self.scan_status_label.setObjectName("muted")
         self.scan_status_label.setWordWrap(True)
         box.addWidget(self.scan_status_label)
+        # 첫 읽기 동안 계정을 몇째까지 읽었나. 그다음부터는 기억해 둔 값으로
+        # 금방 끝나므로 보이지 않는다 (`ScanStatusWorker`).
+        self.first_load_bar = QProgressBar()
+        self.first_load_bar.setTextVisible(False)
+        self.first_load_bar.setFixedHeight(6)
+        self.first_load_bar.setRange(0, 0)
+        box.addWidget(self.first_load_bar)
 
         # 지금 어느 경로를 훑고 있는지. 한 디렉터리가 몇 분씩 걸릴 수 있어서
         # "실행 중"만 떠 있으면 멈춘 것인지 진행 중인지 구분되지 않는다.
@@ -409,11 +417,25 @@ class ScanTab(QFrame):
         self._status_worker.refresh_async()
 
     def _on_scan_status_failed(self, message: str) -> None:
+        self.first_load_bar.setVisible(False)
         self.scan_status_label.setText(i18n.t("scan.status_error", message=message))
+
+    def _on_scan_status_progress(self, index: int, total: int, _key: str) -> None:
+        """첫 읽기 동안만 보여 준다 - 이미 그린 것이 있으면 조용히 새로 읽는다."""
+
+        if self._scan_snapshot is not None:
+            return
+        self.first_load_bar.setRange(0, total)
+        self.first_load_bar.setValue(index - 1)
+        self.first_load_bar.setVisible(True)
+        self.scan_status_label.setText(
+            i18n.t("scan.loading_accounts", index=index, total=total)
+        )
 
     def _on_scan_status_ready(self, snapshot) -> None:
         """백그라운드가 읽어 온 스냅샷을 화면에 그린다 (GUI 스레드)."""
 
+        self.first_load_bar.setVisible(False)
         self._scan_snapshot = snapshot
         running = snapshot.is_running or self._scan_worker.is_running()
 

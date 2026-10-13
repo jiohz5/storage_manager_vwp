@@ -49,8 +49,12 @@ def build_forecasts(
     data_dir: Path,
     config: config_module.AppConfig,
     now: Optional[datetime] = None,
+    history: Optional[Dict[str, list]] = None,
 ) -> List[analytics.CapacityForecast]:
-    """활성 계정별 예측을 만든다 (읽기 전용)."""
+    """활성 계정별 예측을 만든다 (읽기 전용).
+
+    `history`(계정별 표본)를 주면 DB 를 다시 읽지 않는다 - 홈은 추세를 그리려고
+    같은 30일치를 이미 읽었다."""
 
     now = now or datetime.now(timezone.utc)
     settings = config.settings
@@ -59,6 +63,15 @@ def build_forecasts(
     since = now - timedelta(days=window_days)
 
     forecasts: List[analytics.CapacityForecast] = []
+    if history is not None:
+        cutoff = since.isoformat()
+        for account in config_module.enabled_accounts(config):
+            samples = [
+                sample for sample in history.get(account.account_id, [])
+                if sample.collected_at >= cutoff
+            ]
+            forecasts.append(analytics.build_forecast(account.account_id, samples, settings, now))
+        return forecasts
     with store.session(data_dir) as conn:
         for account in config_module.enabled_accounts(config):
             samples = store.samples_since(conn, account.account_id, since)

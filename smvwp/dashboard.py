@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import forecast_notify, store
+from . import forecast_notify, i18n, store
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +46,77 @@ class DashboardData:
     trends: dict = field(default_factory=dict)
 
 
-def read_dashboard(data_dir: Path, config) -> DashboardData:
+# 읽는 단계 (i18n 키). 화면이 "무엇을 읽는 중 (2/4)" 로 보여 준다 - 실기(NFS)에서
+# 홈 데이터가 보이기까지 15초쯤 걸렸고, 그동안 아무 표시가 없었다.
+STEPS = (
+    "dashboard.step.samples",
+    "dashboard.step.history",
+    "dashboard.step.forecast",
+    "dashboard.step.plan",
+)
+
+# 읽기가 이보다 오래 걸리면 단계별 시간을 로그에 남긴다 - 어디를 줄일지 실기의
+# 숫자로 정한다.
+SLOW_READ_SECONDS = 5.0
+
+
+class _Steps:
+    """단계마다 알리고, 걸린 시간을 잰다."""
+
+    def __init__(self, on_step):
+        self._on_step = on_step
+        self._started = time.perf_counter()
+        self._current = None
+        self._spent = []
+
+    def __call__(self, key: str) -> None:
+        self._close()
+        self._current = (key, time.perf_counter())
+        if self._on_step is not None:
+            self._on_step(STEPS.index(key) + 1, len(STEPS), key)
+
+    def _close(self) -> None:
+        if self._current is not None:
+            key, began = self._current
+            self._spent.append((key, time.perf_counter() - began))
+            self._current = None
+
+    def finish(self) -> None:
+        self._close()
+        total = time.perf_counter() - self._started
+        if total >= SLOW_READ_SECONDS:
+            logger.warning(
+                "홈 데이터를 읽는 데 %.1f초 걸렸습니다 (%s)",
+                total,
+                " · ".join(f"{i18n.t(key)} {seconds:.1f}초" for key, seconds in self._spent),
+            )
+
+
+def read_dashboard(data_dir: Path, config, on_step=None) -> DashboardData:
     """최신 표본과 FULL 예측을 읽어 온다 (읽기 전용).
 
     예측이 터져도 표본은 돌려준다. 예측 하나 때문에 대시보드 전체가 안 뜨면
     "용량이 얼마인지"조차 못 보게 되는데, 그쪽이 훨씬 나쁜 실패다.
+
+    `on_step(번호, 전체, 단계 키)` 는 단계마다 불린다 (작업 스레드에서).
+
+    계정마다 30일치 표본은 **한 번만** 읽어 추세와 FULL 예측이 나눠 쓴다. 예전에는
+    둘이 같은 것을 따로 읽었고, 이 둘이 읽기 시간의 거의 전부였다.
     """
 
+    step = _Steps(on_step)
     with store.session(data_dir) as conn:
+        step("dashboard.step.samples")
         samples = store.latest_samples(conn)
-        trends = _read_trends(conn, config)
+        step("dashboard.step.history")
+        history = _read_history(conn, config)
+    trends = _read_trends(history)
 
+    step("dashboard.step.forecast")
     try:
         forecasts = {
             item.account_id: item
-            for item in forecast_notify.build_forecasts(data_dir, config)
+            for item in forecast_notify.build_forecasts(data_dir, config, history=history)
         }
         failed = False
     except Exception:
@@ -67,11 +125,14 @@ def read_dashboard(data_dir: Path, config) -> DashboardData:
         forecasts = {}
         failed = True
 
+    step("dashboard.step.plan")
+    plan = _read_plan(data_dir, config, samples)
+    step.finish()
     return DashboardData(
         samples=samples,
         forecasts=forecasts,
         forecast_failed=failed,
-        plan=_read_plan(data_dir, config, samples),
+        plan=plan,
         trends=trends,
     )
 
@@ -86,10 +147,20 @@ TREND_DAYS = 30
 TREND_BUCKETS = 60
 
 
-def _read_trends(conn, config) -> dict:
-    """계정별 추세선. 실패해도 표는 떠야 하므로 통째로 감싼다."""
+def _read_history(conn, config) -> dict:
+    """계정별 표본 `{계정id: [표본, ...]}` - 추세와 FULL 예측이 함께 쓸 만큼."""
 
-    from datetime import datetime, timedelta, timezone
+    settings = config.settings
+    days = max(TREND_DAYS, settings.trend_long_days, settings.trend_short_days, 1)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    return {
+        account.account_id: store.samples_since(conn, account.account_id, since)
+        for account in config.accounts
+    }
+
+
+def _read_trends(history: dict) -> dict:
+    """계정별 추세선. 실패해도 표는 떠야 하므로 통째로 감싼다."""
 
     from . import trend
 
@@ -97,12 +168,13 @@ def _read_trends(conn, config) -> dict:
     try:
         since = datetime.now(timezone.utc) - timedelta(days=TREND_DAYS)
         now = datetime.now(timezone.utc)
-        for account in config.accounts:
-            samples = store.samples_since(conn, account.account_id, since)
+        cutoff = since.isoformat()
+        for account_id, history_samples in history.items():
+            samples = [sample for sample in history_samples if sample.collected_at >= cutoff]
             # 창을 명시한다. 안 그러면 표본이 하루치뿐인 계정의 하루가 칸을
             # 꽉 채워, 옆 계정의 30일과 나란히 놓였을 때 축이 서로 다른
             # 그래프를 같은 것처럼 보게 된다.
-            result[account.account_id] = trend.build(
+            result[account_id] = trend.build(
                 samples, since=since, until=now, buckets=TREND_BUCKETS
             )
     except Exception:

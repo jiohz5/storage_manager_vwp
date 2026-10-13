@@ -1296,6 +1296,7 @@ def get_status_snapshot(
     clock: Optional[Callable[[], datetime]] = None,
     top_n: Optional[int] = None,
     cache: Optional[dict] = None,
+    on_account: Optional[Callable[[int, int], None]] = None,
 ) -> StatusSnapshot:
     """GUI가 스캔을 직접 돌리지 않고도 현재 상태를 읽기만 해서 보여줄 때
     쓴다. 여기서는 아무 것도 쓰지 않는다 (읽기 전용 조회).
@@ -1314,7 +1315,10 @@ def get_status_snapshot(
         latest_run = dict(latest_run_row) if latest_run_row is not None else None
 
         accounts_snapshot = []
-        for account in config.accounts:
+        for index, account in enumerate(config.accounts, start=1):
+            # 화면이 첫 읽기 동안 "계정 3/12" 로 보여 준다 (작업 스레드에서 불린다).
+            if on_account is not None:
+                on_account(index, len(config.accounts))
             state = scan_store.get_account_state(conn, account.account_id)
             current_gen = state.last_completed_generation
             previous_gen = current_gen - 1 if current_gen else None
