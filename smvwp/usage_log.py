@@ -34,7 +34,10 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import queue
 import socket
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -120,3 +123,88 @@ def record(
     except Exception:
         logger.debug("사용 기록 실패 (%s)", action, exc_info=True)
         return False
+
+
+# -- 화면에서 부르는 기록 ----------------------------------------------------
+#
+# 화면은 기다리지 않는다. `record` 는 부른 자리에서 스캔 DB 에 연결해 쓰고
+# 커밋하는데, 데이터 디렉터리가 NFS 면 그것이 왕복 여러 번이고, 그 순간 다른
+# 작업(수집, 스캔 상태 읽기, 야간 스캔)이 DB 를 잡고 있으면 최대 잠금 대기
+# 시간만큼 걸린다. 버튼마다 그만큼 창이 굳었다. 그래서 화면은 줄에 맡기기만 하고,
+# 뒤의 스레드 하나가 모아서 한 번에 쓴다.
+
+_pending: "queue.Queue[tuple]" = queue.Queue()
+_writer: Optional[threading.Thread] = None
+_writer_guard = threading.Lock()
+
+
+def record_soon(
+    data_dir: Path,
+    action: str,
+    detail: Optional[str] = None,
+    user: Optional[str] = None,
+) -> None:
+    """행동 하나를 남기도록 맡긴다. 기다리지 않는다 (화면용).
+
+    시각과 사람은 맡기는 순간의 것이다. 창을 닫을 때 `flush` 로 남은 것을 쓴다."""
+
+    _pending.put((
+        Path(data_dir),
+        datetime.now(timezone.utc).isoformat(),
+        user or current_user(),
+        current_host(),
+        action,
+        detail,
+    ))
+    global _writer
+    with _writer_guard:
+        if _writer is None or not _writer.is_alive():
+            _writer = threading.Thread(target=_drain, name="smvwp-usage-log", daemon=True)
+            _writer.start()
+
+
+def flush(timeout: float = 2.0) -> bool:
+    """맡긴 기록을 다 쓸 때까지 기다린다 (창을 닫을 때). 다 썼으면 True."""
+
+    deadline = time.monotonic() + timeout
+    while _pending.unfinished_tasks:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
+def _drain() -> None:
+    while True:
+        batch = [_pending.get()]
+        while True:
+            try:
+                batch.append(_pending.get_nowait())
+            except queue.Empty:
+                break
+        try:
+            _write(batch)
+        finally:
+            for _ in batch:
+                _pending.task_done()
+
+
+def _write(batch) -> None:
+    from . import scan_store
+
+    by_dir = {}
+    for data_dir, *row in batch:
+        by_dir.setdefault(data_dir, []).append(tuple(row))
+    for data_dir, rows in by_dir.items():
+        try:
+            with scan_store.session(data_dir) as conn:
+                conn.executemany(
+                    "INSERT INTO usage_events "
+                    "(happened_at, user_name, host_name, action, detail) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    rows,
+                )
+                conn.commit()
+        except Exception:
+            # 기록은 부가 정보다 - 남기지 못했다는 것만 남긴다.
+            logger.warning("사용 기록 %d건을 남기지 못했습니다", len(rows), exc_info=True)

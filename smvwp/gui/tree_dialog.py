@@ -134,7 +134,7 @@ class TreeDialog(QDialog):
             index = self.account_combo.findData(account_id)
             if index >= 0:
                 self.account_combo.setCurrentIndex(index)
-        usage_log.record(data_dir, usage_log.TREE_VIEWED)
+        usage_log.record_soon(data_dir, usage_log.TREE_VIEWED)
         self._reload()
 
     # -- 화면 ---------------------------------------------------------

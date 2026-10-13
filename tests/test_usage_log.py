@@ -191,6 +191,34 @@ class ActionNameTests(unittest.TestCase):
         for name in names:
             self.assertRegex(name, r"^[a-z]+\.[a-z]+$")
 
+class RecordSoonTests(unittest.TestCase):
+    """화면은 기록을 맡기기만 하고 기다리지 않는다 - 쓰는 것은 뒤의 스레드다."""
+
+    def test_it_is_written_off_the_calling_thread(self):
+        import threading
+
+        from smvwp import sqlite_db
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            data_dir = Path(tmp)
+            writers = []
+            real = sqlite_db.connect
+
+            def recording(path, data_dir_arg, initialize):
+                writers.append(threading.current_thread() is threading.main_thread())
+                return real(path, data_dir_arg, initialize)
+
+            with patch("smvwp.sqlite_db.connect", side_effect=recording):
+                usage_log.record_soon(data_dir, usage_log.ACCOUNT_VIEWED)
+                usage_log.record_soon(data_dir, usage_log.GUIDE_OPENED, detail="full")
+                self.assertTrue(usage_log.flush(timeout=5.0))
+            with scan_store.session(data_dir) as conn:
+                actions = [row["action"] for row in conn.execute(
+                    "SELECT action FROM usage_events ORDER BY id"
+                )]
+        self.assertNotIn(True, writers)
+        self.assertEqual(actions, [usage_log.ACCOUNT_VIEWED, usage_log.GUIDE_OPENED])
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

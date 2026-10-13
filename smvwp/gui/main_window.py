@@ -59,7 +59,7 @@ from .. import (
     store,
     tiers,
 )
-from ..scheduler import CollectorScheduler, DashboardWorker
+from ..scheduler import CollectorScheduler, DashboardWorker, ThreadWorker
 from . import theme, widgets
 from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
@@ -119,6 +119,32 @@ COLUMN_KEYS = [
 HERO_ACCENT_STYLE = "background: {color}; border-radius: 3px;"
 
 
+def evaluate_freshness(data_dir: Path, config) -> Dict[str, object]:
+    """계정별 수집 신선도 `{계정id: 판정}` (읽기 전용). 꺼져 있으면 빈 dict."""
+
+    if not config.settings.freshness_enabled:
+        return {}
+    return {item.account_id: item for item in freshness.evaluate_all(data_dir, config)}
+
+
+class _FreshnessReader(ThreadWorker):
+    """수집 신선도를 작업 스레드에서 판정한다.
+
+    24시간치 표본을 계정마다 훑으므로, 데이터 디렉터리가 NFS 면 화면 스레드에서
+    했을 때 창이 그만큼 늦게 떴다. 실패하면 경고가 안 뜰 뿐이다 (작업 스레드가
+    로그에 남긴다)."""
+
+    THREAD_NAME = "smvwp-freshness"
+
+    def __init__(self, data_dir: Path, get_config, parent=None):
+        super().__init__(parent)
+        self._data_dir = data_dir
+        self._get_config = get_config
+
+    def _work(self):
+        return evaluate_freshness(self._data_dir, self._get_config())
+
+
 class MainWindow(QMainWindow):
     def __init__(self, data_dir: Path, config: config_module.AppConfig):
         super().__init__()
@@ -159,8 +185,10 @@ class MainWindow(QMainWindow):
 
         # 수집 신선도는 **첫 수집을 돌리기 전에** 판정해야 한다. GUI를 열면
         # 스케줄러가 곧바로 한 번 수집하므로, 그 뒤에 보면 늘 "방금 수집됨"이
-        # 되어 "그동안 cron이 안 돌았다"는 사실이 가려진다.
-        self._freshness = self._evaluate_freshness()
+        # 되어 "그동안 cron이 안 돌았다"는 사실이 가려진다. 판정은 작업 스레드가
+        # 하고(화면 스레드에서 하면 창이 늦게 뜬다), 첫 수집은 그 판정이 끝난 뒤에
+        # 시작한다 (`_start_collecting`) - 작업자는 아래 수집기를 만든 뒤에 띄운다.
+        self._collecting = False
         # 표본 읽기와 FULL 예측은 **GUI 스레드에서 하지 않는다.** 예측은
         # 계정마다 이력을 다시 훑으므로, 데이터 디렉터리가 NFS 위면 그동안
         # 창이 멈춘다 (스캔 상태 쪽은 이미 같은 이유로 스레드에 있다).
@@ -177,7 +205,12 @@ class MainWindow(QMainWindow):
             on_finished=self._on_collection_finished,
             on_failed=self._on_collection_failed,
         )
-        self._scheduler.start(run_immediately=True)
+        self._freshness_reader = _FreshnessReader(
+            data_dir, get_config=lambda: self._config, parent=self
+        )
+        self._freshness_reader.finished.connect(self._on_freshness_ready)
+        self._freshness_reader.failed.connect(lambda _message: self._start_collecting())
+        self._freshness_reader.start()
 
 
     def show_first_run_if_needed(self) -> None:
@@ -190,7 +223,7 @@ class MainWindow(QMainWindow):
         # 창을 실제로 띄운 경로에서만 부르는 메서드라(생성자는 시험도 부른다)
         # "사람이 이 도구를 열었다"를 여기서 남긴다. 시험이 창을 만들 때마다
         # 기록이 쌓이면 집계가 사람 것이 아니게 된다.
-        usage_log.record(self._data_dir, usage_log.GUI_OPENED)
+        usage_log.record_soon(self._data_dir, usage_log.GUI_OPENED)
 
         if self._config.accounts:
             return
@@ -741,7 +774,7 @@ class MainWindow(QMainWindow):
                 self._data_dir, lambda: self._config, action=data, parent=self
             )
             kind = data.kind
-        usage_log.record(self._data_dir, usage_log.GUIDE_OPENED, detail=kind)
+        usage_log.record_soon(self._data_dir, usage_log.GUIDE_OPENED, detail=kind)
         dialog.open_scan_requested.connect(self._show_account_in_scan_tab)
         dialog.status_message.connect(self.status_bar_label.setText)
         dialog.exec_()
@@ -774,22 +807,20 @@ class MainWindow(QMainWindow):
             i18n.t("dashboard.collect_error", message=message)
         )
 
-    def _evaluate_freshness(self) -> Dict[str, object]:
-        """수집 상태를 판정한다 (읽기 전용).
+    def _on_freshness_ready(self, result) -> None:
+        self._freshness = result or {}
+        # 표가 이미 그려졌으면 경고를 얹어 다시 그린다 (표본은 이미 손에 있다).
+        if self._latest_samples:
+            self._render_table(self._latest_samples)
+        self._start_collecting()
 
-        판정 실패가 대시보드를 못 뜨게 하면 안 되므로 예외는 삼키고 빈 결과로
-        둔다 - 그러면 경고만 안 뜰 뿐 나머지는 정상 동작한다."""
+    def _start_collecting(self) -> None:
+        """첫 수집과 15분 타이머를 시작한다 - 신선도 판정이 끝난 뒤 한 번만."""
 
-        if not self._config.settings.freshness_enabled:
-            return {}
-        try:
-            return {
-                item.account_id: item
-                for item in freshness.evaluate_all(self._data_dir, self._config)
-            }
-        except Exception:  # pragma: no cover - 방어적 처리
-            logger.exception("수집 신선도 판정 실패")
-            return {}
+        if self._collecting:
+            return
+        self._collecting = True
+        self._scheduler.start(run_immediately=True)
 
     def _freshness_warning(self) -> Optional[str]:
         """요약줄에 띄울 수집 경고. 없으면 None."""
@@ -1116,7 +1147,7 @@ class MainWindow(QMainWindow):
         self.status_bar_label.setText(i18n.t("dashboard.collect_error", message=message))
 
     def _open_account_dialog(self) -> None:
-        usage_log.record(self._data_dir, usage_log.ACCOUNTS_OPENED)
+        usage_log.record_soon(self._data_dir, usage_log.ACCOUNTS_OPENED)
         dialog = AccountDialog(self._data_dir, self._config, parent=self)
         before = len(self._config.accounts)
         if dialog.exec_():
@@ -1124,7 +1155,7 @@ class MainWindow(QMainWindow):
             # 계정 수가 언제 어떻게 늘었나. "몇 명이 쓰나" 와 함께 이 도구가
             # 자리를 잡는지 보여 주는 숫자다 - 이름은 정의만 되어 있고 한 번도
             # 기록되지 않았다.
-            usage_log.record(
+            usage_log.record_soon(
                 self._data_dir, usage_log.ACCOUNT_CHANGED,
                 detail=f"{before}->{len(self._config.accounts)}",
             )
@@ -1137,13 +1168,13 @@ class MainWindow(QMainWindow):
             self._scheduler.restart_with_current_interval()
 
     def _open_reports_dialog(self) -> None:
-        usage_log.record(self._data_dir, usage_log.REPORT_VIEWED)
+        usage_log.record_soon(self._data_dir, usage_log.REPORT_VIEWED)
         ReportsDialog(self._data_dir, self._config, parent=self).exec_()
 
     def _open_search_dialog(self) -> None:
         # 검색을 **했다는 사실**만 남긴다. 무엇을 찾았는지는 남기지 않는다 -
         # 운영 판단에 필요한 것은 이 기능을 쓰는 사람이 있느냐까지다.
-        usage_log.record(self._data_dir, usage_log.SEARCH_USED)
+        usage_log.record_soon(self._data_dir, usage_log.SEARCH_USED)
         SearchDialog(self._data_dir, self._config, parent=self).exec_()
 
     def _spark_for(self, account_id: str, tier: str = tiers.UNKNOWN):
@@ -1199,7 +1230,7 @@ class MainWindow(QMainWindow):
             return
         from .account_detail_dialog import AccountDetailDialog
 
-        usage_log.record(self._data_dir, usage_log.ACCOUNT_VIEWED)
+        usage_log.record_soon(self._data_dir, usage_log.ACCOUNT_VIEWED)
         dialog = AccountDetailDialog(
             self._data_dir, lambda: self._config, account_id, parent=self
         )
@@ -1287,5 +1318,7 @@ class MainWindow(QMainWindow):
 
         self._scheduler.stop()
         self._scan_tab.shutdown()
+        # 맡겨 둔 사용 기록을 마저 쓴다 (`usage_log.record_soon`). 오래 붙잡지는 않는다.
+        usage_log.flush(timeout=2.0)
         super().closeEvent(event)
 

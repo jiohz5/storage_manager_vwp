@@ -112,7 +112,7 @@ class LoadDialog(QDialog):
         self._reader.failed.connect(self._on_failed)
 
         self._build_ui()
-        usage_log.record(data_dir, usage_log.LOAD_VIEWED)
+        usage_log.record_soon(data_dir, usage_log.LOAD_VIEWED)
         self._reload()
 
     # -- 화면 ---------------------------------------------------------

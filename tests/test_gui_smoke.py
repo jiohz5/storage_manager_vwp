@@ -70,6 +70,7 @@ _BACKGROUND = (
     "smvwp.scheduler.CollectorScheduler.start",
     "smvwp.scheduler.DashboardWorker.refresh_async",
     "smvwp.scheduler.ScanStatusWorker.refresh_async",
+    "smvwp.gui.main_window._FreshnessReader.start",
 )
 
 
@@ -102,6 +103,10 @@ class _GuiCase(unittest.TestCase):
 
     def tearDown(self):
         _app().processEvents()
+        # 화면이 맡긴 사용 기록을 다 쓰고 나서 임시 디렉터리를 지운다.
+        from smvwp import usage_log
+
+        usage_log.flush(timeout=5.0)
         self.tmp.cleanup()
 
 
@@ -175,7 +180,7 @@ class MainWindowSmokeTests(_GuiCase):
 
         recorded = []
         with patch("smvwp.gui.main_window.AccountDialog") as dialog, patch.object(
-            usage_log, "record", side_effect=lambda *a, **k: recorded.append((a, k))
+            usage_log, "record_soon", side_effect=lambda *a, **k: recorded.append((a, k))
         ):
             dialog.return_value.exec_.return_value = True
             self.window._open_account_dialog()
@@ -1354,7 +1359,7 @@ class PriorityClickTests(_GuiCase):
 
         recorded = []
         with patch.object(
-            usage_log, "record", side_effect=lambda *a, **k: recorded.append((a, k))
+            usage_log, "record_soon", side_effect=lambda *a, **k: recorded.append((a, k))
         ):
             self.click(0)
         self.assertIn(
@@ -1695,6 +1700,46 @@ class GrowthPageSortTests(_GuiCase):
         ]), self.account)
         self.assertTrue(self.page.table.isSortingEnabled())
         self.assertEqual(self.first_column(), ["y", "x"])
+
+
+class WindowStartsWithoutTouchingTheDbTests(_GuiCase):
+    """창을 여는 동안 화면 스레드는 DB 를 열지 않는다.
+
+    실기(NFS)에서 창이 늦게 뜨고 버튼마다 굳었다. 화면 스레드가 표본 DB 를 읽어
+    수집 신선도를 판정하고, 버튼마다 스캔 DB 에 사용 기록을 써서 커밋했기
+    때문이다 - 그 순간 다른 작업이 DB 를 잡고 있으면 잠금 대기만큼 멈춘다."""
+
+    def test_no_db_on_the_window_thread_and_collecting_waits_for_freshness(self):
+        import threading
+        import time
+
+        from smvwp import sqlite_db
+        from smvwp.gui.main_window import MainWindow
+
+        opened = []
+        real = sqlite_db.connect
+
+        def recording(path, data_dir, initialize):
+            if threading.current_thread() is threading.main_thread():
+                opened.append(Path(path).name)
+            return real(path, data_dir, initialize)
+
+        from smvwp.gui.main_window import _FreshnessReader
+        from smvwp.scheduler import ThreadWorker
+
+        started = []
+        # 이 시험만 신선도 작업자를 실제로 띄운다 (_GuiCase 는 배경 작업을 멈춰 둔다).
+        with patch("smvwp.sqlite_db.connect", side_effect=recording),                 patch.object(_FreshnessReader, "start", ThreadWorker.start),                 patch("smvwp.scheduler.CollectorScheduler.start",
+                      side_effect=lambda *a, **k: started.append(1)):
+            window = MainWindow(self.data_dir, self.config)
+            self.addCleanup(window.close)
+            self.assertEqual(started, [], "신선도 판정 전에 수집을 시작했다")
+            deadline = time.monotonic() + 5
+            while not started and time.monotonic() < deadline:
+                _app().processEvents()
+                time.sleep(0.01)
+        self.assertEqual(opened, [], "화면 스레드에서 DB 를 열었다")
+        self.assertEqual(started, [1])
 
 
 class AccountDialogScanTimesTests(_GuiCase):

@@ -582,7 +582,7 @@ class ScanTab(QFrame):
             return
         # 손으로 돌린 스캔만 남긴다. cron 이 돈 것은 `scan_runs` 에 이미 있고,
         # 여기서 알고 싶은 것은 **사람이 직접 돌리는 일이 있는가**다.
-        usage_log.record(self._data_dir, usage_log.SCAN_STARTED)
+        usage_log.record_soon(self._data_dir, usage_log.SCAN_STARTED)
         # 22시에 손으로 돌렸으면 그 밤은 처리된 것이다 - 표시해 두지 않으면
         # 자동 쪽이 같은 밤을 한 번 더 시작한다.
         self._remember_scan_window()
@@ -683,7 +683,7 @@ class ScanTab(QFrame):
 
     def _request_scan_stop(self) -> None:
         if self._scan_worker.request_stop():
-            usage_log.record(self._data_dir, usage_log.SCAN_STOPPED)
+            usage_log.record_soon(self._data_dir, usage_log.SCAN_STOPPED)
             self.status_message.emit(i18n.t("scan.stop_requested"))
         else:
             self.status_message.emit(i18n.t("scan.nothing_running"))
