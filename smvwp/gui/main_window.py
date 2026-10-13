@@ -362,6 +362,9 @@ class MainWindow(QMainWindow):
         self.load_btn.clicked.connect(self._open_load_dialog)
         self.trend_btn = QPushButton()
         self.trend_btn.clicked.connect(self._open_trend_dialog)
+        # 이 도구가 데이터 폴더에 무엇을 얼마나 언제부터 쌓았나 (보기만 한다).
+        self.data_btn = QPushButton()
+        self.data_btn.clicked.connect(self._open_data_dialog)
         for index, button in enumerate((
             self.accounts_btn,
             self.reports_btn,
@@ -369,6 +372,7 @@ class MainWindow(QMainWindow):
             self.trend_btn,
             self.load_btn,
             self.diagnose_btn,
+            self.data_btn,
         )):
             button_grid.addWidget(button, index // 2, index % 2)
         left.addLayout(button_grid)
@@ -678,6 +682,7 @@ class MainWindow(QMainWindow):
         self.load_btn.setText(i18n.t("load.btn.open"))
         self.trend_btn.setText(i18n.t("trend.btn.open"))
         self.diagnose_btn.setText(i18n.t("dashboard.btn.diagnose"))
+        self.data_btn.setText(i18n.t("data.btn.open"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
 
         self.home_scan_link.setText(i18n.t("tab.scan"))
@@ -1234,6 +1239,14 @@ class MainWindow(QMainWindow):
             account_id=self._account_id_at_row(self.table.currentRow()) or "",
             parent=self,
         ).exec_()
+
+    def _open_data_dialog(self) -> None:
+        """데이터 폴더 창. 읽기는 창 안의 작업 스레드가 한다."""
+
+        from .data_dialog import DataFolderDialog
+
+        usage_log.record_soon(self._data_dir, usage_log.DATA_VIEWED)
+        DataFolderDialog(self._data_dir, self._config, parent=self).exec_()
 
     def _open_load_dialog(self) -> None:
         """서버 부하 이력 창.

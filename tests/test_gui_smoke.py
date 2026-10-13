@@ -71,6 +71,7 @@ _BACKGROUND = (
     "smvwp.scheduler.DashboardWorker.refresh_async",
     "smvwp.scheduler.ScanStatusWorker.refresh_async",
     "smvwp.gui.main_window._FreshnessReader.start",
+    "smvwp.gui.data_dialog._InventoryReader.start",
 )
 
 
@@ -1781,6 +1782,54 @@ class LoadingProgressTests(_GuiCase):
         self.assertFalse(tab.first_load_bar.isHidden())
         self.assertEqual(tab.first_load_bar.value(), 2)
         self.assertIn("3/12", tab.scan_status_label.text())
+
+
+class DataFolderDialogTests(_GuiCase):
+    """데이터 폴더 창 - 무엇이 얼마나 언제부터 쌓였나, 읽는 동안 무엇을 하나."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.data_dialog import DataFolderDialog
+
+        self.dialog = DataFolderDialog(self.data_dir, self.config)
+        self.dialog.show()
+        _app().processEvents()
+
+    def tearDown(self):
+        self.dialog.close()
+        super().tearDown()
+
+    def test_progress_while_reading(self):
+        from smvwp import data_inventory
+
+        self.dialog._on_progress(3, len(data_inventory.STEPS), data_inventory.STEPS[2])
+        self.assertIn(f"3/{len(data_inventory.STEPS)}", self.dialog.loading_label.text())
+        self.assertFalse(self.dialog.loading_row.isHidden())
+
+    def test_every_item_becomes_a_row_and_the_scan_db_opens_up(self):
+        from smvwp import data_inventory, i18n, scan_store
+
+        with scan_store.session(self.data_dir) as conn:
+            scan_store.start_run(conn, "run-1", "cron")
+        inventory = data_inventory.build(self.data_dir, self.config)
+        self.dialog._on_ready(inventory)
+
+        tree = self.dialog.tree
+        self.assertEqual(tree.topLevelItemCount(), len(inventory.items))
+        scan_row = next(
+            tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+            if tree.topLevelItem(i).text(0) == i18n.t("data.item.scan")
+        )
+        self.assertEqual(scan_row.childCount(), 7)
+        self.assertTrue(self.dialog.loading_row.isHidden())
+        self.assertTrue(self.dialog.summary_label.text())
+
+    def test_the_main_window_has_a_button_for_it(self):
+        from smvwp.gui.main_window import MainWindow
+
+        window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(window.close)
+        self.assertTrue(window.data_btn.text())
 
 
 class AccountDialogScanTimesTests(_GuiCase):

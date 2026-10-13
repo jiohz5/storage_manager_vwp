@@ -61,6 +61,8 @@ ACCOUNT_VIEWED = "account.detail"
 # "무엇부터 할까" 줄을 눌러 안내를 연 것. detail 에 종류(full, no_backup ...)를
 # 남긴다 - 어떤 경고가 실제로 사람을 움직이는지가 여기서 보인다.
 GUIDE_OPENED = "priority.open"
+# 데이터 폴더 창을 연 것.
+DATA_VIEWED = "data.open"
 
 # 기록을 얼마나 보관하는가.
 #
