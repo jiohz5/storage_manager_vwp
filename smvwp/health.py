@@ -331,13 +331,11 @@ def summarize(per_account: Sequence[Sequence[RunHealth]]) -> HealthSummary:
 # ---------------------------------------------------------------------------
 
 
-def _sizes_for(conn, account_id: str) -> Optional[Dict[str, int]]:
-    """이 계정의 마지막 완료 세대 `{경로: KB}`. 완료된 스캔이 없으면 None."""
+def _sizes_for(conn, account_id: str, generation) -> Optional[Dict[str, int]]:
+    """이 계정의 그 세대 `{경로: KB}`. 완료된 스캔이 없으면 None."""
 
     from . import scan_store
 
-    state = scan_store.get_account_state(conn, account_id)
-    generation = state.last_completed_generation
     if not generation:
         return None
     return {
@@ -346,41 +344,81 @@ def _sizes_for(conn, account_id: str) -> Optional[Dict[str, int]]:
     }
 
 
+# 남겨 둔 대조 결과의 형식. `RunHealth` 의 열이나 대조 규칙을 바꾸면 올린다 - 옛 것은
+# 쓰지 않고 다시 대조한다. 깜빡해도 다음 야간 스캔이 새 규칙으로 다시 남긴다.
+STORED_FORMAT = 1
+
+
 def check_all(data_dir, config, cache: Optional[dict] = None) -> HealthSummary:
-    """설정에 있는 프로젝트 계정들을 한 번에 대조한다.
+    """설정에 있는 프로젝트 계정들을 한 번에 대조한다 (읽기만 한다).
 
-    파일시스템을 다시 뒤지지 않는다 - 야간 스캔이 남긴 기록끼리 맞춘다.
-    다만 계정마다 DB 조회가 한 번씩 있으므로, 화면에서는 작업 스레드로 부른다.
+    파일시스템을 다시 뒤지지 않는다 - 야간 스캔이 남긴 기록끼리 맞춘다. 다만
+    대조는 계정마다 그 세대의 디렉터리를 전부 읽는다 (경로 수만 개면 수 MB).
+    그래서 두 겹으로 피한다:
 
-    `cache` 를 주면 **세대와 계정 설정이 그대로인 동안** 지난 결과를 돌려준다.
-    대조는 계정마다 그 세대의 디렉터리를 전부 읽는데(경로 수만 개면 수 MB),
-    홈은 이것을 창을 열 때와 15분마다 불렀다 - 스캔은 하루 한 번 끝나므로
-    나머지는 모두 같은 답을 NFS 에서 다시 읽는 것이었다.
+    - 야간 스캔이 끝날 때 남긴 결과(`save_results`)가 있고 그 입력(세대·연결·
+      이름·경로)이 지금과 같으면 그것을 쓴다. 창을 열 때마다 하던 대조가 없어진다.
+    - `cache` 를 주면 세대와 계정 설정이 그대로인 동안 지난 답을 돌려준다 (홈은
+      15분마다 부른다).
     """
 
     from . import config as config_module
     from . import scan_store
 
     with scan_store.session(data_dir) as conn:
+        generations = _generations(conn)
         if cache is not None:
-            key = _cache_key(conn, config_module.enabled_accounts(config))
+            key = _cache_key(config_module.enabled_accounts(config), generations)
             if cache.get("key") == key:
                 return cache["summary"]
-        summary = _check_all(conn, config)
+        stored = {
+            row["account_id"]: row
+            for row in conn.execute("SELECT account_id, input_key, items FROM health_results")
+        }
+        summary = summarize([items for _account, items in _each_project(conn, config, generations, stored)])
     if cache is not None:
         cache["key"], cache["summary"] = key, summary
     return summary
 
 
-def _cache_key(conn, accounts) -> tuple:
-    """대조 결과를 바꾸는 것 전부 - 계정 설정과, 대조에 드는 계정들의 완료 세대."""
+def save_results(data_dir, config) -> int:
+    """프로젝트 계정마다 대조해 스캔 DB 에 남긴다 - 야간 스캔이 끝날 때 부른다.
 
-    generations = {
+    지금 설정의 프로젝트 계정 것만 남긴다 (예전 줄은 지운다). 남긴 줄 수를 준다."""
+
+    import json
+    from dataclasses import asdict
+
+    from . import scan_store
+
+    with scan_store.session(data_dir) as conn:
+        generations = _generations(conn)
+        rows = [
+            (account.account_id, _input_key(account, generations),
+             json.dumps([asdict(item) for item in items], ensure_ascii=False),
+             scan_store.utc_now_iso())
+            for account, items in _each_project(conn, config, generations, stored={})
+        ]
+        conn.execute("DELETE FROM health_results")
+        conn.executemany("INSERT INTO health_results VALUES (?, ?, ?, ?)", rows)
+        conn.commit()
+    return len(rows)
+
+
+def _generations(conn) -> Dict[str, Optional[int]]:
+    """계정마다 완료된 세대 (스캔 상태에 줄이 없는 계정은 빠진다). 쓰지 않는다."""
+
+    return {
         row["account_id"]: row["last_completed_generation"]
         for row in conn.execute(
             "SELECT account_id, last_completed_generation FROM account_scan_state"
         )
     }
+
+
+def _cache_key(accounts, generations) -> tuple:
+    """대조 결과를 바꾸는 것 전부 - 계정 설정과, 대조에 드는 계정들의 완료 세대."""
+
     return tuple(
         (account.account_id, account.name, account.path, account.kind,
          account.backup_account_id, generations.get(account.account_id),
@@ -389,24 +427,58 @@ def _cache_key(conn, accounts) -> tuple:
     )
 
 
-def _check_all(conn, config) -> HealthSummary:
+def _input_key(account, generations) -> str:
+    """프로젝트 계정 하나의 대조 입력. 이것이 같으면 대조 결과도 같다."""
+
+    import json
+
+    backup = account.backup_account_id
+    return json.dumps([
+        STORED_FORMAT, account.account_id, account.name, account.path, backup,
+        generations.get(account.account_id), generations.get(backup) if backup else None,
+    ], ensure_ascii=False)
+
+
+def _stored_items(row, key) -> Optional[List[RunHealth]]:
+    """남겨 둔 결과가 지금 입력의 것이면 그 목록, 아니면 None (다시 대조한다)."""
+
+    import json
+
+    if row is None or row["input_key"] != key:
+        return None
+    try:
+        return [RunHealth(**item) for item in json.loads(row["items"])]
+    except (TypeError, ValueError):
+        return None
+
+
+def _each_project(conn, config, generations, stored):
+    """켜진 프로젝트 계정마다 `(계정, RunHealth 목록)`.
+
+    남겨 둔 결과의 입력이 지금과 같으면 그것을, 아니면 두 계정의 디렉터리를 읽어
+    대조한다. 백업 계정은 설정에 없어도 id 로 스캔 DB 에서 읽는다."""
+
     from . import config as config_module
 
     sized: Dict[str, Optional[Dict[str, int]]] = {}
 
     def sizes(account_id: str):
         if account_id not in sized:
-            sized[account_id] = _sizes_for(conn, account_id)
+            sized[account_id] = _sizes_for(conn, account_id, generations.get(account_id))
         return sized[account_id]
 
-    groups = []
     for account in config_module.enabled_accounts(config):
         if not account.kind_is_project:
             # 백업 계정에는 프로젝트의 사본이 들어온다. 거기서도 run
             # 디렉터리를 찾으면 같은 과제가 두 번 보고된다.
             continue
+        remembered = _stored_items(stored.get(account.account_id), _input_key(account, generations))
+        if remembered is not None:
+            yield account, remembered
+            continue
         project_sizes = sizes(account.account_id)
         if not project_sizes:
+            yield account, []
             continue
 
         backup_sizes = None
@@ -415,10 +487,6 @@ def _check_all(conn, config) -> HealthSummary:
             # 없는 것(None)과 달라야 판정 문구가 갈린다.
             backup_sizes = sizes(account.backup_account_id) or {}
 
-        groups.append(
-            check_account(
-                account.account_id, account.name, account.path,
-                project_sizes, backup_sizes,
-            )
+        yield account, check_account(
+            account.account_id, account.name, account.path, project_sizes, backup_sizes,
         )
-    return summarize(groups)

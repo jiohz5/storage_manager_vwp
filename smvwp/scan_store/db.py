@@ -217,6 +217,18 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_events_time
     ON usage_events(happened_at);
 
+-- 야간 스캔이 끝날 때 남긴 헬스체크 대조 결과 (프로젝트 계정마다 한 줄).
+--
+-- 대조는 프로젝트와 연결된 백업 계정의 디렉터리 전체를 읽는다 (계정 20개면 73MB).
+-- 창은 이것을 열 때마다 했는데, 입력(세대·연결·이름·경로)이 같으면 답도 같다.
+-- 스캔이 남긴 것을 창이 입력이 같을 때만 쓴다 (`health.check_all`).
+CREATE TABLE IF NOT EXISTS health_results (
+    account_id TEXT PRIMARY KEY,
+    input_key TEXT NOT NULL,
+    items TEXT NOT NULL,
+    computed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,

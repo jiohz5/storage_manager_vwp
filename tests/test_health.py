@@ -314,12 +314,8 @@ if __name__ == "__main__":  # pragma: no cover
     unittest.main()
 
 
-class RememberedCheckTests(unittest.TestCase):
-    """`cache` 를 주면 세대와 계정 설정이 그대로인 동안 다시 읽지 않는다.
-
-    대조는 계정마다 그 세대의 디렉터리를 전부 읽는다(경로 수만 개면 수 MB).
-    홈은 이것을 창을 열 때와 15분마다 불렀는데, 스캔은 하루 한 번 끝나므로
-    나머지는 같은 답을 NFS 에서 다시 읽는 것이었다. 실측(계정 20개): 한 번에 73MB."""
+class _ScannedPairCase(unittest.TestCase):
+    """스캔을 한 번 마친 프로젝트 계정과, 연결된 백업 계정."""
 
     def setUp(self):
         import tempfile
@@ -362,6 +358,14 @@ class RememberedCheckTests(unittest.TestCase):
             summary = health.check_all(self.data_dir, self.config, cache=cache)
         return summary, read.call_count
 
+
+class RememberedCheckTests(_ScannedPairCase):
+    """`cache` 를 주면 세대와 계정 설정이 그대로인 동안 다시 읽지 않는다.
+
+    대조는 계정마다 그 세대의 디렉터리를 전부 읽는다(경로 수만 개면 수 MB).
+    홈은 이것을 창을 열 때와 15분마다 불렀는데, 스캔은 하루 한 번 끝나므로
+    나머지는 같은 답을 NFS 에서 다시 읽는 것이었다. 실측(계정 20개): 한 번에 73MB."""
+
     def test_the_same_generations_are_not_read_again(self):
         cache = {}
         first, first_reads = self.reads(cache)
@@ -386,3 +390,55 @@ class RememberedCheckTests(unittest.TestCase):
         summary, reads = self.reads(cache)
         self.assertEqual(reads, 1)
         self.assertEqual({item.status for item in summary.items}, {health.NO_LINK})
+
+
+class StoredResultsTests(_ScannedPairCase):
+    """야간 스캔이 끝날 때 남긴 대조 결과를, 입력이 같으면 창이 그대로 쓴다.
+
+    `cache` 는 창 하나 안에서만 산다 - 창을 열 때마다 처음 한 번은 두 계정의
+    디렉터리를 전부 읽었다 (계정 20개면 73MB). 입력(세대·연결·이름·경로)이 같으면
+    답도 같으므로, 그 대조는 사람이 기다리지 않는 밤에 한 번 한다."""
+
+    def items(self, summary):
+        from dataclasses import asdict
+
+        return [asdict(item) for item in summary.items]
+
+    def saved(self):
+        fresh, _ = self.reads(None)
+        health.save_results(self.data_dir, self.config)
+        return fresh
+
+    def test_the_window_uses_what_the_scan_left(self):
+        fresh = self.saved()
+        summary, reads = self.reads(None)
+        self.assertEqual(reads, 0)
+        self.assertEqual(self.items(summary), self.items(fresh))
+        self.assertTrue(summary.items)
+
+    def test_reading_leaves_nothing_behind(self):
+        self.reads(None)
+        with self.scan_store.session(self.data_dir) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM health_results").fetchone()[0], 0)
+
+    def test_a_renamed_account_is_compared_again(self):
+        self.saved()
+        self.project.name = "renamed"
+        summary, reads = self.reads(None)
+        self.assertGreater(reads, 0)
+        self.assertEqual({item.account_name for item in summary.items}, {"renamed"})
+
+    def test_a_newer_backup_scan_is_compared_again(self):
+        self.saved()
+        self.complete(self.backup.account_id, 2, {"/bk/과제A/01_run_0908": 700 * GB})
+        _, reads = self.reads(None)
+        self.assertGreater(reads, 0)
+
+    def test_results_of_an_older_format_are_not_used(self):
+        from unittest.mock import patch
+
+        self.saved()
+        with patch.object(health, "STORED_FORMAT", health.STORED_FORMAT + 1):
+            _, reads = self.reads(None)
+        self.assertGreater(reads, 0)
+

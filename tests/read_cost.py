@@ -79,9 +79,9 @@ def measure(name):
 
 
 def report():
-    print(f"{'경로':<34}{'초':>8}{'SQL문':>8}{'연결':>6}{'읽은MB':>10}")
+    print(f"{'경로':<38}{'초':>8}{'SQL문':>8}{'연결':>6}{'읽은MB':>10}")
     for name, seconds, statements, connections, read in ROWS:
-        print(f"{name:<34}{seconds:>8.2f}{statements:>8}{connections:>6}{read / 1e6:>10.1f}")
+        print(f"{name:<38}{seconds:>8.2f}{statements:>8}{connections:>6}{read / 1e6:>10.1f}")
 
 
 # -- 시험 데이터 -------------------------------------------------------------
@@ -175,13 +175,17 @@ def main() -> int:
         print(f"{root} 가 비어 있지 않습니다 - 빈 디렉터리를 주세요.", file=sys.stderr)
         return 2
 
-    from smvwp import account_detail, dashboard, data_inventory, freshness, nightly_scan
+    from smvwp import account_detail, dashboard, data_inventory, freshness, health, nightly_scan
 
     started = time.perf_counter()
     data_dir, config = build(root, args.accounts, args.days)
     print(f"만들기 {time.perf_counter() - started:.0f}초 - 표본 DB "
           f"{store.db_path(data_dir).stat().st_size / 1e6:.0f}MB, 스캔 DB "
           f"{scan_store.db_path(data_dir).stat().st_size / 1e6:.0f}MB\n")
+
+    with measure("홈 첫 읽기 (밤 스캔이 대조를 남기기 전)"):
+        dashboard.read_dashboard(data_dir, config, cache={})
+    health.save_results(data_dir, config)   # 야간 스캔이 끝날 때 하는 일
 
     home, scan_tab = {}, {}
     with measure("홈 첫 읽기"):

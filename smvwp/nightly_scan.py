@@ -850,6 +850,7 @@ def run_nightly_scan(
     finished_at = clock()
     _notify_growth(data_dir, config, outcomes, finished_at)
     _prune_orphan_search_indexes(data_dir, config)
+    _save_health(data_dir, config)
     _generate_reports(data_dir, config, finished_at)
     return RunSummary(
         started=True,
@@ -1191,6 +1192,20 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
             search_index.prune_orphans(conn, active)
     except Exception:  # pragma: no cover - 방어적 처리
         logger.exception("검색 인덱스 정리 실패")
+
+
+def _save_health(data_dir: Path, config: config_module.AppConfig) -> None:
+    """헬스체크 대조 결과를 남긴다 - 창이 열 때마다 대조하지 않게 (`health.check_all`).
+
+    대조는 프로젝트·백업 계정의 디렉터리 전체를 읽는다. 사람이 기다리는 창보다
+    밤의 스캔이 하는 편이 낫다. 실패해도 창이 스스로 대조하므로 기록만 한다."""
+
+    from . import health
+
+    try:
+        health.save_results(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("헬스체크 결과를 남기지 못했습니다 (창이 스스로 대조합니다)")
 
 
 def _generate_reports(data_dir: Path, config: config_module.AppConfig, now: datetime) -> None:

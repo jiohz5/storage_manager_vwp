@@ -417,6 +417,22 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             self.assertEqual(growth.call_count, 1)
 
+    def test_a_finished_scan_leaves_the_health_check_for_the_window(self):
+        """대조(헬스체크)는 두 계정의 디렉터리를 전부 읽는다 - 창이 열 때마다 하지
+        않도록 사람이 기다리지 않는 밤에 남겨 둔다."""
+
+        from smvwp import health
+
+        config_module.set_account_kind(
+            self.config, self.account.account_id, config_module.ACCOUNT_KIND_PROJECT
+        )
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        with scan_store.session(self.data_dir) as conn:
+            saved = [row[0] for row in conn.execute("SELECT account_id FROM health_results")]
+        self.assertEqual(saved, [self.account.account_id])
+        with patch("smvwp.scan_store.tree_entries", side_effect=AssertionError("다시 대조했다")):
+            health.check_all(self.data_dir, self.config)
+
     def two_generations(self, recorded_times=True):
         """세대 1, 2 를 결과 표에 바로 남긴다 (`dir1` 과 그 안의 `sub`)."""
 
