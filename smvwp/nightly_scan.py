@@ -60,6 +60,7 @@ from . import (
     scan_store,
     scan_window,
     search_index,
+    sqlite_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -1322,16 +1323,22 @@ def get_status_snapshot(
     top_n = top_n or config.settings.detail_scan_top_n
     now = clock()
 
-    with scan_store.session(data_dir) as conn:
+    # 한 번의 읽기로 묶는다 (`sqlite_db.read_snapshot`): 계정마다 문이 여럿이라 스캔
+    # 중 5초마다 120개 넘는 잠금 왕복이었고, 계정 사이에 스캔이 쓴 것이 섞였다.
+    # 그래서 여기서는 쓰지 않는다 - 상태는 행을 만들지 않는 쪽으로 한 번에 읽는다.
+    with scan_store.session(data_dir) as conn, sqlite_db.read_snapshot(conn):
         latest_run_row = scan_store.latest_run(conn)
         latest_run = dict(latest_run_row) if latest_run_row is not None else None
+        states = scan_store.account_states(conn)
 
         accounts_snapshot = []
         for index, account in enumerate(config.accounts, start=1):
             # 화면이 첫 읽기 동안 "계정 3/12" 로 보여 준다 (작업 스레드에서 불린다).
             if on_account is not None:
                 on_account(index, len(config.accounts))
-            state = scan_store.get_account_state(conn, account.account_id)
+            state = states.get(account.account_id) or scan_store.AccountScanState(
+                account_id=account.account_id
+            )
             current_gen = state.last_completed_generation
             previous_gen = current_gen - 1 if current_gen else None
             key = (current_gen, top_n, config.settings.growth_list_max_depth)

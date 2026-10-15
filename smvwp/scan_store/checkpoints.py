@@ -100,6 +100,23 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
         )
         conn.commit()
         return AccountScanState(account_id=account_id)
+    return _state_from_row(row)
+
+
+def account_states(conn: sqlite3.Connection) -> Dict[str, AccountScanState]:
+    """모든 계정의 스캔 상태 `{account_id: 상태}` - 쿼리 하나, **쓰지 않는다.**
+
+    없는 계정은 빠진다 (`get_account_state` 와 달리 행을 만들어 두지 않는다).
+    읽기 전용 화면이 쓴다: 계정마다 묻으면 문이 계정 수만큼이고, 행을 만드는
+    쓰기가 섞이면 한 읽기 트랜잭션으로 묶을 수 없다 (`sqlite_db.read_snapshot`)."""
+
+    return {
+        row["account_id"]: _state_from_row(row)
+        for row in conn.execute("SELECT * FROM account_scan_state")
+    }
+
+
+def _state_from_row(row) -> AccountScanState:
     return AccountScanState(
         account_id=row["account_id"],
         last_completed_generation=row["last_completed_generation"],

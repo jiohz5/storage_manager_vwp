@@ -127,6 +127,32 @@ def session(connect_fn: Callable[[Path], sqlite3.Connection], data_dir: Path) ->
         conn.close()
 
 
+@contextmanager
+def read_snapshot(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """블록 안의 읽기를 **한 번의 읽기 트랜잭션**으로 묶는다 (읽기 전용 블록에만).
+
+    자동 커밋에서는 SELECT 하나마다 공유 잠금을 잡고 놓는다. 데이터 디렉터리가
+    NFS 면 그 하나가 fcntl 잠금 왕복 몇 번이고, 스캔 상태 한 번에 문이 120개를
+    넘었다 (스캔 중에는 5초마다). 묶으면 잠금을 한 번 잡고, 덤으로 모든 계정을
+    **같은 시점**으로 본다 - 계정 하나를 읽는 사이에 스캔이 다음 계정을 써도
+    섞이지 않는다.
+
+    대가는 잠금을 쥔 시간이다. DELETE 저널이면 그동안 다른 프로세스의 커밋이
+    기다린다(최대 `CONNECT_TIMEOUT_SECONDS`). 그래서 문이 많고 짧은 읽기에만
+    쓰고, 세대 전체를 읽는 긴 읽기(헬스체크 등)에는 쓰지 않는다.
+
+    **안에서 쓰지 않는다.** 읽던 트랜잭션이 쓰기로 올라가려 할 때 다른 쓰기가
+    기다리고 있으면 SQLite 는 기다리지 않고 곧바로 "database is locked" 를 준다
+    (서로를 기다리는 꼴이라). 끝은 되돌리기다 - 읽기만 했으니 잠금을 놓을 뿐이다.
+    """
+
+    conn.execute("BEGIN")
+    try:
+        yield conn
+    finally:
+        conn.rollback()
+
+
 def apply_journal_mode(conn: sqlite3.Connection, data_dir: Path) -> str:
     """이 위치에 안전한 journal 모드로 맞춘다. 최종 모드를 돌려준다.
 

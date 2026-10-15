@@ -548,6 +548,56 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertFalse(scan_lock.is_locked(self.data_dir))
 
 
+class StatusIsOneReadTests(unittest.TestCase):
+    """스캔 상태는 **한 번의 읽기**다 (`sqlite_db.read_snapshot`).
+
+    계정마다 문이 여럿이라 자동 커밋으로는 상태 한 번에 잠금 왕복이 120번을 넘었다
+    (데이터 디렉터리가 NFS 면 fcntl 잠금 하나가 네트워크 왕복 몇 번, 스캔 중에는
+    5초마다). 묶으면 잠금을 한 번 잡고, 모든 계정을 같은 시점으로 본다."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        self.config = config_module.load_config(self.data_dir)
+        self.accounts = []
+        for name in ("a", "b"):
+            (root / name).mkdir()
+            self.accounts.append(
+                config_module.add_account(self.config, name, str(root / name), data_dir=self.data_dir)
+            )
+
+    def test_every_account_is_seen_at_the_same_moment(self):
+        """계정 a 를 읽은 뒤 스캔이 계정 b 를 써도, 이번 상태에는 섞이지 않는다."""
+
+        with scan_store.session(self.data_dir):
+            pass   # DB 를 만든다 - 이 위치에 맞는 저널 모드로
+        if (scan_store.journal_mode(self.data_dir) or "").lower() != "wal":
+            self.skipTest("WAL 에서만 읽는 동안 다른 연결이 커밋할 수 있다 (NFS 는 DELETE)")
+        b = self.accounts[1].account_id
+
+        def scan_writes_b(index, _total):
+            if index == 2:
+                with scan_store.session(self.data_dir) as writer:
+                    scan_store.save_tree_entries(writer, b, 1, [("/b/top", 500)], "/b/top")
+
+        snapshot = nightly_scan.get_status_snapshot(
+            self.data_dir, self.config, on_account=scan_writes_b
+        )
+        self.assertIsNone(snapshot.accounts[1].measured_kb)
+        again = nightly_scan.get_status_snapshot(self.data_dir, self.config)
+        self.assertEqual(again.accounts[1].measured_kb, 500)
+
+    def test_reading_the_status_writes_nothing(self):
+        """한 읽기로 묶은 안에서 쓰면(아직 스캔 안 한 계정의 행 만들기) 다른 쓰기가
+        기다리는 순간 곧바로 "database is locked" 가 난다. 읽기는 읽기만 한다."""
+
+        nightly_scan.get_status_snapshot(self.data_dir, self.config)
+        with scan_store.session(self.data_dir) as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM account_scan_state").fetchone()[0], 0)
+
+
 class MarkInterruptedRunTests(unittest.TestCase):
     """창을 닫아 스캔 스레드가 잘렸을 때 실행 상태를 마감한다.
 
