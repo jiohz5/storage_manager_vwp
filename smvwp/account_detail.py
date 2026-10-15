@@ -135,10 +135,14 @@ def read(
     )
     now = now or datetime.now(timezone.utc)
 
+    # 이 계정만 담은 설정으로 묻는다. 예측·스캔 상태·헬스체크는 설정의 계정을
+    # 전부 도는데, 창 하나 띄우려고 스무 계정의 이력과 디렉터리 전체를 읽으면
+    # 데이터 디렉터리가 NFS 일 때 그만큼 늦게 뜬다.
+    one = replace(config, accounts=[account])
     _read_samples(detail, data_dir, account_id, trend_days, now)
-    _read_forecast(detail, data_dir, config, account_id)
-    _read_scan(detail, data_dir, config, account)
-    _read_health(detail, data_dir, config, account_id)
+    _read_forecast(detail, data_dir, one, account_id)
+    _read_scan(detail, data_dir, one, account)
+    _read_health(detail, data_dir, one, account_id)
     return detail
 
 
@@ -147,7 +151,7 @@ def _read_samples(detail, data_dir, account_id, trend_days, now) -> None:
 
     try:
         with store.session(data_dir) as conn:
-            detail.sample = store.latest_samples(conn).get(account_id)
+            detail.sample = store.latest_samples(conn, [account_id]).get(account_id)
             try:
                 since = now - timedelta(days=trend_days)
                 samples = store.samples_since(conn, account_id, since)
@@ -174,15 +178,10 @@ def _read_forecast(detail, data_dir, config, account_id) -> None:
 
 
 def _read_scan(detail, data_dir, config, account) -> None:
-    """야간 스캔이 이 계정에 대해 남긴 것.
-
-    **이 계정만 담은 설정으로 묻는다.** `get_status_snapshot` 은 계정마다 십여
-    개의 쿼리를 던지므로, 계정이 스물이면 창 하나 띄우는 데 그 전부를 읽게
-    된다."""
+    """야간 스캔이 이 계정에 대해 남긴 것 (`config` 는 이 계정만 담은 것)."""
 
     try:
-        one = replace(config, accounts=[account])
-        snapshot = nightly_scan.get_status_snapshot(data_dir, one)
+        snapshot = nightly_scan.get_status_snapshot(data_dir, config)
         detail.scan = next(iter(snapshot.accounts), None)
         if detail.scan is not None:
             detail.large_files = large_files.build(
@@ -196,8 +195,8 @@ def _read_scan(detail, data_dir, config, account) -> None:
 def _read_health(detail, data_dir, config, account_id) -> None:
     """백업이 된 과제와 안 된 과제.
 
-    `check_all` 은 전체를 보지만, 이 계정 것만 걸러 쓴다 - 대조는 **연결된
-    백업 계정**의 내용을 함께 봐야 하므로 이 계정만 떼어 낼 수가 없다."""
+    `config` 는 이 계정만 담은 것이다. 대조는 **연결된 백업 계정**의 내용도 보지만
+    그것은 계정 id 로 스캔 DB 에서 읽으므로 설정에 백업 계정이 없어도 된다."""
 
     try:
         summary = health.check_all(data_dir, config)

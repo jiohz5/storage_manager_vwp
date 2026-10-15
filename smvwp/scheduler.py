@@ -302,6 +302,9 @@ class DashboardWorker(ThreadWorker):
         super().__init__(parent)
         self._data_dir = data_dir
         self._get_config = get_config
+        # 세대가 바뀌어야 달라지는 것 (`dashboard.read_dashboard` 의 cache).
+        # 이 작업자만 쓴다 - 한 번에 하나만 돈다.
+        self._settled: dict = {}
 
     def refresh_async(self) -> bool:
         """읽기를 시작한다. 이미 돌고 있으면 끝난 뒤 한 번 더 읽는다."""
@@ -313,6 +316,7 @@ class DashboardWorker(ThreadWorker):
         return dashboard.read_dashboard(
             self._data_dir, self._get_config(),
             on_step=lambda index, total, key: emit_safely(self, "progress", index, total, key),
+            cache=self._settled,
         )
 
 

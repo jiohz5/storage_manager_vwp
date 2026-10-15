@@ -66,6 +66,8 @@ class AccountScanState:
     last_completed_generation: Optional[int] = None
     # 그 세대를 끝낸 시각 (ISO, UTC). 야간 실행이 "이 밤에 이미 끝냈나" 를 본다.
     last_completed_at: Optional[str] = None
+    # 그 직전 세대(`last_completed_generation - 1`)를 끝낸 시각. 모르면 None.
+    previous_completed_at: Optional[str] = None
     # 계정 경로를 못 봐 건너뛴 때·까닭·세부 (OS 오류 문구). 다시 보이면 비운다.
     unavailable_at: Optional[str] = None
     unavailable_reason: Optional[str] = None
@@ -102,6 +104,7 @@ def get_account_state(conn: sqlite3.Connection, account_id: str) -> AccountScanS
         account_id=row["account_id"],
         last_completed_generation=row["last_completed_generation"],
         last_completed_at=row["last_baseline_completed_at"],
+        previous_completed_at=row["previous_baseline_completed_at"],
         unavailable_at=row["unavailable_at"],
         unavailable_reason=row["unavailable_reason"],
         unavailable_detail=row["unavailable_detail"] or "",
@@ -146,13 +149,19 @@ def mark_generation_completed(
     generation: int,
     completed_at: Optional[str] = None,
 ) -> None:
-    """`completed_at` 을 주지 않으면 지금 시각. 야간 스캔은 자기 시계로 준다."""
+    """`completed_at` 을 주지 않으면 지금 시각. 야간 스캔은 자기 시계로 준다.
+
+    앞 세대의 완료 시각은 `previous_baseline_completed_at` 으로 옮긴다 - 바로 앞
+    세대일 때만. 세대가 건너뛰었으면(예전 DB) 비워 두고, 읽는 쪽이 결과 표에서
+    찾는다. SQLite 의 UPDATE 는 오른쪽 식에서 **바꾸기 전** 값을 본다."""
 
     get_account_state(conn, account_id)  # 행이 없으면 만들어 둠
     conn.execute(
-        "UPDATE account_scan_state SET last_completed_generation = ?, "
-        "last_baseline_completed_at = ? WHERE account_id = ?",
-        (generation, completed_at or utc_now_iso(), account_id),
+        "UPDATE account_scan_state SET "
+        "previous_baseline_completed_at = CASE WHEN last_completed_generation = ? "
+        "THEN last_baseline_completed_at END, "
+        "last_completed_generation = ?, last_baseline_completed_at = ? WHERE account_id = ?",
+        (generation - 1, generation, completed_at or utc_now_iso(), account_id),
     )
     conn.commit()
 

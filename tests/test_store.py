@@ -85,6 +85,82 @@ class StoreTests(unittest.TestCase):
                 conn.close()
 
 
+class ReadsWhatItNeedsTests(unittest.TestCase):
+    """표본은 15분마다 모든 계정 것이 한꺼번에 들어가 90일이면 십수만 줄이다.
+
+    가장 최근 표본 찾기, "가장 최근 수집은 언제", 오래된 표본 정리가 모두 표나
+    인덱스를 처음부터 끝까지 훑었다 (실측 계정 20개: 각각 24MB, 24MB, 30MB). 홈을
+    읽을 때마다, 수집할 때마다(15분) 그만큼이었고, 데이터 디렉터리가 NFS 면 그대로
+    네트워크 읽기다."""
+
+    ACCOUNTS = 5
+    STEPS = 300
+
+    def setUp(self):
+        from tests import support
+
+        self.support = support
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.conn = store.connect(Path(tmp.name))
+        self.addCleanup(self.conn.close)
+        self.now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+        # 넣는 쪽은 여기서 보는 것이 아니다 - 줄을 직접 넣는다.
+        self.conn.executemany(
+            "INSERT INTO samples (account_id, collected_at, ok, byte_pct) VALUES (?, ?, 1, ?)",
+            [(f"acct-{a}", (self.now - timedelta(minutes=15 * (self.STEPS - step))).isoformat(),
+              float(step))
+             for step in range(self.STEPS) for a in range(self.ACCOUNTS)],
+        )
+        self.conn.commit()
+        self.rows = self.ACCOUNTS * self.STEPS
+
+    def steps(self, call):
+        with self.support.VmSteps(self.conn) as steps:
+            result = call()
+        return steps.count, result
+
+    def test_latest_samples_for_given_accounts_reads_one_row_each(self):
+        ids = [f"acct-{a}" for a in range(self.ACCOUNTS)]
+        count, latest = self.steps(lambda: store.latest_samples(self.conn, ids))
+        self.assertLess(count, self.rows)
+        everything = store.latest_samples(self.conn)
+        self.assertEqual(set(latest), set(ids))
+        for account_id in ids:
+            self.assertEqual(latest[account_id], everything[account_id])
+            self.assertEqual(latest[account_id].byte_pct, float(self.STEPS - 1))
+
+    def test_an_account_without_samples_is_simply_absent(self):
+        self.assertEqual(store.latest_samples(self.conn, ["nobody"]), {})
+
+    def test_the_newest_collection_time_is_found_without_a_scan(self):
+        count, newest = self.steps(lambda: store.newest_collected_at(self.conn))
+        self.assertLess(count, self.rows)
+        self.assertEqual(newest, (self.now - timedelta(minutes=15)).isoformat())
+
+    def test_pruning_with_nothing_old_reads_almost_nothing(self):
+        count, deleted = self.steps(
+            lambda: store.prune_old_samples(self.conn, retention_days=90, now=self.now)
+        )
+        self.assertEqual(deleted, 0)
+        self.assertLess(count, self.rows)
+
+    def test_one_collection_is_one_commit(self):
+        """줄마다 커밋하면 계정 수만큼 커밋한다. NFS 에서 DELETE 저널 커밋 하나는
+        저널 파일 생성·fsync·삭제 왕복이다."""
+
+        commits = []
+        self.conn.set_trace_callback(
+            lambda sql: commits.append(sql) if sql.strip().upper().startswith("COMMIT") else None
+        )
+        try:
+            store.insert_samples(self.conn, [_sample(account_id=f"new-{n}") for n in range(4)])
+        finally:
+            self.conn.set_trace_callback(None)
+        self.assertEqual(len(commits), 1)
+        self.assertEqual(len(store.latest_samples(self.conn, [f"new-{n}" for n in range(4)])), 4)
+
+
 class ConcurrentConnectTests(unittest.TestCase):
     """새 데이터 디렉터리에 여러 스레드가 동시에 붙는 경우.
 

@@ -417,6 +417,59 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             self.assertEqual(growth.call_count, 1)
 
+    def two_generations(self, recorded_times=True):
+        """세대 1, 2 를 결과 표에 바로 남긴다 (`dir1` 과 그 안의 `sub`)."""
+
+        root, sub = f"{self.account_path}/dir1", f"{self.account_path}/dir1/sub"
+        with scan_store.session(self.data_dir) as conn:
+            for generation, (root_kb, sub_kb) in ((1, (100, 10)), (2, (150, 60))):
+                scan_store.save_tree_entries(
+                    conn, self.account.account_id, generation, [(root, root_kb), (sub, sub_kb)], root
+                )
+                if recorded_times:
+                    scan_store.mark_generation_completed(
+                        conn, self.account.account_id, generation,
+                        completed_at=f"2026-10-0{generation}T21:00:00+00:00",
+                    )
+            if not recorded_times:
+                conn.execute(
+                    "INSERT OR REPLACE INTO account_scan_state (account_id, last_completed_generation) "
+                    "VALUES (?, 2)", (self.account.account_id,),
+                )
+                conn.commit()
+        return root, sub
+
+    def test_the_growth_list_follows_the_depth_setting(self):
+        """`growth_list_max_depth`(기본 0) 를 스캔 탭의 증가 경로에도 지킨다.
+
+        보고서와 상위 경로는 이 설정을 받았는데 스캔 탭의 증가 경로만 빠져 늘 깊이
+        1 까지 나왔다 - 부모와 그 안의 자식이 나란히 떠 합계가 겹쳐 보였다 (설정
+        주석이 막으려던 바로 그것). 덤으로 그 세대의 행을 훨씬 많이 읽었다."""
+
+        root, sub = self.two_generations()
+        entry = nightly_scan.get_status_snapshot(self.data_dir, self.config).accounts[0]
+        self.assertEqual([row["path"] for row in entry.growth], [root])
+
+        self.config.settings.growth_list_max_depth = 1
+        entry = nightly_scan.get_status_snapshot(self.data_dir, self.config).accounts[0]
+        self.assertEqual({row["path"] for row in entry.growth}, {root, sub})
+
+    def test_scan_dates_come_from_the_times_recorded_when_each_scan_finished(self):
+        """두 스캔의 날짜를 결과 표에서 찾지 않는다 - 그러면 세대의 행을 전부 읽는다."""
+
+        self.two_generations()
+        with patch("smvwp.nightly_scan.scan_store.generation_completed_at",
+                   side_effect=AssertionError("결과 표를 훑었다")):
+            entry = nightly_scan.get_status_snapshot(self.data_dir, self.config).accounts[0]
+        self.assertEqual(entry.current_scan_at, "2026-10-02T21:00:00+00:00")
+        self.assertEqual(entry.previous_scan_at, "2026-10-01T21:00:00+00:00")
+
+    def test_an_old_database_without_the_times_still_has_dates(self):
+        self.two_generations(recorded_times=False)
+        entry = nightly_scan.get_status_snapshot(self.data_dir, self.config).accounts[0]
+        self.assertIsNotNone(entry.current_scan_at)
+        self.assertIsNotNone(entry.previous_scan_at)
+
     def flaky_dir1(self):
         real = detail_scan.process_one_checkpoint
 

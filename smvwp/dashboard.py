@@ -92,7 +92,7 @@ class _Steps:
             )
 
 
-def read_dashboard(data_dir: Path, config, on_step=None) -> DashboardData:
+def read_dashboard(data_dir: Path, config, on_step=None, cache=None) -> DashboardData:
     """최신 표본과 FULL 예측을 읽어 온다 (읽기 전용).
 
     예측이 터져도 표본은 돌려준다. 예측 하나 때문에 대시보드 전체가 안 뜨면
@@ -102,12 +102,16 @@ def read_dashboard(data_dir: Path, config, on_step=None) -> DashboardData:
 
     계정마다 30일치 표본은 **한 번만** 읽어 추세와 FULL 예측이 나눠 쓴다. 예전에는
     둘이 같은 것을 따로 읽었고, 이 둘이 읽기 시간의 거의 전부였다.
+
+    `cache`(dict) 를 주면 스캔이 남긴 것 중 **세대가 바뀌어야 달라지는 것**(헬스체크,
+    상위 경로·증감)을 그 안에 기억한다. 홈은 15분마다 다시 읽지만 스캔은 하루
+    한 번 끝난다. 같은 dict 를 계속 넘기는 것은 부르는 쪽(`DashboardWorker`) 몫이다.
     """
 
     step = _Steps(on_step)
     with store.session(data_dir) as conn:
         step("dashboard.step.samples")
-        samples = store.latest_samples(conn)
+        samples = store.latest_samples(conn, [account.account_id for account in config.accounts])
         step("dashboard.step.history")
         history = _read_history(conn, config)
     trends = _read_trends(history)
@@ -126,7 +130,7 @@ def read_dashboard(data_dir: Path, config, on_step=None) -> DashboardData:
         failed = True
 
     step("dashboard.step.plan")
-    plan = _read_plan(data_dir, config, samples)
+    plan = _read_plan(data_dir, config, samples, cache)
     step.finish()
     return DashboardData(
         samples=samples,
@@ -182,7 +186,7 @@ def _read_trends(history: dict) -> dict:
     return result
 
 
-def _read_plan(data_dir, config, samples):
+def _read_plan(data_dir, config, samples, cache=None):
     """처리 우선순위. 터져도 대시보드는 떠야 한다.
 
     용량 표는 이 프로그램의 본체다. 우선순위 계산 하나 때문에 그것까지 못 보게
@@ -191,14 +195,18 @@ def _read_plan(data_dir, config, samples):
     from . import health, nightly_scan, priority
 
     try:
-        summary = health.check_all(data_dir, config)
+        summary = health.check_all(
+            data_dir, config, cache=cache.setdefault("health", {}) if cache is not None else None
+        )
     except Exception:
         logger.exception("헬스체크 실패 (대시보드는 계속합니다)")
         summary = None
 
     scan_accounts = []
     try:
-        scan_accounts = nightly_scan.get_status_snapshot(data_dir, config).accounts
+        scan_accounts = nightly_scan.get_status_snapshot(
+            data_dir, config, cache=cache.setdefault("scan", {}) if cache is not None else None
+        ).accounts
     except Exception:
         logger.exception("스캔 상태 읽기 실패 (대시보드는 계속합니다)")
 

@@ -51,6 +51,15 @@ _INIT_LOCK = threading.Lock()
 # 기다려도 창이 굳지 않는다.
 CONNECT_TIMEOUT_SECONDS = 30
 
+# 연결 하나가 기억해 둘 수 있는 페이지의 상한 (KiB). SQLite 기본은 2MB 다.
+#
+# 홈은 계정마다 30일치 표본을 읽는데, 표본은 15분마다 모든 계정 것이 한꺼번에
+# 들어가므로 한 계정의 줄들이 표 전체에 흩어져 있다. 2MB 로는 다음 계정을 읽을
+# 때 같은 페이지를 다시 파일에서 읽어야 해서, 실측(계정 20개, 90일)으로 18MB 인
+# 30일치를 읽는 데 206MB 를 읽었다. 데이터 디렉터리가 NFS 면 그것이 네트워크
+# 읽기다. 상한일 뿐이라 실제로 읽은 만큼만 쓰고, 연결을 닫으면 돌려준다.
+CACHE_KIB = 64 * 1024
+
 
 def is_busy(exc: BaseException) -> bool:
     """다른 연결이 잡고 있어 못 한 것인가 (잠시 뒤 다시 하면 되는 실패)."""
@@ -80,6 +89,12 @@ def connect(
     conn = sqlite3.connect(str(path), timeout=CONNECT_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     key = str(path)
+    try:
+        # 연결마다의 설정이라 파일에는 아무것도 쓰지 않는다 (잠금도 안 잡는다).
+        conn.execute(f"PRAGMA cache_size = -{CACHE_KIB}")
+    except BaseException:
+        conn.close()
+        raise
     try:
         with _INIT_LOCK:
             if key not in _INITIALIZED or not existed:

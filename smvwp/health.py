@@ -346,44 +346,79 @@ def _sizes_for(conn, account_id: str) -> Optional[Dict[str, int]]:
     }
 
 
-def check_all(data_dir, config) -> HealthSummary:
+def check_all(data_dir, config, cache: Optional[dict] = None) -> HealthSummary:
     """설정에 있는 프로젝트 계정들을 한 번에 대조한다.
 
     파일시스템을 다시 뒤지지 않는다 - 야간 스캔이 남긴 기록끼리 맞춘다.
     다만 계정마다 DB 조회가 한 번씩 있으므로, 화면에서는 작업 스레드로 부른다.
+
+    `cache` 를 주면 **세대와 계정 설정이 그대로인 동안** 지난 결과를 돌려준다.
+    대조는 계정마다 그 세대의 디렉터리를 전부 읽는데(경로 수만 개면 수 MB),
+    홈은 이것을 창을 열 때와 15분마다 불렀다 - 스캔은 하루 한 번 끝나므로
+    나머지는 모두 같은 답을 NFS 에서 다시 읽는 것이었다.
     """
 
     from . import config as config_module
     from . import scan_store
 
     with scan_store.session(data_dir) as conn:
-        cache: Dict[str, Optional[Dict[str, int]]] = {}
+        if cache is not None:
+            key = _cache_key(conn, config_module.enabled_accounts(config))
+            if cache.get("key") == key:
+                return cache["summary"]
+        summary = _check_all(conn, config)
+    if cache is not None:
+        cache["key"], cache["summary"] = key, summary
+    return summary
 
-        def sizes(account_id: str):
-            if account_id not in cache:
-                cache[account_id] = _sizes_for(conn, account_id)
-            return cache[account_id]
 
-        groups = []
-        for account in config_module.enabled_accounts(config):
-            if not account.kind_is_project:
-                # 백업 계정에는 프로젝트의 사본이 들어온다. 거기서도 run
-                # 디렉터리를 찾으면 같은 과제가 두 번 보고된다.
-                continue
-            project_sizes = sizes(account.account_id)
-            if not project_sizes:
-                continue
+def _cache_key(conn, accounts) -> tuple:
+    """대조 결과를 바꾸는 것 전부 - 계정 설정과, 대조에 드는 계정들의 완료 세대."""
 
-            backup_sizes = None
-            if account.backup_account_id:
-                # 연결은 있는데 아직 스캔이 없으면 **빈 사전**이다. 연결이
-                # 없는 것(None)과 달라야 판정 문구가 갈린다.
-                backup_sizes = sizes(account.backup_account_id) or {}
+    generations = {
+        row["account_id"]: row["last_completed_generation"]
+        for row in conn.execute(
+            "SELECT account_id, last_completed_generation FROM account_scan_state"
+        )
+    }
+    return tuple(
+        (account.account_id, account.name, account.path, account.kind,
+         account.backup_account_id, generations.get(account.account_id),
+         generations.get(account.backup_account_id))
+        for account in accounts
+    )
 
-            groups.append(
-                check_account(
-                    account.account_id, account.name, account.path,
-                    project_sizes, backup_sizes,
-                )
+
+def _check_all(conn, config) -> HealthSummary:
+    from . import config as config_module
+
+    sized: Dict[str, Optional[Dict[str, int]]] = {}
+
+    def sizes(account_id: str):
+        if account_id not in sized:
+            sized[account_id] = _sizes_for(conn, account_id)
+        return sized[account_id]
+
+    groups = []
+    for account in config_module.enabled_accounts(config):
+        if not account.kind_is_project:
+            # 백업 계정에는 프로젝트의 사본이 들어온다. 거기서도 run
+            # 디렉터리를 찾으면 같은 과제가 두 번 보고된다.
+            continue
+        project_sizes = sizes(account.account_id)
+        if not project_sizes:
+            continue
+
+        backup_sizes = None
+        if account.backup_account_id:
+            # 연결은 있는데 아직 스캔이 없으면 **빈 사전**이다. 연결이
+            # 없는 것(None)과 달라야 판정 문구가 갈린다.
+            backup_sizes = sizes(account.backup_account_id) or {}
+
+        groups.append(
+            check_account(
+                account.account_id, account.name, account.path,
+                project_sizes, backup_sizes,
             )
+        )
     return summarize(groups)

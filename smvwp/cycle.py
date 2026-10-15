@@ -50,8 +50,7 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
             collect()
 
     with store.session(data_dir) as conn:
-        for record in records:
-            store.insert_sample(conn, record)
+        store.insert_samples(conn, records)
         store.prune_old_samples(conn, settings.sample_retention_days)
 
     # 서버 부하는 스캔 DB 쪽에 남긴다 - 스캔 실행 이력과 같은 곳에 있어야

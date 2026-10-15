@@ -147,7 +147,7 @@ class DashboardRefreshTests(unittest.TestCase):
         gate = threading.Event()
         calls = []
 
-        def read(data_dir, config, on_step=None):
+        def read(data_dir, config, on_step=None, cache=None):
             calls.append(len(calls))
             if len(calls) == 1:
                 gate.wait(5)
@@ -160,6 +160,26 @@ class DashboardRefreshTests(unittest.TestCase):
             gate.set()
             self.assertTrue(wait_until(lambda: not worker.is_running()))
         self.assertEqual(len(calls), 2, "수집 뒤의 새로고침이 버려졌다")
+
+
+    def test_every_read_gets_the_same_memory(self):
+        """스캔이 남긴 것은 세대가 바뀔 때만 다시 읽는다 - 그러려면 읽을 때마다 같은
+        기억(`cache`)을 넘겨야 한다."""
+
+        from smvwp.scheduler import DashboardWorker
+
+        caches = []
+
+        def read(data_dir, config, on_step=None, cache=None):
+            caches.append(cache)
+            return object()
+
+        with patch("smvwp.dashboard.read_dashboard", side_effect=read):
+            worker = DashboardWorker(Path("."), get_config=lambda: None)
+            worker._run()
+            worker._run()
+        self.assertIsInstance(caches[0], dict)
+        self.assertIs(caches[0], caches[1])
 
 
 @unittest.skipUnless(HAVE_QT, "PyQt5 없음")

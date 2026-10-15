@@ -13,6 +13,30 @@ from typing import List, Optional
 from .db import utc_now_iso
 
 
+def _shallow(columns: str, max_depth: int, null_depth: int) -> str:
+    """한 세대에서 깊이가 `max_depth` 이하인 행 - **깊이 인덱스를 타는 모양으로.**
+
+    `COALESCE(depth, n) <= ?` 로 쓰면 SQLite 가 깊이 인덱스를 못 써서 그 세대의
+    행을 **전부** 읽고 걸렀다. 경로가 수만 개인 계정이면 수 MB 이고, 화면은 이것을
+    계정마다 불렀다 - 데이터 디렉터리가 NFS 면 스캔 탭을 처음 열 때와 스캔 중
+    5초마다 그만큼을 네트워크로 읽었다. 깊이 범위와 '깊이 없음' 을 따로 묻고
+    합치면 둘 다 인덱스 범위 하나로 끝난다.
+
+    깊이가 없는 행(깊이 열이 생기기 전의 스캔)은 예전처럼 `null_depth` 로 친다.
+    매개변수는 이름으로 받는다 (`:account`, `:generation`, `:max_depth`)."""
+
+    sql = (
+        f"SELECT {columns} FROM baseline_results "
+        "WHERE account_id = :account AND generation = :generation AND depth <= :max_depth"
+    )
+    if null_depth <= max_depth:
+        sql += (
+            f" UNION ALL SELECT {columns} FROM baseline_results "
+            "WHERE account_id = :account AND generation = :generation AND depth IS NULL"
+        )
+    return sql
+
+
 def generation_completed_at(
     conn: sqlite3.Connection, account_id: str, generation: int
 ) -> Optional[str]:
@@ -97,9 +121,10 @@ def top_paths(
     "무엇이 큰가"를 읽기 어렵다. 전체 트리는 트리 화면에서 본다."""
 
     return conn.execute(
-        "SELECT * FROM baseline_results WHERE account_id = ? AND generation = ? "
-        "AND COALESCE(depth, 1) <= ? ORDER BY size_kb DESC LIMIT ?",
-        (account_id, generation, max_depth, limit),
+        f"SELECT * FROM ({_shallow('*', max_depth, null_depth=1)}) "
+        "ORDER BY size_kb DESC, path LIMIT :limit",
+        {"account": account_id, "generation": generation, "max_depth": max_depth,
+         "limit": limit},
     ).fetchall()
 
 
@@ -109,16 +134,16 @@ def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: 
     보이는 문제가 있었다). 증가량 기준 내림차순으로 최대 limit개 반환."""
 
     rows = conn.execute(
-        """
+        f"""
         SELECT cur.path AS path, cur.size_kb AS current_kb, prev.size_kb AS previous_kb
-        FROM baseline_results cur
+        FROM ({_shallow('path, size_kb', max_depth, null_depth=1)}) cur
         LEFT JOIN baseline_results prev
-            ON prev.account_id = cur.account_id AND prev.generation = ? AND prev.path = cur.path
-        WHERE cur.account_id = ? AND cur.generation = ? AND COALESCE(cur.depth, 1) <= ?
-        ORDER BY (cur.size_kb - COALESCE(prev.size_kb, 0)) DESC
-        LIMIT ?
+            ON prev.account_id = :account AND prev.generation = :previous AND prev.path = cur.path
+        ORDER BY (cur.size_kb - COALESCE(prev.size_kb, 0)) DESC, cur.path
+        LIMIT :limit
         """,
-        (previous_generation, account_id, current_generation, max_depth, limit),
+        {"account": account_id, "generation": current_generation,
+         "previous": previous_generation, "max_depth": max_depth, "limit": limit},
     ).fetchall()
     return rows
 
@@ -384,8 +409,7 @@ def measured_total_kb(
     """
 
     row = conn.execute(
-        "SELECT SUM(size_kb) AS total FROM baseline_results "
-        "WHERE account_id = ? AND generation = ? AND COALESCE(depth, 0) = 0",
-        (account_id, generation),
+        f"SELECT SUM(size_kb) AS total FROM ({_shallow('size_kb', 0, null_depth=0)})",
+        {"account": account_id, "generation": generation, "max_depth": 0},
     ).fetchone()
     return row["total"] if row and row["total"] is not None else None

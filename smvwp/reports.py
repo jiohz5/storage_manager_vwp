@@ -106,7 +106,7 @@ def build_daily_report(
 ) -> str:
     now = now or datetime.now(timezone.utc)
     with store.session(data_dir) as conn:
-        latest = store.latest_samples(conn)
+        latest = store.latest_samples(conn, [account.account_id for account in config.accounts])
 
     lines: List[str] = []
     lines.append(f"Storage Manager VWP - {i18n.t('reports.daily')}")

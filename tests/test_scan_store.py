@@ -388,3 +388,99 @@ class GenerationDateTests(ScanStoreTestCase):
         scan_store.seed_checkpoints(conn, "acct-1", scan_store.BASELINE, 1, ["/a"])
         self.assertIsNone(scan_store.generation_completed_at(conn, "acct-1", 1))
 
+
+
+class ShallowRowsTests(ScanStoreTestCase):
+    """상위 경로·증가 경로·잰 용량 합계는 얕은 행 몇 개만 본다 - 세대 전체를 읽지 않는다.
+
+    셋은 `COALESCE(depth, n) <= ?` 로 걸렀는데, 그 모양은 인덱스를 못 타서 세대의
+    행을 **전부** 읽었다. 경로가 수만 개인 계정이면 계정마다 수 MB 이고, 창은
+    스캔 탭을 열 때와 스캔 중 5초마다 그것을 계정 수만큼 읽었다 (NFS 에서는
+    그대로 네트워크 읽기). 실측: 계정 20개 기준 스캔 탭 첫 읽기 430MB, 스캔 중
+    5초마다 36MB."""
+
+    DEEP_ROWS = 3000
+
+    def _generation(self, generation, root_kb, deep_kb=1):
+        entries = [("/acct/a", root_kb), ("/acct/a/kid", root_kb // 2)]
+        entries += [(f"/acct/a/kid/d{n}", deep_kb) for n in range(self.DEEP_ROWS)]
+        scan_store.save_tree_entries(self.conn, "acct-1", generation, entries, "/acct/a")
+
+    def test_reading_does_not_grow_with_the_deep_rows(self):
+        self._generation(1, 1000)
+        self._generation(2, 1500)
+        calls = {
+            "top_paths": lambda: scan_store.top_paths(self.conn, "acct-1", 2, 15, max_depth=0),
+            "growth_delta": lambda: scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=0),
+            "measured_total_kb": lambda: scan_store.measured_total_kb(self.conn, "acct-1", 2),
+        }
+        for name, call in calls.items():
+            with self.subTest(name):
+                with support.VmSteps(self.conn) as steps:
+                    call()
+                self.assertLess(steps.count, self.DEEP_ROWS)
+
+    def test_the_answers_are_the_same_as_before(self):
+        self._generation(1, 1000)
+        self._generation(2, 1500)
+        self.assertEqual(
+            [row["path"] for row in scan_store.top_paths(self.conn, "acct-1", 2, 15, max_depth=1)],
+            ["/acct/a", "/acct/a/kid"],
+        )
+        self.assertEqual(
+            [tuple(row) for row in scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=0)],
+            [("/acct/a", 1500, 1000)],
+        )
+        self.assertEqual(scan_store.measured_total_kb(self.conn, "acct-1", 2), 1500)
+
+    def test_rows_from_before_the_depth_column_keep_their_old_meaning(self):
+        """깊이 열이 생기기 전의 행(깊이 없음)은 상위·증가 경로에서는 깊이 1, 잰
+        용량 합계에서는 깊이 0 으로 쳤다. 인덱스를 타게 바꾸면서 그 뜻을 잃으면
+        안 된다."""
+
+        for generation, size in ((1, 100), (2, 300)):
+            self.conn.execute(
+                "INSERT INTO baseline_results (account_id, generation, path, size_kb, completed_at) "
+                "VALUES ('acct-1', ?, '/old', ?, '2026-01-01T00:00:00+00:00')",
+                (generation, size),
+            )
+        self.conn.commit()
+
+        self.assertEqual(scan_store.top_paths(self.conn, "acct-1", 2, 15, max_depth=0), [])
+        self.assertEqual(
+            [row["path"] for row in scan_store.top_paths(self.conn, "acct-1", 2, 15, max_depth=1)],
+            ["/old"],
+        )
+        self.assertEqual(scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=0), [])
+        self.assertEqual(
+            [tuple(row) for row in scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=1)],
+            [("/old", 300, 100)],
+        )
+        self.assertEqual(scan_store.measured_total_kb(self.conn, "acct-1", 2), 300)
+
+
+class CompletionTimeTests(ScanStoreTestCase):
+    """세대를 끝낼 때 앞 세대의 완료 시각을 옮겨 둔다.
+
+    화면은 증가 경로를 두 스캔의 날짜로 말한다. 그 날짜를 결과 표에서 찾으면
+    (`generation_completed_at`) 세대의 행을 전부 읽어야 했다 - 창을 열 때마다
+    계정 수 x 2 번."""
+
+    def test_the_previous_time_moves_along(self):
+        scan_store.mark_generation_completed(self.conn, "acct-1", 1, completed_at="2026-10-01T21:00:00+00:00")
+        scan_store.mark_generation_completed(self.conn, "acct-1", 2, completed_at="2026-10-02T21:00:00+00:00")
+        state = scan_store.get_account_state(self.conn, "acct-1")
+        self.assertEqual(state.last_completed_at, "2026-10-02T21:00:00+00:00")
+        self.assertEqual(state.previous_completed_at, "2026-10-01T21:00:00+00:00")
+
+    def test_a_skipped_generation_leaves_the_previous_time_unknown(self):
+        """앞 값이 바로 앞 세대 것이 아니면 옮기지 않는다 - 엉뚱한 날짜보다 '모름' 이
+        낫다 (읽는 쪽이 결과 표에서 찾는다)."""
+
+        scan_store.mark_generation_completed(self.conn, "acct-1", 1, completed_at="2026-10-01T21:00:00+00:00")
+        scan_store.mark_generation_completed(self.conn, "acct-1", 3, completed_at="2026-10-03T21:00:00+00:00")
+        self.assertIsNone(scan_store.get_account_state(self.conn, "acct-1").previous_completed_at)
+
+    def test_the_first_generation_has_no_previous(self):
+        scan_store.mark_generation_completed(self.conn, "acct-1", 1)
+        self.assertIsNone(scan_store.get_account_state(self.conn, "acct-1").previous_completed_at)

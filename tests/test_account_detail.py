@@ -149,5 +149,54 @@ class AccountDetailTests(unittest.TestCase):
         self.assertEqual(detail.reclaimable_kb, 0)
 
 
+class ReadsOnlyThisAccountTests(unittest.TestCase):
+    """계정 상세 창은 그 계정(과 연결된 백업 계정) 것만 읽는다.
+
+    예측과 헬스체크를 설정의 계정 전부에 대해 돌린 뒤 하나를 골라 썼다 - 창 하나
+    띄우려고 스무 계정의 30일 이력과 디렉터리 전체를 읽었다. 실측(계정 20개):
+    파일에서 335MB."""
+
+    def setUp(self):
+        from smvwp import scan_store
+
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        self.config = config_module.load_config(self.data_dir)
+        accounts = {}
+        for name, kind in (("proj", config_module.ACCOUNT_KIND_PROJECT),
+                           ("backup", config_module.ACCOUNT_KIND_BACKUP),
+                           ("other", config_module.ACCOUNT_KIND_PROJECT)):
+            (root / name).mkdir()
+            accounts[name] = config_module.add_account(
+                self.config, name, str(root / name), data_dir=self.data_dir, kind=kind
+            )
+        config_module.set_backup_link(
+            self.config, accounts["proj"].account_id, accounts["backup"].account_id
+        )
+        self.accounts = accounts
+        with scan_store.session(self.data_dir) as conn:
+            for account in accounts.values():
+                scan_store.save_tree_entries(
+                    conn, account.account_id, 1, [("/x/t", 10), ("/x/t/01_run_0908", 9)], "/x/t"
+                )
+                scan_store.mark_generation_completed(conn, account.account_id, 1)
+
+    def test_only_this_account_and_its_backup_are_read(self):
+        from smvwp import scan_store
+
+        with patch("smvwp.store.samples_since", wraps=store.samples_since) as samples,                 patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees:
+            detail = account_detail.read(self.data_dir, self.config, self.accounts["proj"].account_id)
+        self.assertEqual(detail.failures, [])
+        self.assertEqual(
+            {call.args[1] for call in samples.call_args_list}, {self.accounts["proj"].account_id}
+        )
+        self.assertEqual(
+            {call.args[1] for call in trees.call_args_list},
+            {self.accounts["proj"].account_id, self.accounts["backup"].account_id},
+        )
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

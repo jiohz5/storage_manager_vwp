@@ -15,7 +15,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from . import sqlite_db
 
@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS samples (
 );
 CREATE INDEX IF NOT EXISTS idx_samples_account_time
     ON samples(account_id, collected_at DESC);
+-- 시각만으로 찾는 것(오래된 표본 정리, "가장 최근 수집은 언제") 용. 없으면 둘 다
+-- 표 전체를 훑었다 - 90일이면 십수만 줄이고, 정리는 수집마다(15분) 돈다.
+CREATE INDEX IF NOT EXISTS idx_samples_time
+    ON samples(collected_at);
 """
 
 # 나중에 추가된 열. `CREATE TABLE IF NOT EXISTS`는 이미 있는 테이블을 바꾸지
@@ -119,6 +123,27 @@ def session(data_dir: Path):
 
 
 def insert_sample(conn: sqlite3.Connection, sample: SampleRecord) -> int:
+    row_id = _insert(conn, sample)
+    conn.commit()
+    return row_id
+
+
+def insert_samples(conn: sqlite3.Connection, samples: Iterable[SampleRecord]) -> int:
+    """한 번의 수집이 낸 표본을 **커밋 한 번에** 넣는다. 넣은 수를 돌려준다.
+
+    줄마다 커밋하면 계정 수만큼 커밋한다. 데이터 디렉터리가 NFS 고 저널이 DELETE
+    모드면 커밋 하나가 저널 파일 생성·fsync·삭제 왕복이라, 계정 스물이면 15분마다
+    그 스무 벌 동안 쓰기 잠금을 쥐었다 놓았다 했다."""
+
+    count = 0
+    for sample in samples:
+        _insert(conn, sample)
+        count += 1
+    conn.commit()
+    return count
+
+
+def _insert(conn: sqlite3.Connection, sample: SampleRecord) -> int:
     cursor = conn.execute(
         """
         INSERT INTO samples (
@@ -153,7 +178,6 @@ def insert_sample(conn: sqlite3.Connection, sample: SampleRecord) -> int:
             sample.quota_tier,
         ),
     )
-    conn.commit()
     return int(cursor.lastrowid)
 
 
@@ -192,8 +216,25 @@ def newest_collected_at(conn: sqlite3.Connection) -> Optional[str]:
     return row[0] if row else None
 
 
-def latest_samples(conn: sqlite3.Connection) -> Dict[str, SampleRecord]:
-    """계정별 가장 최근 샘플 1건씩을 반환한다 (대시보드 표시용)."""
+def latest_samples(
+    conn: sqlite3.Connection, account_ids: Optional[Iterable[str]] = None
+) -> Dict[str, SampleRecord]:
+    """계정별 가장 최근 샘플 1건씩을 반환한다 (대시보드 표시용).
+
+    `account_ids` 를 주면 그 계정들만, 계정마다 인덱스로 한 줄씩 찾는다. 주지
+    않으면 표에 있는 모든 계정인데, 그러려면 인덱스를 처음부터 끝까지 훑어야 한다
+    (90일이면 십수만 줄). 창은 홈을 읽을 때마다 이것을 부르므로 계정을 준다."""
+
+    if account_ids is not None:
+        result: Dict[str, SampleRecord] = {}
+        for account_id in account_ids:
+            row = conn.execute(
+                "SELECT * FROM samples WHERE account_id = ? ORDER BY collected_at DESC LIMIT 1",
+                (account_id,),
+            ).fetchone()
+            if row is not None:
+                result[account_id] = _row_to_record(row)
+        return result
 
     rows = conn.execute(
         """

@@ -159,6 +159,51 @@ class ProgressAndSharedReadTests(unittest.TestCase):
         self.assertIn("초", logs.output[0])
 
 
+class RememberedScanPartsTests(unittest.TestCase):
+    """홈은 15분마다 다시 읽지만 스캔은 하루 한 번 끝난다. `cache` 를 넘기면 스캔이
+    남긴 것(헬스체크, 상위 경로·증감)은 세대가 바뀔 때만 다시 읽는다.
+
+    실측(계정 20개): 홈 한 번에 파일에서 733MB 를 읽었고 그 가운데 500MB 가 이
+    둘이었다. 데이터 디렉터리가 NFS 면 그만큼이 15분마다 네트워크 읽기였다."""
+
+    def setUp(self):
+        from smvwp import scan_store
+
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        (root / "proj").mkdir()
+        self.config = config_module.load_config(self.data_dir)
+        account = config_module.add_account(
+            self.config, "proj", str(root / "proj"), data_dir=self.data_dir,
+            kind=config_module.ACCOUNT_KIND_PROJECT,
+        )
+        with scan_store.session(self.data_dir) as conn:
+            for generation in (1, 2):
+                scan_store.save_tree_entries(
+                    conn, account.account_id, generation,
+                    [("/proj/t", 100 * generation), ("/proj/t/01_run_0908", 90)], "/proj/t",
+                )
+                scan_store.mark_generation_completed(conn, account.account_id, generation)
+
+    def scan_reads(self, cache):
+        from smvwp import nightly_scan, scan_store
+
+        with patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees,                 patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+            dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
+        return trees.call_count + parts.call_count
+
+    def test_a_second_read_does_not_read_the_scan_results_again(self):
+        cache = {}
+        self.assertGreater(self.scan_reads(cache), 0)
+        self.assertEqual(self.scan_reads(cache), 0)
+
+    def test_without_a_cache_it_reads_every_time(self):
+        self.assertGreater(self.scan_reads(None), 0)
+        self.assertGreater(self.scan_reads(None), 0)
+
+
 class SharedHistoryForecastTests(unittest.TestCase):
     def test_same_forecast_whether_it_reads_or_is_given_the_history(self):
         from datetime import datetime, timedelta, timezone

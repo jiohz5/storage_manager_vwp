@@ -221,6 +221,7 @@ CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
     last_baseline_completed_at TEXT,
+    previous_baseline_completed_at TEXT,
     unavailable_at TEXT,
     unavailable_reason TEXT,
     unavailable_detail TEXT
@@ -276,6 +277,11 @@ _COLUMNS_ADDED = {
         # 계정 목록에 "최근 스캔일"을 보여주려면 기준선을 언제 완주했는지가
         # 필요하다. 기존에는 세대 번호만 남기고 시각은 안 남겼다.
         "last_baseline_completed_at": "TEXT",
+        # 그 직전 세대를 끝낸 시각. 화면은 증가 경로를 "어제 -> 오늘" 처럼 두 스캔의
+        # 날짜로 말하는데, 그 날짜를 결과 표에서 찾으면(`generation_completed_at`)
+        # 세대의 행을 전부 읽어야 했다 - 창을 열 때마다 계정 수 x 2 번. 세대를
+        # 끝낼 때 앞 값을 여기로 옮겨 두면 한 줄이다.
+        "previous_baseline_completed_at": "TEXT",
         # 계정 경로를 못 봐 그 밤을 건너뛴 때와 까닭 (`nightly_scan._unavailable_reason`).
         # 창은 cron 로그를 볼 수 없어서, 여기 남겨야 화면과 보고서가 알릴 수 있다.
         # 경로가 다시 보이면 지운다.
@@ -294,6 +300,15 @@ def _initialize(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS growth_history")
     for table, columns in _COLUMNS_ADDED.items():
         sqlite_db.add_missing_columns(conn, table, columns)
+    # 얕은 행만 찾는 인덱스 (`results._shallow`). 상위 경로·증가 경로·잰 용량 합계는
+    # 깊이 0~1 행 수십 개만 보면 되는데, 이 인덱스가 없으면 세대의 행을 전부
+    # 읽었다 (경로 수만 개 계정이면 계정마다 수 MB, NFS 에서는 그만큼 왕복).
+    # 깊이 열이 위에서 붙으므로 SCHEMA 가 아니라 여기서 만든다. 기존 DB 에서는
+    # 처음 한 번 표를 훑어 만든다 (실측: 결과 46만 줄에 +22MB).
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_results_depth "
+        "ON baseline_results(account_id, generation, depth, size_kb)"
+    )
 
 
 

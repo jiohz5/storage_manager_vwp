@@ -170,6 +170,41 @@ class RetiredTableTests(_Case):
         self.assertIn("scan_runs", tables)
 
 
+class PageCacheTests(_Case):
+    def test_each_connection_may_keep_more_pages_than_the_default(self):
+        """기본 2MB 로는 계정마다 30일치를 읽을 때 같은 페이지를 파일에서 다시 읽었다
+        (실측: 18MB 를 읽는 데 206MB). NFS 면 그것이 네트워크 읽기다."""
+
+        conn = sqlite_db.connect(self.path, self.data_dir, lambda conn: None)
+        try:
+            self.assertEqual(
+                conn.execute("PRAGMA cache_size").fetchone()[0], -sqlite_db.CACHE_KIB
+            )
+        finally:
+            conn.close()
+
+
+class ShallowRowsIndexTests(_Case):
+    def test_an_old_database_gets_the_depth_column_and_its_index(self):
+        """깊이 열은 나중에 붙는다 - 인덱스를 그보다 먼저 만들려 하면 예전 DB 를 못 연다."""
+
+        self.data_dir.mkdir(parents=True)
+        old = sqlite3.connect(str(scan_store.db_path(self.data_dir)))
+        old.execute(
+            "CREATE TABLE baseline_results (account_id TEXT NOT NULL, generation INTEGER NOT NULL, "
+            "path TEXT NOT NULL, size_kb INTEGER NOT NULL, completed_at TEXT NOT NULL, "
+            "PRIMARY KEY (account_id, generation, path))"
+        )
+        old.execute("INSERT INTO baseline_results VALUES ('a', 1, '/x', 5, '2026-01-01T00:00:00+00:00')")
+        old.commit()
+        old.close()
+
+        with scan_store.session(self.data_dir) as conn:
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(baseline_results)")}
+            self.assertEqual(scan_store.measured_total_kb(conn, "a", 1), 5)
+        self.assertIn("idx_results_depth", indexes)
+
+
 class AddMissingColumnsTests(_Case):
     def test_only_missing_columns_are_added(self):
         conn = sqlite3.connect(str(self.path.parent.mkdir(parents=True) or self.path))

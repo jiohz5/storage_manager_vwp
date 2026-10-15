@@ -48,6 +48,31 @@ class RunCollectionCycleTests(unittest.TestCase):
             self.assertEqual(len(outbox_files), 1)
 
     @patch("smvwp.cycle.collector.collect_all")
+    def test_one_collection_is_stored_in_one_go(self, mock_collect_all):
+        """계정마다 따로 커밋하지 않는다 - NFS 에서 커밋 하나가 저널 파일 왕복이라
+        계정 스물이면 15분마다 스무 번 쓰기 잠금을 쥐었다 놓았다 했다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            config = config_module.load_config(data_dir)
+            ids = []
+            for name in ("a", "b", "c"):
+                (Path(tmp) / name).mkdir()
+                ids.append(config_module.add_account(config, name, str(Path(tmp) / name)).account_id)
+            now = datetime.now(timezone.utc).isoformat()
+            mock_collect_all.return_value = [
+                store.SampleRecord(account_id=account_id, collected_at=now, ok=True)
+                for account_id in ids
+            ]
+            with patch("smvwp.cycle.store.insert_sample",
+                       side_effect=AssertionError("줄마다 커밋했다")),                     patch("smvwp.cycle.store.insert_samples",
+                          wraps=store.insert_samples) as insert:
+                run_collection_cycle(data_dir, config)
+            self.assertEqual(insert.call_count, 1)
+            with store.session(data_dir) as conn:
+                self.assertEqual(set(store.latest_samples(conn)), set(ids))
+
+    @patch("smvwp.cycle.collector.collect_all")
     def test_only_enabled_accounts_are_collected(self, mock_collect_all):
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp) / "data"

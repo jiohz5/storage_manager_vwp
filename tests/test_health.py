@@ -312,3 +312,77 @@ class CoarseTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class RememberedCheckTests(unittest.TestCase):
+    """`cache` 를 주면 세대와 계정 설정이 그대로인 동안 다시 읽지 않는다.
+
+    대조는 계정마다 그 세대의 디렉터리를 전부 읽는다(경로 수만 개면 수 MB).
+    홈은 이것을 창을 열 때와 15분마다 불렀는데, 스캔은 하루 한 번 끝나므로
+    나머지는 같은 답을 NFS 에서 다시 읽는 것이었다. 실측(계정 20개): 한 번에 73MB."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        from smvwp import config as config_module, scan_store
+
+        self._tmp = tempfile.TemporaryDirectory()
+        root = Path(self._tmp.name)
+        self.data_dir = root / "data"
+        for name in ("proj", "backup"):
+            (root / name).mkdir()
+        self.config = config_module.load_config(self.data_dir)
+        self.project = config_module.add_account(
+            self.config, "layout_proj", str(root / "proj"), data_dir=self.data_dir,
+            kind=config_module.ACCOUNT_KIND_PROJECT,
+        )
+        self.backup = config_module.add_account(
+            self.config, "layout_backup", str(root / "backup"), data_dir=self.data_dir,
+            kind=config_module.ACCOUNT_KIND_BACKUP,
+        )
+        config_module.set_backup_link(self.config, self.project.account_id, self.backup.account_id)
+        self.scan_store = scan_store
+        self.complete(self.project.account_id, 1, project())
+        self.complete(self.backup.account_id, 1, {"/bk/과제A/01_run_0908": 700 * GB})
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def complete(self, account_id, generation, sizes):
+        with self.scan_store.session(self.data_dir) as conn:
+            root = min(sizes, key=len)
+            self.scan_store.save_tree_entries(conn, account_id, generation, list(sizes.items()), root)
+            self.scan_store.mark_generation_completed(conn, account_id, generation)
+
+    def reads(self, cache):
+        from unittest.mock import patch
+
+        with patch("smvwp.scan_store.tree_entries", wraps=self.scan_store.tree_entries) as read:
+            summary = health.check_all(self.data_dir, self.config, cache=cache)
+        return summary, read.call_count
+
+    def test_the_same_generations_are_not_read_again(self):
+        cache = {}
+        first, first_reads = self.reads(cache)
+        again, again_reads = self.reads(cache)
+        self.assertEqual(first_reads, 2)       # 프로젝트와 연결된 백업
+        self.assertEqual(again_reads, 0)
+        self.assertEqual(len(again.items), len(first.items))
+
+    def test_a_finished_scan_is_read(self):
+        cache = {}
+        self.reads(cache)
+        self.complete(self.backup.account_id, 2, {"/bk/과제A/01_run_0908": 700 * GB})
+        _, reads = self.reads(cache)
+        self.assertEqual(reads, 2)
+
+    def test_a_changed_link_is_read(self):
+        from smvwp import config as config_module
+
+        cache = {}
+        self.reads(cache)
+        config_module.set_backup_link(self.config, self.project.account_id, "")
+        summary, reads = self.reads(cache)
+        self.assertEqual(reads, 1)
+        self.assertEqual({item.status for item in summary.items}, {health.NO_LINK})

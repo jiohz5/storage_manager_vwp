@@ -1259,8 +1259,14 @@ class StatusSnapshot:
     accounts: List[AccountScanSnapshot]
 
 
-def _settled_parts(conn, account_id, current_gen, previous_gen, top_n, max_depth) -> dict:
-    """완료된 세대에만 매인 값들. 세대가 바뀌기 전에는 달라지지 않는다."""
+def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth) -> dict:
+    """완료된 세대에만 매인 값들. 세대가 바뀌기 전에는 달라지지 않는다.
+
+    두 스캔의 날짜는 세대를 끝낼 때 남긴 시각을 먼저 쓴다. 결과 표에서 찾으면
+    (`generation_completed_at`) 세대의 행을 전부 읽는다 - 계정마다 두 번, 창을
+    열 때마다. 남긴 시각이 없는 예전 DB 에서만 결과 표로 간다."""
+
+    account_id = state.account_id
 
     return {
         "top_paths": (
@@ -1268,17 +1274,23 @@ def _settled_parts(conn, account_id, current_gen, previous_gen, top_n, max_depth
             if current_gen else []
         ),
         "growth": (
-            scan_store.growth_delta(conn, account_id, current_gen, previous_gen, top_n)
+            scan_store.growth_delta(
+                conn, account_id, current_gen, previous_gen, top_n, max_depth=max_depth
+            )
             if current_gen and previous_gen else []
         ),
         "previous_measured_kb": (
             scan_store.measured_total_kb(conn, account_id, previous_gen) if previous_gen else None
         ),
         "current_scan_at": (
-            scan_store.generation_completed_at(conn, account_id, current_gen) if current_gen else None
+            (state.last_completed_at
+             or scan_store.generation_completed_at(conn, account_id, current_gen))
+            if current_gen else None
         ),
         "previous_scan_at": (
-            scan_store.generation_completed_at(conn, account_id, previous_gen) if previous_gen else None
+            (state.previous_completed_at
+             or scan_store.generation_completed_at(conn, account_id, previous_gen))
+            if previous_gen else None
         ),
         "large_files": (
             scan_store.large_file_changes(conn, account_id, current_gen, previous_gen)
@@ -1326,7 +1338,7 @@ def get_status_snapshot(
             remembered = cache.get(account.account_id) if cache is not None else None
             if remembered is None or remembered[0] != key:
                 remembered = (key, _settled_parts(
-                    conn, account.account_id, current_gen, previous_gen, top_n,
+                    conn, state, current_gen, previous_gen, top_n,
                     config.settings.growth_list_max_depth,
                 ))
                 if cache is not None:

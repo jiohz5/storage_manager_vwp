@@ -133,3 +133,26 @@ def sample_mounts(conn, sample_id: int):
         "SELECT * FROM server_sample_mounts WHERE sample_id = ? ORDER BY ops DESC",
         (sample_id,),
     ).fetchall()
+
+
+class VmSteps:
+    """블록 안에서 SQLite 가상 머신이 밟은 단계 수 (`with VmSteps(conn) as steps:`).
+
+    읽은 행 수에 비례한다 - 인덱스를 타면 찾는 행만큼, 못 타면 표나 세대 전체만큼
+    커진다. 데이터 디렉터리가 NFS 면 그 차이가 그대로 네트워크 읽기라, "필요한
+    만큼만 읽는다" 를 시간 대신 이것으로 확인한다 (시간은 장비마다 흔들린다)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.count = 0
+
+    def _tick(self) -> int:
+        self.count += 1
+        return 0
+
+    def __enter__(self) -> "VmSteps":
+        self._conn.set_progress_handler(self._tick, 1)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._conn.set_progress_handler(None, 1)
