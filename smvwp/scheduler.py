@@ -199,6 +199,8 @@ class CollectorWorker(ThreadWorker):
         self._get_config = get_config
         # 이 창이 마지막으로 남긴 표본 시각. 그보다 새 표본이 있으면 남이 한 것이다.
         self._own_last: Optional[datetime] = None
+        # 건너뛸 때 본 가장 최근 표본 시각 (ISO). 창이 홈을 다시 읽을지 가른다.
+        self.newest_elsewhere: Optional[str] = None
 
     def run_once_async(self, manual: bool = True) -> bool:
         return self.start(manual)
@@ -216,7 +218,8 @@ class CollectorWorker(ThreadWorker):
 
     def _collected_elsewhere_recently(self, config) -> bool:
         with store.session(self._data_dir) as conn:
-            newest = _parse_utc(store.newest_collected_at(conn))
+            self.newest_elsewhere = store.newest_collected_at(conn)
+        newest = _parse_utc(self.newest_elsewhere)
         if newest is None:
             return False
         if self._own_last is not None and newest <= self._own_last:
@@ -349,6 +352,11 @@ class CollectorScheduler:
 
     def trigger_now(self) -> None:
         self._worker.run_once_async(manual=True)
+
+    def newest_elsewhere(self) -> Optional[str]:
+        """건너뛴 수집이 본 가장 최근 표본 시각 (ISO). 건너뛴 적이 없으면 None."""
+
+        return self._worker.newest_elsewhere
 
     def restart_with_current_interval(self) -> None:
         if self._timer.isActive():

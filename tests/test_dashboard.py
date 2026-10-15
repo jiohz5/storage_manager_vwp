@@ -289,6 +289,34 @@ class HistoryKeptBetweenReadsTests(unittest.TestCase):
         self.assertTrue(self.reads_everything(remembered, self.T0))
 
 
+class NewestShownTests(unittest.TestCase):
+    """홈이 보여 주는 가장 최근 표본 - 남이 방금 수집했을 때 다시 읽을지 가른다."""
+
+    def test_the_read_says_how_new_its_samples_are(self):
+        from smvwp import store
+
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        data_dir = root / "data"
+        config = config_module.load_config(data_dir)
+        stamps = ["2026-10-16T02:45:00+00:00", "2026-10-16T03:00:00+00:00"]
+        for name, stamp in zip(("a", "b"), stamps):
+            (root / name).mkdir()
+            account = config_module.add_account(config, name, str(root / name), data_dir=data_dir)
+            with store.session(data_dir) as conn:
+                store.insert_samples(conn, [store.SampleRecord(
+                    account_id=account.account_id, collected_at=stamp, ok=True)])
+        self.assertEqual(dashboard.read_dashboard(data_dir, config).newest, stamps[1])
+
+    def test_already_shows(self):
+        shown = "2026-10-16T03:00:00+00:00"
+        self.assertTrue(dashboard.already_shows(shown, "2026-10-16T12:00:00+09:00"))
+        self.assertFalse(dashboard.already_shows(shown, "2026-10-16T03:15:00+00:00"))
+        self.assertFalse(dashboard.already_shows(None, shown))
+        self.assertFalse(dashboard.already_shows(shown, None))
+
+
 class SharedHistoryForecastTests(unittest.TestCase):
     def test_same_forecast_whether_it_reads_or_is_given_the_history(self):
         from smvwp import forecast_notify, store

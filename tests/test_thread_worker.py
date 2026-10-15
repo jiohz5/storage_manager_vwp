@@ -225,6 +225,19 @@ class CollectorDefersToOthersTests(unittest.TestCase):
         self.assertFalse(called)
         self.assertIsNone(result)
 
+    def test_it_tells_what_it_saw_when_it_skips(self):
+        """창이 홈을 다시 읽을지 가르는 데 쓴다 - 그 표본을 홈이 이미 보여 주면 안 읽는다."""
+
+        from smvwp import store
+        from smvwp.scheduler import CollectorWorker
+
+        self.sample_from_cron(minutes_ago=5)
+        worker = CollectorWorker(self.data_dir, lambda: self.config)
+        with patch("smvwp.scheduler.run_collection_cycle", return_value=[]):
+            self.assertIsNone(worker._work(False))
+        with store.session(self.data_dir) as conn:
+            self.assertEqual(worker.newest_elsewhere, store.newest_collected_at(conn))
+
     def test_collects_when_nobody_has_for_a_while(self):
         """cron 이 멈췄으면 창이 이어받는다 - 대비로서의 몫."""
 

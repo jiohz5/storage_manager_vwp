@@ -52,6 +52,7 @@ from .. import action_guide
 from .. import priority
 from .. import usage_log
 from .. import (
+    dashboard,
     diagnostics,
     forecast_notify,
     freshness,
@@ -198,6 +199,10 @@ class MainWindow(QMainWindow):
         self._dashboard_worker.finished.connect(self._on_dashboard_ready)
         self._dashboard_worker.failed.connect(self._on_dashboard_failed)
         self._dashboard_worker.progress.connect(self._on_dashboard_progress)
+        # 홈이 보여 주는 가장 최근 표본 시각, 그리고 홈 읽기가 끝나면 견줄 시각
+        # (`_on_collected_elsewhere`).
+        self._dashboard_newest: Optional[str] = None
+        self._newest_wanted: Optional[str] = None
         self._refresh_table_from_store()
 
         self._scheduler = CollectorScheduler(
@@ -832,6 +837,10 @@ class MainWindow(QMainWindow):
         self._trends = getattr(data, "trends", {}) or {}
         self._render_table(data.samples)
         self._refresh_priority(getattr(data, "plan", None))
+        self._dashboard_newest = getattr(data, "newest", None)
+        wanted, self._newest_wanted = self._newest_wanted, None
+        if wanted is not None and not dashboard.already_shows(self._dashboard_newest, wanted):
+            self._refresh_table_from_store()
         if data.forecast_failed:
             # 예측 칸이 비는 이유가 "표본이 모자라서"인지 "계산이 터져서"인지
             # 화면만 봐서는 구분이 안 된다. 후자면 말해 준다.
@@ -1168,11 +1177,12 @@ class MainWindow(QMainWindow):
         self._scheduler.trigger_now()
 
     def _on_collection_finished(self, records: Optional[List[store.SampleRecord]]) -> None:
-        self._refresh_table_from_store()
         if records is None:
             # 다른 곳(cron 등)이 방금 수집해서 건너뛰었다 (`CollectorWorker`).
             self.status_bar_label.setText(i18n.t("dashboard.collected_elsewhere"))
+            self._on_collected_elsewhere(self._scheduler.newest_elsewhere())
             return
+        self._refresh_table_from_store()
         failed = sum(1 for r in records if not r.ok)
         if failed:
             self.status_bar_label.setText(
@@ -1180,6 +1190,19 @@ class MainWindow(QMainWindow):
             )
         else:
             self.status_bar_label.setText(i18n.t("dashboard.collected", count=len(records)))
+
+    def _on_collected_elsewhere(self, newest: Optional[str]) -> None:
+        """남이 방금 수집한 표본을 홈이 이미 보여 주고 있으면 다시 읽지 않는다.
+
+        창을 열면 홈 읽기와 첫 수집이 함께 시작되는데, cron 이 방금 수집했으면 창의
+        수집은 건너뛴다. 그래도 늘 새로고침해서 창을 열 때마다 홈을 두 번 읽었다.
+        홈 읽기가 아직 도는 중이면(창을 열 때는 대개 그렇다) 끝난 뒤에 견준다."""
+
+        if newest is not None and self._dashboard_worker.is_running():
+            self._newest_wanted = newest
+            return
+        if not dashboard.already_shows(self._dashboard_newest, newest):
+            self._refresh_table_from_store()
 
     def _on_collection_failed(self, message: str) -> None:
         self.status_bar_label.setText(i18n.t("dashboard.collect_error", message=message))

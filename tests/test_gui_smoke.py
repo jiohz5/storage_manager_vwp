@@ -1784,6 +1784,70 @@ class LoadingProgressTests(_GuiCase):
         self.assertIn("3/12", tab.scan_status_label.text())
 
 
+class CollectedElsewhereTests(_GuiCase):
+    """창을 열면 홈 읽기와 첫 수집이 함께 시작된다. cron 이 방금 수집했으면 창의
+    수집은 건너뛰는데, 그래도 늘 홈을 새로 읽어 창을 열 때마다 홈을 두 번 읽었다.
+    남이 수집한 표본을 홈이 이미 보여 주고 있으면 다시 읽지 않는다."""
+
+    SHOWN = "2026-10-16T03:00:00+00:00"
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+        worker = self.window._dashboard_worker
+        self.reads = patch.object(worker, "refresh_async").start()
+        self.running = patch.object(worker, "is_running", return_value=False).start()
+        self.addCleanup(patch.stopall)
+
+    def ready(self, newest):
+        from smvwp import dashboard
+
+        self.window._on_dashboard_ready(dashboard.DashboardData(newest=newest))
+
+    def skipped(self, newest):
+        with patch.object(self.window._scheduler, "newest_elsewhere", return_value=newest):
+            self.window._on_collection_finished(None)
+
+    def test_what_the_home_already_shows_is_not_read_again(self):
+        self.ready(self.SHOWN)
+        self.reads.reset_mock()
+        self.skipped(self.SHOWN)
+        self.reads.assert_not_called()
+
+    def test_a_newer_sample_from_elsewhere_is_read(self):
+        self.ready(self.SHOWN)
+        self.reads.reset_mock()
+        self.skipped("2026-10-16T03:15:00+00:00")
+        self.reads.assert_called_once()
+
+    def test_while_the_home_is_still_reading_it_decides_afterwards(self):
+        """창을 열 때는 대개 홈 읽기가 아직 돌고 있다. 그 읽기가 남의 표본을 담았으면
+        끝, 못 담았으면(그보다 먼저 읽었으면) 한 번 더."""
+
+        self.running.return_value = True
+        self.reads.reset_mock()
+        self.skipped(self.SHOWN)
+        self.reads.assert_not_called()
+        self.running.return_value = False
+        self.ready(self.SHOWN)
+        self.reads.assert_not_called()
+
+        self.running.return_value = True
+        self.skipped("2026-10-16T03:15:00+00:00")
+        self.running.return_value = False
+        self.ready(self.SHOWN)
+        self.reads.assert_called_once()
+
+    def test_its_own_collection_is_always_shown(self):
+        self.ready(self.SHOWN)
+        self.reads.reset_mock()
+        self.window._on_collection_finished([])
+        self.reads.assert_called_once()
+
+
 class DataFolderDialogTests(_GuiCase):
     """데이터 폴더 창 - 무엇이 얼마나 언제부터 쌓였나, 읽는 동안 무엇을 하나."""
 

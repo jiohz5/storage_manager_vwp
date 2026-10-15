@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 from . import forecast_notify, i18n, sqlite_db, store
 
@@ -44,6 +45,24 @@ class DashboardData:
     plan: object = None
     # 계정별 추세선 `{계정id: trend.Series}`. 표 칸에 그린다.
     trends: dict = field(default_factory=dict)
+    # 이 읽기가 본 가장 최근 표본의 시각 (ISO). 남이 방금 수집했을 때 다시 읽을지를
+    # 이것으로 가른다 (`already_shows`).
+    newest: Optional[str] = None
+
+
+def already_shows(shown: Optional[str], seen: Optional[str]) -> bool:
+    """홈이 `seen` 시각의 표본까지 이미 보여 주고 있나. 하나라도 모르면 False."""
+
+    shown_at, seen_at = _utc(shown), _utc(seen)
+    return shown_at is not None and seen_at is not None and seen_at <= shown_at
+
+
+def _utc(stamp) -> Optional[datetime]:
+    try:
+        value = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 # 읽는 단계 (i18n 키). 화면이 "무엇을 읽는 중 (2/4)" 로 보여 준다 - 실기(NFS)에서
@@ -143,6 +162,7 @@ def read_dashboard(data_dir: Path, config, on_step=None, cache=None) -> Dashboar
         forecast_failed=failed,
         plan=plan,
         trends=trends,
+        newest=max((sample.collected_at for sample in samples.values()), key=_utc, default=None),
     )
 
 
