@@ -202,7 +202,7 @@ def _read_history(conn, config, remembered=None, now=None) -> dict:
         and settings.sample_retention_days >= days
     ):
         history = remembered["history"]
-        for sample in store.samples_after(conn, remembered["last_id"]):
+        for sample in store.trend_samples_after(conn, remembered["last_id"]):
             rows = history.get(sample.account_id)
             if rows is None or sample.collected_at < since:
                 continue
@@ -219,7 +219,7 @@ def _read_history(conn, config, remembered=None, now=None) -> dict:
                 del rows[:keep]
     else:
         history = {
-            account_id: store.samples_since(conn, account_id, datetime.fromisoformat(since))
+            account_id: store.trend_samples_since(conn, account_id, datetime.fromisoformat(since))
             for account_id in ids
         }
 

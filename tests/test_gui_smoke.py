@@ -1730,7 +1730,9 @@ class WindowStartsWithoutTouchingTheDbTests(_GuiCase):
 
         started = []
         # 이 시험만 신선도 작업자를 실제로 띄운다 (_GuiCase 는 배경 작업을 멈춰 둔다).
-        with patch("smvwp.sqlite_db.connect", side_effect=recording),                 patch.object(_FreshnessReader, "start", ThreadWorker.start),                 patch("smvwp.scheduler.CollectorScheduler.start",
+        with patch("smvwp.sqlite_db.connect", side_effect=recording), \
+                patch.object(_FreshnessReader, "start", ThreadWorker.start), \
+                patch("smvwp.scheduler.CollectorScheduler.start",
                       side_effect=lambda *a, **k: started.append(1)):
             window = MainWindow(self.data_dir, self.config)
             self.addCleanup(window.close)

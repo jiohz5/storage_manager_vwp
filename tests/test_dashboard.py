@@ -147,7 +147,7 @@ class ProgressAndSharedReadTests(unittest.TestCase):
 
         from smvwp import store
 
-        with patch("smvwp.store.samples_since", wraps=store.samples_since) as reads:
+        with patch("smvwp.store.trend_samples_since", wraps=store.trend_samples_since) as reads:
             dashboard.read_dashboard(self.data_dir, self.config)
         self.assertEqual(reads.call_count, len(self.config.accounts))
 
@@ -191,7 +191,8 @@ class RememberedScanPartsTests(unittest.TestCase):
     def scan_reads(self, cache):
         from smvwp import nightly_scan, scan_store
 
-        with patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees,                 patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+        with patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees, \
+                patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
             dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
         return trees.call_count + parts.call_count
 
@@ -244,7 +245,7 @@ class HistoryKeptBetweenReadsTests(unittest.TestCase):
         return {key: [(r.collected_at, r.used_kb) for r in rows] for key, rows in found.items()}
 
     def reads_everything(self, remembered, now, config=None):
-        with patch("smvwp.store.samples_since", wraps=self.store.samples_since) as full:
+        with patch("smvwp.store.trend_samples_since", wraps=self.store.trend_samples_since) as full:
             self.history(remembered, now, config)
         return full.call_count > 0
 
@@ -253,14 +254,14 @@ class HistoryKeptBetweenReadsTests(unittest.TestCase):
         self.history(remembered, self.T0)
         later = self.T0 + timedelta(days=2)          # 앞쪽 이틀치가 창 밖으로 밀려난다
         self.insert(self.T0 + timedelta(hours=6), later)
-        with patch("smvwp.store.samples_since", side_effect=AssertionError("처음부터 읽었다")):
+        with patch("smvwp.store.trend_samples_since", side_effect=AssertionError("처음부터 읽었다")):
             kept = self.history(remembered, later)
         self.assertEqual(kept, self.history(None, later))
 
     def test_the_home_reads_only_new_rows_the_second_time(self):
         cache = {}
         dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
-        with patch("smvwp.store.samples_since", wraps=self.store.samples_since) as full:
+        with patch("smvwp.store.trend_samples_since", wraps=self.store.trend_samples_since) as full:
             dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
         self.assertEqual(full.call_count, 0)
 

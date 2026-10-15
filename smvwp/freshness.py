@@ -139,7 +139,7 @@ def evaluate_all(
     results: List[FreshnessStatus] = []
     with store.session(data_dir) as conn:
         for account in config_module.enabled_accounts(config):
-            samples = store.samples_since(conn, account.account_id, since)
+            samples = store.trend_samples_since(conn, account.account_id, since)
             results.append(
                 evaluate_account(account.account_id, samples, config.settings, now)
             )

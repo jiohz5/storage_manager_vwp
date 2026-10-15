@@ -49,6 +49,14 @@ CREATE INDEX IF NOT EXISTS idx_samples_account_time
 -- 표 전체를 훑었다 - 90일이면 십수만 줄이고, 정리는 수집마다(15분) 돈다.
 CREATE INDEX IF NOT EXISTS idx_samples_time
     ON samples(collected_at);
+-- 추세·FULL 예측·수집 신선도가 보는 열만 담은 인덱스 (`TREND_COLUMNS`).
+--
+-- 표본은 15분마다 모든 계정 것이 한꺼번에 들어가서 한 계정의 줄이 표 전체에
+-- 흩어져 있다 - 한 계정의 90일(계정 상세)을 읽어도 표 대부분의 페이지를 읽었다
+-- (실측: 계정 20개면 31MB). 이 인덱스는 계정·시각 순으로 붙어 있어 그 열만 읽으면
+-- 표를 건드리지 않는다 (같은 읽기 0.9MB). 대가는 크기다 (17만 줄에 +18MB).
+CREATE INDEX IF NOT EXISTS idx_samples_trend
+    ON samples(account_id, collected_at, ok, used_kb, avail_kb, byte_pct, filesystem, overall_tier);
 """
 
 # 나중에 추가된 열. `CREATE TABLE IF NOT EXISTS`는 이미 있는 테이블을 바꾸지
@@ -216,20 +224,54 @@ def newest_collected_at(conn: sqlite3.Connection) -> Optional[str]:
     return row[0] if row else None
 
 
+# 추세(`trend`)·FULL 예측(`analytics`)·수집 신선도(`freshness`)·추세 창이 표본에서
+# 보는 열. 이 열만 담은 인덱스가 있어 이것만 읽으면 표를 읽지 않는다. **여기 없는
+# 열은 None(또는 기본값)으로 온다** - 그 열이 필요해지면 이 목록과 인덱스를 함께 늘린다.
+TREND_COLUMNS = ("collected_at", "ok", "used_kb", "avail_kb", "byte_pct", "filesystem", "overall_tier")
+TREND_SINCE_SQL = (
+    f"SELECT account_id, {', '.join(TREND_COLUMNS)} FROM samples "
+    "WHERE account_id = ? AND collected_at >= ? ORDER BY collected_at"
+)
+
+
+def trend_samples_since(
+    conn: sqlite3.Connection, account_id: str, since: datetime
+) -> List[SampleRecord]:
+    """`samples_since` 와 같은 줄을, 추세·예측·신선도가 보는 열(`TREND_COLUMNS`)만."""
+
+    rows = conn.execute(TREND_SINCE_SQL, (account_id, since.isoformat())).fetchall()
+    return [_trend_record(row) for row in rows]
+
+
+def trend_samples_after(conn: sqlite3.Connection, sample_id: int) -> List[SampleRecord]:
+    """id 가 `sample_id` 보다 큰 표본을 들어온 순서대로 (`TREND_COLUMNS` 만) - 지난번
+    이후에 들어온 것."""
+
+    rows = conn.execute(
+        f"SELECT account_id, {', '.join(TREND_COLUMNS)} FROM samples WHERE id > ? ORDER BY id",
+        (sample_id,),
+    ).fetchall()
+    return [_trend_record(row) for row in rows]
+
+
+def _trend_record(row: sqlite3.Row) -> SampleRecord:
+    return SampleRecord(
+        account_id=row["account_id"],
+        collected_at=row["collected_at"],
+        ok=bool(row["ok"]),
+        used_kb=row["used_kb"],
+        avail_kb=row["avail_kb"],
+        byte_pct=row["byte_pct"],
+        filesystem=row["filesystem"],
+        overall_tier=row["overall_tier"],
+    )
+
+
 def last_sample_id(conn: sqlite3.Connection) -> int:
     """가장 큰 표본 id (없으면 0). id 는 늘기만 한다 (AUTOINCREMENT)."""
 
     row = conn.execute("SELECT MAX(id) FROM samples").fetchone()
     return int(row[0] or 0)
-
-
-def samples_after(conn: sqlite3.Connection, sample_id: int) -> List[SampleRecord]:
-    """id 가 `sample_id` 보다 큰 표본을 들어온 순서대로 - 지난번 이후에 들어온 것."""
-
-    rows = conn.execute(
-        "SELECT * FROM samples WHERE id > ? ORDER BY id", (sample_id,)
-    ).fetchall()
-    return [_row_to_record(row) for row in rows]
 
 
 def latest_samples(

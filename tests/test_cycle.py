@@ -65,7 +65,8 @@ class RunCollectionCycleTests(unittest.TestCase):
                 for account_id in ids
             ]
             with patch("smvwp.cycle.store.insert_sample",
-                       side_effect=AssertionError("줄마다 커밋했다")),                     patch("smvwp.cycle.store.insert_samples",
+                       side_effect=AssertionError("줄마다 커밋했다")), \
+                    patch("smvwp.cycle.store.insert_samples",
                           wraps=store.insert_samples) as insert:
                 run_collection_cycle(data_dir, config)
             self.assertEqual(insert.call_count, 1)

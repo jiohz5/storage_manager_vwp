@@ -154,7 +154,7 @@ def _read_samples(detail, data_dir, account_id, trend_days, now) -> None:
             detail.sample = store.latest_samples(conn, [account_id]).get(account_id)
             try:
                 since = now - timedelta(days=trend_days)
-                samples = store.samples_since(conn, account_id, since)
+                samples = store.trend_samples_since(conn, account_id, since)
                 # 창을 명시한다. 안 그러면 표본이 하루치뿐인 계정의 하루가 화면을
                 # 꽉 채워 "90일 추세" 라며 하루를 보여 준다.
                 detail.series = trend.build(samples, since=since, until=now)

@@ -161,6 +161,66 @@ class ReadsWhatItNeedsTests(unittest.TestCase):
         self.assertEqual(len(store.latest_samples(self.conn, [f"new-{n}" for n in range(4)])), 4)
 
 
+class TrendColumnsTests(unittest.TestCase):
+    """추세·FULL 예측·수집 신선도는 표본의 몇 열만 본다 (`store.TREND_COLUMNS`).
+
+    표본은 15분마다 모든 계정 것이 한꺼번에 들어가 한 계정의 줄이 표 전체에 흩어져
+    있다. 한 계정의 90일(계정 상세)을 읽어도 표 대부분의 페이지를 읽었다 (계정
+    20개면 31MB). 그 열만 담은 인덱스로 읽으면 표를 건드리지 않는다 (0.9MB)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.data_dir = Path(tmp.name)
+        self.conn = store.connect(self.data_dir)
+        self.addCleanup(self.conn.close)
+        start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        records = []
+        for step in range(40):
+            for account_id in ("a", "b"):
+                record = _sample(account_id=account_id, byte_pct=float(step),
+                                 collected_at=(start + timedelta(hours=step)).isoformat())
+                record.ok = step % 7 != 3
+                record.used_kb = 1000 + step
+                records.append(record)
+        store.insert_samples(self.conn, records)
+        self.since = start + timedelta(hours=10)
+
+    def test_the_same_rows_and_values_as_a_full_read(self):
+        full = store.samples_since(self.conn, "a", self.since)
+        light = store.trend_samples_since(self.conn, "a", self.since)
+        self.assertEqual(len(light), len(full))
+        for whole, part in zip(full, light):
+            self.assertEqual(part.account_id, whole.account_id)
+            for column in store.TREND_COLUMNS:
+                self.assertEqual(getattr(part, column), getattr(whole, column), column)
+
+    def test_it_reads_only_the_index(self):
+        plan = " ".join(
+            row[3] for row in self.conn.execute(
+                "EXPLAIN QUERY PLAN " + store.TREND_SINCE_SQL, ("a", self.since.isoformat())
+            )
+        )
+        self.assertIn("COVERING INDEX", plan)
+
+    def test_forecast_trend_and_freshness_need_nothing_else(self):
+        """빠진 열이 None 으로 오므로, 셋 중 하나라도 다른 열을 보기 시작하면 답이
+        달라진다 - 그러면 `TREND_COLUMNS` 와 인덱스를 함께 늘려야 한다."""
+
+        from smvwp import analytics, config as config_module, freshness, trend
+
+        settings = config_module.Settings()
+        now = self.since + timedelta(hours=30)
+        full = store.samples_since(self.conn, "a", self.since)
+        light = store.trend_samples_since(self.conn, "a", self.since)
+        self.assertEqual(analytics.build_forecast("a", light, settings, now),
+                         analytics.build_forecast("a", full, settings, now))
+        self.assertEqual(trend.build(light, since=self.since, until=now),
+                         trend.build(full, since=self.since, until=now))
+        self.assertEqual(freshness.evaluate_account("a", light, settings, now),
+                         freshness.evaluate_account("a", full, settings, now))
+
+
 class ConcurrentConnectTests(unittest.TestCase):
     """새 데이터 디렉터리에 여러 스레드가 동시에 붙는 경우.
 

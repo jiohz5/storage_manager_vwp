@@ -186,7 +186,8 @@ class ReadsOnlyThisAccountTests(unittest.TestCase):
     def test_only_this_account_and_its_backup_are_read(self):
         from smvwp import scan_store
 
-        with patch("smvwp.store.samples_since", wraps=store.samples_since) as samples,                 patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees:
+        with patch("smvwp.store.trend_samples_since", wraps=store.trend_samples_since) as samples, \
+                patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees:
             detail = account_detail.read(self.data_dir, self.config, self.accounts["proj"].account_id)
         self.assertEqual(detail.failures, [])
         self.assertEqual(
