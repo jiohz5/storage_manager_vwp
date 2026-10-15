@@ -216,6 +216,22 @@ def newest_collected_at(conn: sqlite3.Connection) -> Optional[str]:
     return row[0] if row else None
 
 
+def last_sample_id(conn: sqlite3.Connection) -> int:
+    """가장 큰 표본 id (없으면 0). id 는 늘기만 한다 (AUTOINCREMENT)."""
+
+    row = conn.execute("SELECT MAX(id) FROM samples").fetchone()
+    return int(row[0] or 0)
+
+
+def samples_after(conn: sqlite3.Connection, sample_id: int) -> List[SampleRecord]:
+    """id 가 `sample_id` 보다 큰 표본을 들어온 순서대로 - 지난번 이후에 들어온 것."""
+
+    rows = conn.execute(
+        "SELECT * FROM samples WHERE id > ? ORDER BY id", (sample_id,)
+    ).fetchall()
+    return [_row_to_record(row) for row in rows]
+
+
 def latest_samples(
     conn: sqlite3.Connection, account_ids: Optional[Iterable[str]] = None
 ) -> Dict[str, SampleRecord]:

@@ -8,6 +8,7 @@
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -204,10 +205,92 @@ class RememberedScanPartsTests(unittest.TestCase):
         self.assertGreater(self.scan_reads(None), 0)
 
 
+class HistoryKeptBetweenReadsTests(unittest.TestCase):
+    """홈은 15분마다 30일 이력을 처음부터 다시 읽었다 (계정 20개면 18MB). 그 사이 새로
+    들어온 표본은 계정 수만큼뿐이다 - 이력을 들고 있다가 새 줄만 읽어 붙인다."""
+
+    T0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+    def setUp(self):
+        from smvwp import store
+
+        self.store = store
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        self.config = config_module.load_config(self.data_dir)
+        for name in ("a", "b"):
+            (root / name).mkdir()
+            config_module.add_account(self.config, name, str(root / name), data_dir=self.data_dir)
+        # 창(30일) 끝자락부터 T0 까지 6시간 간격
+        self.insert(self.T0 - timedelta(days=31), self.T0)
+
+    def insert(self, start, end, step=timedelta(hours=6)):
+        records, at = [], start
+        while at <= end:
+            for account in self.config.accounts:
+                records.append(self.store.SampleRecord(
+                    account_id=account.account_id, collected_at=at.isoformat(), ok=True,
+                    used_kb=int(at.timestamp()) % 100000, avail_kb=1, filesystem="fs:/x",
+                ))
+            at += step
+        with self.store.session(self.data_dir) as conn:
+            self.store.insert_samples(conn, records)
+
+    def history(self, remembered, now, config=None):
+        with self.store.session(self.data_dir) as conn:
+            found = dashboard._read_history(conn, config or self.config, remembered, now=now)
+        return {key: [(r.collected_at, r.used_kb) for r in rows] for key, rows in found.items()}
+
+    def reads_everything(self, remembered, now, config=None):
+        with patch("smvwp.store.samples_since", wraps=self.store.samples_since) as full:
+            self.history(remembered, now, config)
+        return full.call_count > 0
+
+    def test_only_new_rows_are_read_and_the_answer_is_the_same(self):
+        remembered = {}
+        self.history(remembered, self.T0)
+        later = self.T0 + timedelta(days=2)          # 앞쪽 이틀치가 창 밖으로 밀려난다
+        self.insert(self.T0 + timedelta(hours=6), later)
+        with patch("smvwp.store.samples_since", side_effect=AssertionError("처음부터 읽었다")):
+            kept = self.history(remembered, later)
+        self.assertEqual(kept, self.history(None, later))
+
+    def test_the_home_reads_only_new_rows_the_second_time(self):
+        cache = {}
+        dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
+        with patch("smvwp.store.samples_since", wraps=self.store.samples_since) as full:
+            dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
+        self.assertEqual(full.call_count, 0)
+
+    def test_a_recreated_database_is_read_from_scratch(self):
+        """DB 파일을 지우고 다시 만들면 id 가 처음부터 다시 붙는다."""
+
+        remembered = {}
+        self.history(remembered, self.T0)
+        remembered["last_id"] += 10**6
+        self.assertTrue(self.reads_everything(remembered, self.T0))
+
+    def test_changed_accounts_are_read_from_scratch(self):
+        from dataclasses import replace
+
+        remembered = {}
+        self.history(remembered, self.T0)
+        fewer = replace(self.config, accounts=self.config.accounts[:1])
+        self.assertTrue(self.reads_everything(remembered, self.T0, config=fewer))
+
+    def test_a_retention_shorter_than_the_window_is_always_read_from_scratch(self):
+        """정리가 창 안의 줄을 지우면 들고 있는 이력과 DB 가 어긋난다."""
+
+        self.config.settings.sample_retention_days = 7
+        remembered = {}
+        self.history(remembered, self.T0)
+        self.assertTrue(self.reads_everything(remembered, self.T0))
+
+
 class SharedHistoryForecastTests(unittest.TestCase):
     def test_same_forecast_whether_it_reads_or_is_given_the_history(self):
-        from datetime import datetime, timedelta, timezone
-
         from smvwp import forecast_notify, store
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import forecast_notify, i18n, store
+from . import forecast_notify, i18n, sqlite_db, store
 
 logger = logging.getLogger(__name__)
 
@@ -104,16 +104,21 @@ def read_dashboard(data_dir: Path, config, on_step=None, cache=None) -> Dashboar
     둘이 같은 것을 따로 읽었고, 이 둘이 읽기 시간의 거의 전부였다.
 
     `cache`(dict) 를 주면 스캔이 남긴 것 중 **세대가 바뀌어야 달라지는 것**(헬스체크,
-    상위 경로·증감)을 그 안에 기억한다. 홈은 15분마다 다시 읽지만 스캔은 하루
-    한 번 끝난다. 같은 dict 를 계속 넘기는 것은 부르는 쪽(`DashboardWorker`) 몫이다.
+    상위 경로·증감)을 그 안에 기억하고, 30일 이력은 들고 있다가 **새 줄만** 읽는다.
+    홈은 15분마다 다시 읽지만 그 사이 새로 들어온 표본은 계정 수만큼이고, 스캔은
+    하루 한 번 끝난다. 같은 dict 를 계속 넘기는 것은 부르는 쪽(`DashboardWorker`) 몫이다.
     """
 
     step = _Steps(on_step)
-    with store.session(data_dir) as conn:
+    # 한 번의 읽기로 묶는다 (`sqlite_db.read_snapshot`) - 문이 계정 수 x 2 이고, 이력을
+    # 이어 읽으려면 "어디까지 읽었나" 와 그 줄들이 같은 시점이어야 한다.
+    with store.session(data_dir) as conn, sqlite_db.read_snapshot(conn):
         step("dashboard.step.samples")
         samples = store.latest_samples(conn, [account.account_id for account in config.accounts])
         step("dashboard.step.history")
-        history = _read_history(conn, config)
+        history = _read_history(
+            conn, config, remembered=cache.setdefault("history", {}) if cache is not None else None
+        )
     trends = _read_trends(history)
 
     step("dashboard.step.forecast")
@@ -151,16 +156,57 @@ TREND_DAYS = 30
 TREND_BUCKETS = 60
 
 
-def _read_history(conn, config) -> dict:
-    """계정별 표본 `{계정id: [표본, ...]}` - 추세와 FULL 예측이 함께 쓸 만큼."""
+def _read_history(conn, config, remembered=None, now=None) -> dict:
+    """계정별 표본 `{계정id: [표본, ...]}` - 추세와 FULL 예측이 함께 쓸 만큼.
+
+    `remembered`(dict) 를 주면 지난번 이력을 들고 있다가 그 뒤에 들어온 줄만 읽어
+    붙이고, 창 밖으로 밀려난 줄을 떼어 낸다. 처음부터 다시 읽은 것과 같은 답이다.
+
+    표본 id 는 늘기만 한다(AUTOINCREMENT) - "어디까지 읽었나" 를 id 로 기억하면 늦게
+    커밋된 줄도 놓치지 않는다. 그 전제가 깨지는 경우는 처음부터 다시 읽는다:
+    계정이나 창(일 수)이 바뀌었을 때, 가장 큰 id 가 기억보다 작을 때(DB 파일을
+    지우고 다시 만들었다), 보존 기간이 창보다 짧을 때(정리가 창 안의 줄을 지운다).
+    """
 
     settings = config.settings
     days = max(TREND_DAYS, settings.trend_long_days, settings.trend_short_days, 1)
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    return {
-        account.account_id: store.samples_since(conn, account.account_id, since)
-        for account in config.accounts
-    }
+    since = ((now or datetime.now(timezone.utc)) - timedelta(days=days)).isoformat()
+    ids = tuple(account.account_id for account in config.accounts)
+    key = (ids, days)
+    last_id = store.last_sample_id(conn)
+
+    if (
+        remembered is not None
+        and remembered.get("key") == key
+        and remembered.get("last_id", last_id + 1) <= last_id
+        and settings.sample_retention_days >= days
+    ):
+        history = remembered["history"]
+        for sample in store.samples_after(conn, remembered["last_id"]):
+            rows = history.get(sample.account_id)
+            if rows is None or sample.collected_at < since:
+                continue
+            if rows and sample.collected_at < rows[-1].collected_at:
+                rows.append(sample)
+                rows.sort(key=lambda row: row.collected_at)
+            else:
+                rows.append(sample)
+        for account_id, rows in history.items():
+            keep = 0
+            while keep < len(rows) and rows[keep].collected_at < since:
+                keep += 1
+            if keep:
+                del rows[:keep]
+    else:
+        history = {
+            account_id: store.samples_since(conn, account_id, datetime.fromisoformat(since))
+            for account_id in ids
+        }
+
+    if remembered is not None:
+        remembered.update(key=key, last_id=last_id, history=history)
+    # 기억해 둔 목록은 다음 번에 고쳐 쓰므로 바깥에는 사본을 준다.
+    return {account_id: list(rows) for account_id, rows in history.items()}
 
 
 def _read_trends(history: dict) -> dict:
