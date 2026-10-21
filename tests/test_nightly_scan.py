@@ -403,8 +403,10 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.run_at(datetime(2026, 7, 31, 23, 0))
         self.run_at(datetime(2026, 8, 1, 23, 0))
         cache = {}
-        with patch("smvwp.nightly_scan.scan_store.growth_delta",
-                   wraps=scan_store.growth_delta) as growth:
+        # 야간 스캔이 남긴 요약이 없을 때 (업데이트 뒤 첫 밤 전) - 창이 스스로 읽는 쪽을 본다.
+        with patch("smvwp.nightly_scan._stored_summary", return_value=None), \
+                patch("smvwp.nightly_scan.scan_store.growth_delta",
+                      wraps=scan_store.growth_delta) as growth:
             first = nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             again = nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             self.assertEqual(growth.call_count, 1)
@@ -416,6 +418,79 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             growth.reset_mock()   # 스캔 자신(급증 알림)이 부른 것은 세지 않는다
             nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             self.assertEqual(growth.call_count, 1)
+
+    def snapshot_parts(self, **kwargs):
+        """스캔 탭 요약에 드는 값만 견줄 수 있는 모양으로."""
+
+        entry = nightly_scan.get_status_snapshot(self.data_dir, self.config, **kwargs).accounts[0]
+        return {
+            "top_paths": [dict(row) for row in entry.top_paths],
+            "growth": [dict(row) for row in entry.growth],
+            "large_files": [tuple(item) for item in entry.large_files],
+            "previous_measured_kb": entry.previous_measured_kb,
+            "partial_paths": list(entry.partial_paths),
+            "current_scan_at": entry.current_scan_at,
+            "previous_scan_at": entry.previous_scan_at,
+        }
+
+    def test_the_scan_tab_uses_the_summary_the_scan_left(self):
+        """스캔 탭 요약(상위·증가 경로, 이전 크기, 큰 파일 변화, 덜 센 경로)은 세대가
+        끝나면 바뀌지 않는다. 창은 열 때마다 그것을 결과 표에서 줄마다 찾아 읽었다
+        (계정 20개면 14MB, NFS 요청 3천여 번 - 창을 열 때의 가장 큰 읽기)."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.run_at(datetime(2026, 8, 1, 23, 0))
+        with patch("smvwp.nightly_scan._stored_summary", return_value=None):
+            computed = self.snapshot_parts()
+        with patch("smvwp.nightly_scan._settled_parts", side_effect=AssertionError("결과 표를 읽었다")):
+            stored = self.snapshot_parts()
+        self.assertEqual(stored, computed)
+        self.assertTrue(stored["growth"] and stored["top_paths"])
+
+    def test_the_summary_is_not_used_when_what_it_shows_changed(self):
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        self.run_at(datetime(2026, 8, 1, 23, 0))
+        changes = {
+            "상위 몇 개": lambda: setattr(self.config.settings, "detail_scan_top_n", 3),
+            "증가 경로 깊이": lambda: setattr(self.config.settings, "growth_list_max_depth", 1),
+        }
+        for name, change in changes.items():
+            with self.subTest(name):
+                self.config = config_module.load_config(self.data_dir)   # 바꾸기 전 설정에서
+                change()
+                with patch("smvwp.nightly_scan._settled_parts",
+                           wraps=nightly_scan._settled_parts) as parts:
+                    self.snapshot_parts()
+                self.assertEqual(parts.call_count, 1)
+
+    def test_a_newer_generation_or_format_reads_the_results_again(self):
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        with patch.object(nightly_scan, "SUMMARY_FORMAT", nightly_scan.SUMMARY_FORMAT + 1), \
+                patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+            self.snapshot_parts()
+        self.assertEqual(parts.call_count, 1)
+
+        with scan_store.session(self.data_dir) as conn:   # 요약을 남기기 전에 끝난 세대
+            scan_store.mark_generation_completed(conn, self.account.account_id, 2)
+        with patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+            self.snapshot_parts()
+        self.assertEqual(parts.call_count, 1)
+
+    def test_the_scan_saves_a_summary_only_when_the_generation_changed(self):
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        with patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+            nightly_scan._save_summaries(self.data_dir, self.config)
+        self.assertEqual(parts.call_count, 0)
+
+    def test_a_refresh_with_memory_does_not_read_the_summary(self):
+        """창은 스캔 중 5초마다 상태를 읽는다 - 요약은 기억이 없을 때만 읽는다."""
+
+        self.run_at(datetime(2026, 7, 31, 23, 0))
+        cache = {}
+        with patch("smvwp.nightly_scan._stored_summary", wraps=nightly_scan._stored_summary) as read:
+            nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
+            nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
+        self.assertEqual(read.call_count, 1)
 
     def test_a_finished_scan_leaves_the_health_check_for_the_window(self):
         """대조(헬스체크)는 두 계정의 디렉터리를 전부 읽는다 - 창이 열 때마다 하지

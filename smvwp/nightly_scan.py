@@ -39,6 +39,7 @@ NetApp 은 볼륨 단위로 처리 능력이 갈리므로, 같은 볼륨을 여�
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
 import os
 import threading
@@ -850,6 +851,7 @@ def run_nightly_scan(
     finished_at = clock()
     _notify_growth(data_dir, config, outcomes, finished_at)
     _prune_orphan_search_indexes(data_dir, config)
+    _save_summaries(data_dir, config)
     _save_health(data_dir, config)
     _generate_reports(data_dir, config, finished_at)
     return RunSummary(
@@ -1194,6 +1196,86 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
         logger.exception("검색 인덱스 정리 실패")
 
 
+# 남겨 둔 스캔 탭 요약의 형식. `_settled_parts` 가 내는 것이나 그 규칙이 바뀌면 올린다 -
+# 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
+SUMMARY_FORMAT = 1
+
+
+def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
+    """스캔 탭 요약을 정하는 것 전부 - 완료 세대와, 몇 개·얼마나 깊이 보여 주나."""
+
+    return json.dumps([SUMMARY_FORMAT, account_id, generation, top_n, max_depth])
+
+
+def _save_summaries(data_dir: Path, config: config_module.AppConfig) -> None:
+    """계정마다 완료된 세대의 스캔 탭 요약을 남긴다 - 창이 열 때마다 읽지 않게.
+
+    세대가 그대로인 계정은 건너뛴다 (이미 남겼다). 설정에서 빠진 계정의 줄은 지운다.
+    실패해도 창이 스스로 읽으므로 기록만 한다."""
+
+    settings = config.settings
+    top_n, max_depth = settings.detail_scan_top_n, settings.growth_list_max_depth
+    try:
+        with scan_store.session(data_dir) as conn:
+            states = scan_store.account_states(conn)
+            saved = {
+                row["account_id"]: row["input_key"]
+                for row in conn.execute("SELECT account_id, input_key FROM scan_summaries")
+            }
+            rows = []
+            for account in config.accounts:
+                state = states.get(account.account_id)
+                current_gen = state.last_completed_generation if state else None
+                if not current_gen:
+                    continue
+                key = _summary_key(account.account_id, current_gen, top_n, max_depth)
+                if saved.get(account.account_id) == key:
+                    continue
+                parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth)
+                rows.append((account.account_id, key, json.dumps(_plain(parts), ensure_ascii=False),
+                             scan_store.utc_now_iso()))
+            ids = [account.account_id for account in config.accounts]
+            conn.execute(
+                f"DELETE FROM scan_summaries WHERE account_id NOT IN ({','.join('?' * len(ids))})",
+                ids,
+            )
+            conn.executemany("INSERT OR REPLACE INTO scan_summaries VALUES (?, ?, ?, ?)", rows)
+            conn.commit()
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("스캔 탭 요약을 남기지 못했습니다 (창이 스스로 읽습니다)")
+
+
+def _stored_summary(conn, account_id: str, key: str) -> Optional[dict]:
+    """남겨 둔 요약이 이 열쇠의 것이면 `_settled_parts` 와 같은 모양으로, 아니면 None.
+
+    줄들(상위·증가 경로)은 sqlite3.Row 대신 dict 로 온다 - 화면과 보고서는 이름으로만
+    꺼내 쓴다 (`row["path"]`, `row.keys()`)."""
+
+    row = conn.execute(
+        "SELECT input_key, payload FROM scan_summaries WHERE account_id = ?", (account_id,)
+    ).fetchone()
+    if row is None or row["input_key"] != key:
+        return None
+    try:
+        parts = json.loads(row["payload"])
+        parts["large_files"] = [tuple(item) for item in parts["large_files"]]
+        return parts
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def _plain(parts: dict) -> dict:
+    """`_settled_parts` 의 값을 JSON 으로 남길 수 있게."""
+
+    return {
+        **parts,
+        "top_paths": [dict(row) for row in parts["top_paths"]],
+        "growth": [dict(row) for row in parts["growth"]],
+        "large_files": [list(item) for item in parts["large_files"]],
+        "partial_paths": list(parts["partial_paths"]),
+    }
+
+
 def _save_health(data_dir: Path, config: config_module.AppConfig) -> None:
     """헬스체크 대조 결과를 남긴다 - 창이 열 때마다 대조하지 않게 (`health.check_all`).
 
@@ -1359,10 +1441,19 @@ def get_status_snapshot(
             key = (current_gen, top_n, config.settings.growth_list_max_depth)
             remembered = cache.get(account.account_id) if cache is not None else None
             if remembered is None or remembered[0] != key:
-                remembered = (key, _settled_parts(
-                    conn, state, current_gen, previous_gen, top_n,
-                    config.settings.growth_list_max_depth,
-                ))
+                # 기억이 없으면(창을 처음 열었거나 세대가 바뀌었으면) 야간 스캔이 남긴
+                # 요약부터 본다 - 결과 표를 줄마다 찾는 것보다 한 줄 읽기가 훨씬 싸다.
+                settled = _stored_summary(
+                    conn, account.account_id,
+                    _summary_key(account.account_id, current_gen, top_n,
+                                 config.settings.growth_list_max_depth),
+                ) if current_gen else None
+                if settled is None:
+                    settled = _settled_parts(
+                        conn, state, current_gen, previous_gen, top_n,
+                        config.settings.growth_list_max_depth,
+                    )
+                remembered = (key, settled)
                 if cache is not None:
                     cache[account.account_id] = remembered
             settled = remembered[1]

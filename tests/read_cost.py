@@ -313,12 +313,17 @@ def main() -> int:
           f"{store.db_path(data_dir).stat().st_size / 1e6:.0f}MB, 스캔 DB "
           f"{scan_store.db_path(data_dir).stat().st_size / 1e6:.0f}MB\n")
 
-    # 야간 스캔이 대조를 남기는 것은 23a2d92 부터다 - 그 앞 코드면 이 줄은 뺀다.
-    save_health = getattr(health, "save_results", None)
-    if save_health is not None:
-        with measure("홈 첫 읽기 (밤 스캔이 대조를 남기기 전)"):
+    # 야간 스캔이 끝날 때 남기는 것 - 헬스체크 대조(23a2d92 부터)와 스캔 탭 요약(그 뒤).
+    # 그 앞 코드면 없는 것은 건너뛴다.
+    nightly = [save for save in (getattr(health, "save_results", None),
+                                 getattr(nightly_scan, "_save_summaries", None)) if save]
+    if nightly:
+        with measure("홈 첫 읽기 (밤 스캔이 남기기 전)"):
             dashboard.read_dashboard(data_dir, config, cache={})
-        save_health(data_dir, config)   # 야간 스캔이 끝날 때 하는 일
+        with measure("스캔 탭 첫 읽기 (밤 스캔이 남기기 전)"):
+            nightly_scan.get_status_snapshot(data_dir, config, cache={})
+        for save in nightly:
+            save(data_dir, config)
 
     home, scan_tab = {}, {}
     with measure("홈 첫 읽기"):

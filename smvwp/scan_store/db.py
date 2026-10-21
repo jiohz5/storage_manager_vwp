@@ -229,6 +229,19 @@ CREATE TABLE IF NOT EXISTS health_results (
     computed_at TEXT NOT NULL
 );
 
+-- 야간 스캔이 끝날 때 남긴 스캔 탭 요약 (계정마다 한 줄, 완료된 세대의 것).
+--
+-- 상위·증가 경로, 이전 크기, 큰 파일 변화, 덜 센 경로는 세대가 끝나면 바뀌지 않는다.
+-- 그런데 창은 열 때마다 이것을 결과 표에서 줄마다 찾아 읽었다 (계정 20개면 14MB,
+-- NFS 요청 3천여 번 - 창을 열 때의 가장 큰 읽기). 스캔이 남긴 것을 창이 세대와
+-- 설정이 같을 때만 쓴다 (`nightly_scan.get_status_snapshot`).
+CREATE TABLE IF NOT EXISTS scan_summaries (
+    account_id TEXT PRIMARY KEY,
+    input_key TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    computed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,
