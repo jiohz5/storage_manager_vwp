@@ -1234,41 +1234,48 @@ def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -
 
 
 def _save_summaries(data_dir: Path, config: config_module.AppConfig) -> None:
+    """야간 스캔이 끝날 때 - 실패해도 창이 스스로 읽으므로 기록만 한다."""
+
+    try:
+        save_summaries(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("스캔 탭 요약을 남기지 못했습니다 (창이 스스로 읽습니다)")
+
+
+def save_summaries(data_dir: Path, config: config_module.AppConfig) -> int:
     """계정마다 완료된 세대의 스캔 탭 요약을 남긴다 - 창이 열 때마다 읽지 않게.
 
     세대가 그대로인 계정은 건너뛴다 (이미 남겼다). 설정에서 빠진 계정의 줄은 지운다.
-    실패해도 창이 스스로 읽으므로 기록만 한다."""
+    새로 남긴 계정 수를 준다. 야간 스캔이 끝날 때와 `smvwp_cli.py prepare` 가 부른다."""
 
     settings = config.settings
     top_n, max_depth = settings.detail_scan_top_n, settings.growth_list_max_depth
-    try:
-        with scan_store.session(data_dir) as conn:
-            states = scan_store.account_states(conn)
-            saved = {
-                row["account_id"]: row["input_key"]
-                for row in conn.execute("SELECT account_id, input_key FROM scan_summaries")
-            }
-            rows = []
-            for account in config.accounts:
-                state = states.get(account.account_id)
-                current_gen = state.last_completed_generation if state else None
-                if not current_gen:
-                    continue
-                key = _summary_key(account.account_id, current_gen, top_n, max_depth)
-                if saved.get(account.account_id) == key:
-                    continue
-                parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth)
-                rows.append((account.account_id, key, json.dumps(_plain(parts), ensure_ascii=False),
-                             scan_store.utc_now_iso()))
-            ids = [account.account_id for account in config.accounts]
-            conn.execute(
-                f"DELETE FROM scan_summaries WHERE account_id NOT IN ({','.join('?' * len(ids))})",
-                ids,
-            )
-            conn.executemany("INSERT OR REPLACE INTO scan_summaries VALUES (?, ?, ?, ?)", rows)
-            conn.commit()
-    except Exception:  # pragma: no cover - 방어적 처리
-        logger.exception("스캔 탭 요약을 남기지 못했습니다 (창이 스스로 읽습니다)")
+    with scan_store.session(data_dir) as conn:
+        states = scan_store.account_states(conn)
+        saved = {
+            row["account_id"]: row["input_key"]
+            for row in conn.execute("SELECT account_id, input_key FROM scan_summaries")
+        }
+        rows = []
+        for account in config.accounts:
+            state = states.get(account.account_id)
+            current_gen = state.last_completed_generation if state else None
+            if not current_gen:
+                continue
+            key = _summary_key(account.account_id, current_gen, top_n, max_depth)
+            if saved.get(account.account_id) == key:
+                continue
+            parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth)
+            rows.append((account.account_id, key, json.dumps(_plain(parts), ensure_ascii=False),
+                         scan_store.utc_now_iso()))
+        ids = [account.account_id for account in config.accounts]
+        conn.execute(
+            f"DELETE FROM scan_summaries WHERE account_id NOT IN ({','.join('?' * len(ids))})",
+            ids,
+        )
+        conn.executemany("INSERT OR REPLACE INTO scan_summaries VALUES (?, ?, ?, ?)", rows)
+        conn.commit()
+    return len(rows)
 
 
 def _stored_summary(conn, account_id: str, key: str) -> Optional[dict]:

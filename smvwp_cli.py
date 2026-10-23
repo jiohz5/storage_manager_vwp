@@ -202,6 +202,59 @@ def command_collect(args) -> int:
     return 0
 
 
+# -- prepare ---------------------------------------------------------------
+
+
+def command_prepare(args) -> int:
+    """업데이트 뒤 한 번 - DB 를 새 판에 맞추고, 창이 읽을 것을 미리 남긴다.
+
+    새 판이 인덱스나 표를 보태면 DB 를 처음 여는 프로세스가 그것을 만든다. 창이 그
+    첫 프로세스가 되면 홈이 그동안 기다리고(실기: 115초), 그사이 다른 수집은 "스캔 DB
+    가 잠겨" 를 만난다. cron 을 내리고 창을 닫은 채 이것을 한 번 돌리면 아무도
+    기다리지 않는다. 헬스체크 대조와 스캔 탭 요약도 여기서 남긴다 - 안 그러면 다음
+    야간 스캔까지 창이 열 때마다 스스로 읽는다."""
+
+    import time
+
+    from smvwp import health, nightly_scan, scan_lock, scan_store, search_index, store
+
+    data_dir = _resolve_or_fail(args.data_dir)
+    try:
+        config = config_module.load_config(data_dir)
+    except config_module.ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    if scan_lock.is_locked(data_dir):
+        print("상세 스캔이 돌고 있습니다 - 끝난 뒤(또는 smvwp_cli.py scan --stop 뒤) 다시 돌리세요.",
+              file=sys.stderr)
+        return 1
+
+    def opened(module):
+        with module.session(data_dir):
+            pass
+
+    steps = [
+        ("표본 DB 맞추기", lambda: opened(store)),
+        ("스캔 DB 맞추기", lambda: opened(scan_store)),
+    ]
+    if search_index.db_path(data_dir).exists():
+        steps.append(("검색 색인 DB 맞추기", lambda: opened(search_index)))
+    steps += [
+        ("헬스체크 대조 남기기", lambda: f"{health.save_results(data_dir, config)}개 프로젝트 계정"),
+        ("스캔 탭 요약 남기기", lambda: f"{nightly_scan.save_summaries(data_dir, config)}개 계정 새로"),
+    ]
+
+    print(f"업데이트 뒤 준비 - {data_dir}")
+    print("(cron 을 내리고 창을 모두 닫은 채 돌립니다. 처음 한 번은 표가 크면 오래 걸립니다.)")
+    total = time.monotonic()
+    for label, work in steps:
+        started = time.monotonic()
+        note = work()
+        print(f"  {label:<14} {time.monotonic() - started:7.1f}초" + (f"  {note}" if note else ""))
+    print(f"끝 ({time.monotonic() - total:.1f}초). 이제 cron 을 다시 올립니다: ./setup_cron.csh")
+    return 0
+
+
 # -- load ------------------------------------------------------------------
 #
 # 이 명령이 답하려는 것: **낮에 돌려도 되나, 몇 갈래까지 되나, 그때 누가 서버를
@@ -679,6 +732,12 @@ def build_parser() -> argparse.ArgumentParser:
     collect = sub.add_parser("collect", help="15분 경량 수집 1회 (cron용)")
     _add_data_dir(collect)
     collect.set_defaults(func=command_collect)
+
+    prepare = sub.add_parser(
+        "prepare", help="업데이트 뒤 한 번 - DB 를 새 판에 맞추고 창이 읽을 요약을 미리 남긴다"
+    )
+    _add_data_dir(prepare)
+    prepare.set_defaults(func=command_prepare)
 
     load = sub.add_parser("load", help="쌓인 서버 부하 이력 보기")
     _add_data_dir(load)
