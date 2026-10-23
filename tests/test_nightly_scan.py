@@ -639,6 +639,61 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.assertFalse(scan_lock.is_locked(self.data_dir))
 
 
+class FairOrderTests(unittest.TestCase):
+    """하룻밤에 다 못 도는 밤이 이어져도 어느 계정도 오래 비지 않는다.
+
+    예전에는 날짜로 시작 위치를 하루 한 칸씩 돌렸다. 계정 109개에 밤마다 50개면 어떤
+    계정은 50일 연속 스캔되고 그다음 59일은 한 번도 안 됐다. 하다 만 계정도 다음 밤에
+    맨 뒤로 밀렸다."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        self.config = config_module.load_config(self.data_dir)
+        for name in "abcdefg":
+            (root / name).mkdir()
+            config_module.add_account(self.config, name, str(root / name), data_dir=self.data_dir)
+        self.accounts = list(self.config.accounts)
+
+    def finish(self, account, at):
+        with scan_store.session(self.data_dir) as conn:
+            state = scan_store.get_account_state(conn, account.account_id)
+            scan_store.mark_generation_completed(
+                conn, account.account_id, state.working_generation, completed_at=at
+            )
+
+    def names(self, accounts):
+        return [account.name for account in accounts]
+
+    def test_unfinished_then_never_then_oldest(self):
+        a, b, c, d = self.accounts[:4]
+        self.finish(a, "2026-10-20T21:00:00+00:00")
+        self.finish(b, "2026-10-01T21:00:00+00:00")
+        self.finish(d, "2026-10-21T21:00:00+00:00")
+        with scan_store.session(self.data_dir) as conn:   # d 는 다음 세대를 하다 말았다
+            scan_store.seed_checkpoints(conn, d.account_id, scan_store.BASELINE, 2, ["/d/x"])
+        order = self.names(nightly_scan._fair_order(self.data_dir, [a, b, c, d]))
+        self.assertEqual(order, ["d", "c", "b", "a"])
+
+    def test_no_account_waits_long_when_nights_are_short(self):
+        """계정 7개, 하룻밤에 3개만 끝내는 밤이 14번 - 어느 계정도 3밤 넘게 비지 않는다
+        (날짜로 한 칸씩 돌리던 예전 순서로는 5밤이 빈다)."""
+
+        last_seen = {}
+        gaps = []
+        for night in range(1, 15):
+            tonight = nightly_scan._fair_order(self.data_dir, self.accounts)[:3]
+            for slot, account in enumerate(tonight):
+                self.finish(account, f"2026-10-{night:02d}T21:00:{slot:02d}+00:00")
+                if account.name in last_seen:
+                    gaps.append(night - last_seen[account.name])
+                last_seen[account.name] = night
+        self.assertEqual(set(last_seen), set("abcdefg"))
+        self.assertLessEqual(max(gaps), 3)
+
+
 class StatusIsOneReadTests(unittest.TestCase):
     """스캔 상태는 **한 번의 읽기**다 (`sqlite_db.read_snapshot`).
 

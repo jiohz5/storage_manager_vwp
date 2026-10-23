@@ -8,8 +8,8 @@ DESIGN.md 1부 7절이 요구하는 안전장치들을 한 곳에 모았다:
 - "여러 계정의 상세 작업은 동시에 두 개 이상 돌리지 않고 직렬 처리" ->
   `scan_lock`으로 전체 실행 자체를 하나만 허용하고, **기본값에서는** 계정도
   한 번에 하나씩만 처리한다.
-- "완료 순서를 날짜별로 순환시켜 특정 계정이 계속 뒤로 밀리지 않게 공정성
-  확보" -> `_rotate_accounts`가 오늘 날짜를 시드로 시작 위치를 돌린다.
+- "특정 계정이 계속 뒤로 밀리지 않게 공정성 확보" -> `_fair_order` 가 하다 만
+  계정, 한 번도 못 끝낸 계정, 오래전에 끝낸 계정 순으로 세운다.
 - 06:00에는 "완료된 체크포인트를 남기고 paused로 종료" -> `status`가
   completed/paused/stopped/error로 구분되어 강제 종료와 다르다는 게 남는다.
 
@@ -310,14 +310,40 @@ def _engine_plan(settings) -> "tuple[str, int, int]":
     return detail_scan.ENGINE_DU, workers, 1
 
 
-def _rotate_accounts(accounts, today: datetime):
-    """오늘 날짜를 시드로 시작 인덱스를 돌려, 특정 계정이 항상 먼저(또는
-    항상 나중에) 처리되지 않게 한다."""
+def _fair_order(data_dir: Path, accounts) -> list:
+    """이 밤에 돌 순서 - 하다 만 계정, 한 번도 못 끝낸 계정, 오래전에 끝낸 계정 순.
 
-    if not accounts:
-        return []
-    start = today.toordinal() % len(accounts)
-    return list(accounts[start:]) + list(accounts[:start])
+    예전에는 날짜로 시작 위치를 하루 한 칸씩 돌렸다. 하룻밤에 다 못 도는 밤이
+    이어지면 그 한 칸으로는 따라잡지 못한다 - 계정 109개에 밤마다 50개면 어떤
+    계정은 50일 연속 스캔되고 그다음 59일은 한 번도 안 된다. 하다 만 계정도 다음
+    밤에 맨 뒤로 밀려 그 세대가 오래 끝나지 않았다.
+
+    이 순서면 밤마다 가장 오래 못 본 계정부터 가므로, 하룻밤에 K 개를 끝내는
+    한 어느 계정도 (계정 수 / K) 밤 넘게 비지 않는다. 같은 조건끼리는 설정 순서다."""
+
+    with scan_store.session(data_dir) as conn:
+        states = scan_store.account_states(conn)
+        started = {
+            account.account_id
+            for account in accounts
+            if scan_store.is_seeded(
+                conn, account.account_id, scan_store.BASELINE,
+                (states.get(account.account_id) or scan_store.AccountScanState(
+                    account_id=account.account_id)).working_generation,
+            )
+        }
+
+    def rank(item):
+        index, account = item
+        state = states.get(account.account_id)
+        finished_at = state.last_completed_at if state else None
+        if account.account_id in started:
+            return (0, "", index)          # 하다 만 것 - 그 세대부터 끝낸다
+        if not finished_at:
+            return (1, "", index)          # 한 번도 못 끝냈다
+        return (2, finished_at, index)     # 오래전에 끝낸 것부터
+
+    return [account for _index, account in sorted(enumerate(accounts), key=rank)]
 
 
 def _default_top_level_lister(account_path: str) -> List[str]:
@@ -598,8 +624,8 @@ def group_accounts_by_volume(
     돌리면 서로를 방해할 뿐이고, 다른 볼륨이면 그만큼 그대로 벌어진다.
     **묶음끼리는 동시에, 묶음 안에서는 하나씩**이 맞다.
 
-    묶음 안의 순서는 유지한다 - 공정성 순환(`_rotate_accounts`)이 정한 순서를
-    여기서 뒤집으면 특정 계정이 계속 뒤로 밀린다.
+    묶음 안의 순서는 유지한다 - 공정한 순서(`_fair_order`)를 여기서 뒤집으면
+    특정 계정이 계속 뒤로 밀린다.
     """
 
     grouped = paths.group_by_volume(
@@ -932,7 +958,7 @@ def _scan_under_lock(
     settings = config.settings
     scan_lock.clear_stop_request(data_dir)
 
-    accounts = _rotate_accounts(config_module.enabled_accounts(config), local_now)
+    accounts = _fair_order(data_dir, config_module.enabled_accounts(config))
     skipped: List[AccountOutcome] = []
     if not bypass_window:
         accounts, skipped = _skip_done_tonight(data_dir, accounts, local_now, settings)
