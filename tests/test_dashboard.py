@@ -7,6 +7,7 @@
 """
 
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -150,6 +151,33 @@ class ProgressAndSharedReadTests(unittest.TestCase):
         with patch("smvwp.store.trend_samples_since", wraps=store.trend_samples_since) as reads:
             dashboard.read_dashboard(self.data_dir, self.config)
         self.assertEqual(reads.call_count, len(self.config.accounts))
+
+    def test_opening_the_files_has_its_own_step(self):
+        """실기에서 "115초 중 64초(우선순위)" 만 보이고 나머지 51초가 어디 갔는지
+        몰랐다. DB 를 여는 시간(업데이트 직후면 새 인덱스를 만든다)이 어느 단계에도
+        들지 않았다."""
+
+        import re
+
+        from smvwp import i18n
+        from smvwp.scan_store import db as scan_db
+
+        real = scan_db.connect
+
+        def slow_open(data_dir):
+            time.sleep(0.3)
+            return real(data_dir)
+
+        with patch.object(dashboard, "SLOW_READ_SECONDS", 0.0), \
+                patch("smvwp.scan_store.db.connect", side_effect=slow_open):
+            with self.assertLogs("smvwp.dashboard", level="WARNING") as logs:
+                dashboard.read_dashboard(self.data_dir, self.config)
+        line = logs.output[0]
+        opened = re.search(re.escape(i18n.t("dashboard.step.open")) + r" (\d+\.\d)초", line)
+        self.assertIsNotNone(opened, line)
+        self.assertGreaterEqual(float(opened.group(1)), 0.3)
+        for key in ("dashboard.step.health", "dashboard.step.scan", "dashboard.step.plan"):
+            self.assertIn(i18n.t(key), line)
 
     def test_a_slow_read_leaves_the_time_of_each_step(self):
         """어디를 줄일지 실기의 숫자로 정한다."""

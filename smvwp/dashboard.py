@@ -67,10 +67,18 @@ def _utc(stamp) -> Optional[datetime]:
 
 # 읽는 단계 (i18n 키). 화면이 "무엇을 읽는 중 (2/4)" 로 보여 준다 - 실기(NFS)에서
 # 홈 데이터가 보이기까지 15초쯤 걸렸고, 그동안 아무 표시가 없었다.
+#
+# 단계 시간을 더하면 전체가 되게 나눈다. 실기에서 "115초 중 64초(우선순위)" 만 보이고
+# 나머지가 어디 갔는지 몰랐다 - DB 를 여는 시간(업데이트 직후면 새 인덱스를 거기서
+# 만든다)이 어느 단계에도 들지 않았고, '우선순위' 안에 헬스체크와 스캔 상태가 같이
+# 들어 있었다.
 STEPS = (
+    "dashboard.step.open",
     "dashboard.step.samples",
     "dashboard.step.history",
     "dashboard.step.forecast",
+    "dashboard.step.health",
+    "dashboard.step.scan",
     "dashboard.step.plan",
 )
 
@@ -129,6 +137,14 @@ def read_dashboard(data_dir: Path, config, on_step=None, cache=None) -> Dashboar
     """
 
     step = _Steps(on_step)
+    # 두 DB 를 먼저 한 번씩 연다. 이 프로세스에서 처음이면 스키마를 확인하는데,
+    # 업데이트 직후에는 새 인덱스를 거기서 만든다 (한 번, 표가 크면 오래).
+    step("dashboard.step.open")
+    from . import scan_store
+
+    for module in (store, scan_store):
+        with module.session(data_dir):
+            pass
     # 한 번의 읽기로 묶는다 (`sqlite_db.read_snapshot`) - 문이 계정 수 x 2 이고, 이력을
     # 이어 읽으려면 "어디까지 읽었나" 와 그 줄들이 같은 시점이어야 한다.
     with store.session(data_dir) as conn, sqlite_db.read_snapshot(conn):
@@ -153,8 +169,7 @@ def read_dashboard(data_dir: Path, config, on_step=None, cache=None) -> Dashboar
         forecasts = {}
         failed = True
 
-    step("dashboard.step.plan")
-    plan = _read_plan(data_dir, config, samples, cache)
+    plan = _read_plan(data_dir, config, samples, cache, step)
     step.finish()
     return DashboardData(
         samples=samples,
@@ -252,7 +267,7 @@ def _read_trends(history: dict) -> dict:
     return result
 
 
-def _read_plan(data_dir, config, samples, cache=None):
+def _read_plan(data_dir, config, samples, cache=None, step=lambda _key: None):
     """처리 우선순위. 터져도 대시보드는 떠야 한다.
 
     용량 표는 이 프로그램의 본체다. 우선순위 계산 하나 때문에 그것까지 못 보게
@@ -260,6 +275,7 @@ def _read_plan(data_dir, config, samples, cache=None):
 
     from . import health, nightly_scan, priority
 
+    step("dashboard.step.health")
     try:
         summary = health.check_all(
             data_dir, config, cache=cache.setdefault("health", {}) if cache is not None else None
@@ -268,6 +284,7 @@ def _read_plan(data_dir, config, samples, cache=None):
         logger.exception("헬스체크 실패 (대시보드는 계속합니다)")
         summary = None
 
+    step("dashboard.step.scan")
     scan_accounts = []
     try:
         scan_accounts = nightly_scan.get_status_snapshot(
@@ -276,6 +293,7 @@ def _read_plan(data_dir, config, samples, cache=None):
     except Exception:
         logger.exception("스캔 상태 읽기 실패 (대시보드는 계속합니다)")
 
+    step("dashboard.step.plan")
     try:
         return priority.build(
             samples=list(samples.values()),
