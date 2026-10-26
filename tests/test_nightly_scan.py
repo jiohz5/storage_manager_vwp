@@ -151,6 +151,38 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_short_nights_reach_the_last_directory_without_starting_over(self):
+        """실기 질문: "계정 안의 디렉터리 1~100 을 밤마다 처음부터 보면, 50 까지 하다
+        아침이 오는 밤이 이어질 때 100 까지 단 한 번이라도 가는가."
+
+        간다 - 다음 밤은 1 부터가 아니라 남은 곳부터 잰다. 이미 잰 디렉터리는 다시 재지
+        않고, 그 세대는 마지막 디렉터리를 잰 밤에 끝난다. 디렉터리 10개를 밤마다 4개씩만
+        재고 아침이 오는 밤을 이어 본다."""
+
+        self.config.settings.checkpoint_workers = 1
+        self.top_dirs = [f"{self.account_path}/dir{n:02d}" for n in range(1, 11)]
+        measured = []
+        for night in (1, 2, 3):
+            now = [datetime(2026, 8, night, 23, 0)]
+            morning = datetime(2026, 8, night + 1, 7, 0)
+
+            def four_then_morning(du_call_no, now=now, morning=morning):
+                if du_call_no == 4:
+                    now[0] = morning
+
+            runner = FakeCommandRunner(on_du=four_then_morning)
+            with self._patch_commands(runner):
+                summary = nightly_scan.run_nightly_scan(
+                    self.data_dir, self.config, triggered_by="cron",
+                    clock=lambda now=now: now[0], top_level_lister=self.lister,
+                )
+            measured += [command[-1] for command in runner.du_calls]
+            expected = "done" if night == 3 else "interrupted"
+            self.assertEqual(summary.accounts[0].baseline_status, expected, f"{night}번째 밤")
+
+        self.assertEqual(sorted(measured), self.top_dirs)   # 한 번씩만, 빠짐없이
+        self.assertEqual(self.completed_generation(), 1)
+
     def test_deadline_interrupts_and_next_call_resumes_without_redoing_work(self):
         t0 = datetime(2026, 7, 31, 23, 0)
         t_after_window = datetime(2026, 8, 1, 7, 0)  # 06:00 시간창을 이미 지난 시각
