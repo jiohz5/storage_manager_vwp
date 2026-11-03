@@ -242,6 +242,13 @@ CREATE TABLE IF NOT EXISTS scan_summaries (
     computed_at TEXT NOT NULL
 );
 
+-- 화면이 쓰는 작은 값 몇 개 (이름 - 값). 지금은 '모든 계정 한 바퀴' 를 언제
+-- 시작했는가 하나다 (`nightly_scan.advance_pass`, `scan_overview`).
+CREATE TABLE IF NOT EXISTS scan_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 CREATE TABLE IF NOT EXISTS account_scan_state (
     account_id TEXT PRIMARY KEY,
     last_completed_generation INTEGER,

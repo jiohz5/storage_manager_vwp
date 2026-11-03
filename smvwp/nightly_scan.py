@@ -878,6 +878,7 @@ def run_nightly_scan(
     _notify_growth(data_dir, config, outcomes, finished_at)
     _prune_orphan_search_indexes(data_dir, config)
     _save_summaries(data_dir, config)
+    _advance_pass(data_dir, config)
     _save_health(data_dir, config)
     _generate_reports(data_dir, config, finished_at)
     return RunSummary(
@@ -1224,7 +1225,7 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 
 # 남겨 둔 스캔 탭 요약의 형식. `_settled_parts` 가 내는 것이나 그 규칙이 바뀌면 올린다 -
 # 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
-SUMMARY_FORMAT = 1
+SUMMARY_FORMAT = 2   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
 
 
 def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
@@ -1309,6 +1310,52 @@ def _plain(parts: dict) -> dict:
     }
 
 
+def _advance_pass(data_dir: Path, config: config_module.AppConfig) -> None:
+    """야간 스캔이 끝날 때 - 실패해도 화면이 어림하므로 기록만 한다."""
+
+    try:
+        advance_pass(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("한 바퀴의 시작을 남기지 못했습니다 (화면이 어림합니다)")
+
+
+def advance_pass(data_dir: Path, config: config_module.AppConfig, now: Optional[datetime] = None) -> Optional[str]:
+    """'모든 계정 한 바퀴' 의 시작을 남긴다 (`scan_overview` 참고). 남긴 값을 준다.
+
+    볼 수 있는 계정이 모두 이번 바퀴에 끝났으면 지금이 다음 바퀴의 시작이다. 아직
+    남긴 적이 없으면 화면이 어림하던 값(가장 오래전 완료)을 남긴다. 경로를 못 본
+    계정은 기다리지 않는다 - 경로가 돌아오기 전에는 잴 수 없다."""
+
+    def moment(stamp):
+        return scan_window.local_time_of(stamp) if stamp else None
+
+    with scan_store.session(data_dir) as conn:
+        stored = scan_store.get_meta(conn, PASS_STARTED_KEY)
+        states = scan_store.account_states(conn)
+        visible = [
+            states.get(account.account_id) or scan_store.AccountScanState(account_id=account.account_id)
+            for account in config_module.enabled_accounts(config)
+        ]
+        visible = [state for state in visible if not state.unavailable_reason]
+        finished = [moment(state.last_completed_at) for state in visible]
+        start = stored
+        if start is None:
+            known = [stamp for stamp in finished if stamp is not None]
+            if not known:
+                return None
+            oldest = min(known)
+            start = next(
+                state.last_completed_at for state in visible
+                if moment(state.last_completed_at) == oldest
+            )
+        begun = moment(start)
+        if visible and all(stamp is not None and stamp > begun for stamp in finished):
+            start = _utc_iso(now or datetime.now())
+        if start != stored:
+            scan_store.set_meta(conn, PASS_STARTED_KEY, start)
+    return start
+
+
 def _save_health(data_dir: Path, config: config_module.AppConfig) -> None:
     """헬스체크 대조 결과를 남긴다 - 창이 열 때마다 대조하지 않게 (`health.check_all`).
 
@@ -1380,6 +1427,15 @@ class AccountScanSnapshot:
     unavailable_reason: Optional[str] = None
     unavailable_detail: str = ""
     unavailable_at: Optional[str] = None
+    # 상세 스캔 현황(`scan_overview`)이 쓰는 것. `current_*` 는 끝난 세대의 것이다
+    # (`_generation_facts`). `working_started_at` 은 하는 중인 세대를 처음 잰 때.
+    last_completed_at: Optional[str] = None
+    current_dirs: int = 0
+    current_started_at: Optional[str] = None
+    current_finished_at: Optional[str] = None
+    current_measured_kb: Optional[int] = None
+    seconds_per_dir: Optional[float] = None
+    working_started_at: Optional[str] = None
 
 
 @dataclass
@@ -1388,6 +1444,12 @@ class StatusSnapshot:
     window_description: str
     latest_run: Optional[dict]
     accounts: List[AccountScanSnapshot]
+    # '모든 계정 한 바퀴' 를 시작한 때 (UTC ISO). 야간 스캔이 남긴다 - 아직 없으면
+    # None 이고 `scan_overview` 가 어림한다.
+    pass_started_at: Optional[str] = None
+    # 최근 실행들 (최신순) - `{run_id, triggered_by, started_at, ended_at, status,
+    # dirs_done}`. 밤마다 한 일을 보여 준다.
+    recent_runs: List[dict] = field(default_factory=list)
 
 
 def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth) -> dict:
@@ -1429,6 +1491,28 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth) -> 
         ),
         "partial_paths": (
             scan_store.partial_paths(conn, account_id, current_gen) if current_gen else []
+        ),
+        # 상세 스캔 현황(`scan_overview`)이 쓰는 것: 그 세대를 언제부터 언제까지
+        # 쟀나(여러 밤에 걸치면 디렉터리마다 잰 날이 다르다), 디렉터리 몇 개였나,
+        # 다 더하면 얼마였나, 디렉터리 하나에 얼마나 걸렸나(완료 일정 어림).
+        **_generation_facts(conn, account_id, current_gen),
+    }
+
+
+def _generation_facts(conn, account_id: str, generation) -> dict:
+    if not generation:
+        return {"current_dirs": 0, "current_started_at": None, "current_finished_at": None,
+                "current_measured_kb": None, "seconds_per_dir": None}
+    dirs, started, finished = scan_store.generation_span(
+        conn, account_id, scan_store.BASELINE, generation
+    )
+    return {
+        "current_dirs": dirs,
+        "current_started_at": started,
+        "current_finished_at": finished,
+        "current_measured_kb": scan_store.measured_total_kb(conn, account_id, generation),
+        "seconds_per_dir": scan_store.seconds_per_checkpoint(
+            conn, account_id, scan_store.BASELINE, generation
         ),
     }
 
@@ -1538,8 +1622,24 @@ def get_status_snapshot(
                         state.working_generation,
                         pending_baseline_count,
                     ),
+                    last_completed_at=state.last_completed_at,
+                    current_dirs=settled.get("current_dirs", 0),
+                    current_started_at=settled.get("current_started_at"),
+                    current_finished_at=settled.get("current_finished_at"),
+                    current_measured_kb=settled.get("current_measured_kb"),
+                    seconds_per_dir=settled.get("seconds_per_dir"),
+                    # 하는 중인 세대를 처음 잰 때 - 하다 만 계정만 읽는다 (한둘).
+                    working_started_at=(
+                        scan_store.generation_span(
+                            conn, account.account_id, scan_store.BASELINE,
+                            state.working_generation,
+                        )[1]
+                        if baseline_counts["total"] else None
+                    ),
                 )
             )
+        pass_started_at = scan_store.get_meta(conn, PASS_STARTED_KEY)
+        recent_runs = _recent_runs(conn, cache)
 
     return StatusSnapshot(
         is_running=scan_lock.is_locked(data_dir),
@@ -1548,7 +1648,37 @@ def get_status_snapshot(
         ),
         latest_run=latest_run,
         accounts=accounts_snapshot,
+        pass_started_at=pass_started_at,
+        recent_runs=recent_runs,
     )
+
+
+# 스캔 DB `scan_meta` 에서 '모든 계정 한 바퀴' 를 시작한 때를 담는 이름.
+PASS_STARTED_KEY = "pass_started_at"
+
+# 밤마다 한 일을 몇 밤치 보여 주나.
+RECENT_RUNS = 7
+
+
+def _recent_runs(conn, cache: Optional[dict]) -> List[dict]:
+    """최근 실행들과 그 실행이 재 낸 디렉터리 수.
+
+    끝난 실행의 수는 다시 바뀌지 않으므로 `cache` 에 기억한다 - 디렉터리 수는
+    체크포인트 표를 훑어야 해서, 창이 30초(스캔 중 5초)마다 일곱 번씩 하면 안 된다."""
+
+    runs = []
+    for row in scan_store.last_runs(conn, RECENT_RUNS):
+        run = {key: row[key] for key in ("run_id", "triggered_by", "started_at", "ended_at", "status")}
+        key = ("run", run["run_id"])
+        remembered = cache.get(key) if cache is not None and run["ended_at"] else None
+        if remembered is None:
+            until = run["ended_at"] or _utc_iso(datetime.now(timezone.utc))
+            remembered = scan_store.checkpoints_done_between(conn, run["started_at"], until)
+            if cache is not None and run["ended_at"]:
+                cache[key] = remembered
+        run["dirs_done"] = remembered
+        runs.append(run)
+    return runs
 
 
 def stop_own_run(data_dir: Path) -> Optional[str]:

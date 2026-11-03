@@ -420,6 +420,37 @@ def completion_intervals(
     ]
 
 
+def generation_span(
+    conn: sqlite3.Connection, account_id: str, kind: str, generation: int
+) -> "tuple[int, Optional[str], Optional[str]]":
+    """그 세대에서 `(잰 디렉터리 수, 처음 잰 때, 마지막으로 잰 때)`.
+
+    한 세대가 여러 밤에 걸치면 디렉터리마다 잰 날이 다르다 - 화면은 이 기간을
+    보여 줘서 "1~50 은 어제 값" 인 것을 알게 한다."""
+
+    row = conn.execute(
+        "SELECT SUM(CASE WHEN status IN (?, ?) THEN 1 ELSE 0 END), "
+        "MIN(scanned_at), MAX(scanned_at) FROM scan_checkpoints "
+        "WHERE account_id = ? AND kind = ? AND generation = ? AND scanned_at IS NOT NULL",
+        (STATUS_DONE, STATUS_ERROR, account_id, kind, generation),
+    ).fetchone()
+    return int(row[0] or 0), row[1], row[2]
+
+
+def seconds_per_checkpoint(
+    conn: sqlite3.Connection, account_id: str, kind: str, generation: int
+) -> Optional[float]:
+    """그 세대에서 디렉터리(체크포인트) 하나에 걸린 시간의 중앙값(초). 모르면 None.
+
+    `estimate_remaining_seconds` 와 같은 근거다 - 밤을 건너는 긴 간격에 흔들리지
+    않게 중앙값을 쓴다."""
+
+    intervals = completion_intervals(conn, account_id, kind, generation)
+    if len(intervals) < ETA_MIN_INTERVALS:
+        return None
+    return _median(intervals)
+
+
 def _median(values: List[float]) -> float:
     ordered = sorted(values)
     middle = len(ordered) // 2

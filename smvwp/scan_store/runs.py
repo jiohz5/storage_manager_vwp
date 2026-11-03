@@ -125,6 +125,34 @@ def last_runs(conn: sqlite3.Connection, limit: int = 5) -> List[sqlite3.Row]:
     ).fetchall()
 
 
+def checkpoints_done_between(conn: sqlite3.Connection, started_at: str, ended_at: str) -> int:
+    """그 사이에 재 낸 디렉터리(체크포인트) 수 - 밤마다 한 일을 보여 줄 때.
+
+    지운 세대(`prune_old_generations`)의 것은 세지 못한다. 세대를 둘 남기므로
+    최근 며칠은 빠짐없이 잡힌다."""
+
+    row = conn.execute(
+        "SELECT COUNT(*) FROM scan_checkpoints WHERE kind = 'baseline' "
+        "AND status IN ('done', 'error') AND scanned_at >= ? AND scanned_at <= ?",
+        (started_at, ended_at),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM scan_meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO scan_meta (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    conn.commit()
+
+
 def recent_runs(conn: sqlite3.Connection, days: int = 30) -> List[sqlite3.Row]:
     """최근 N일 안에 시작한 실행들 (최신순).
 

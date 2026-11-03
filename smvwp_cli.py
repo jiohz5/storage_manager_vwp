@@ -242,6 +242,7 @@ def command_prepare(args) -> int:
     steps += [
         ("헬스체크 대조 남기기", lambda: f"{health.save_results(data_dir, config)}개 프로젝트 계정"),
         ("스캔 탭 요약 남기기", lambda: f"{nightly_scan.save_summaries(data_dir, config)}개 계정 새로"),
+        ("한 바퀴 시작 남기기", lambda: nightly_scan.advance_pass(data_dir, config) and "남김"),
     ]
 
     print(f"업데이트 뒤 준비 - {data_dir}")
