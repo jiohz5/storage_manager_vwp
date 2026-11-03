@@ -36,9 +36,9 @@ from PyQt5.QtWidgets import (
 from .. import formatting, i18n, large_files, scan_digest, tiers
 from . import theme, widgets
 
-# 세부 탭. 순서가 곧 화면 순서다 - 요약이 먼저 열린다.
-TAB_KEYS = ["scan.tab.summary", "scan.tab.accounts", "scan.tab.growth", "scan.tab.large"]
-(TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE) = range(4)
+# 세부 탭. 순서가 곧 화면 순서다 - 현황(`overview_page`)이 먼저 열린다.
+TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.tab.growth", "scan.tab.large"]
+(TAB_OVERVIEW, TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE) = range(5)
 
 # 살펴볼 것 한 줄을 누르면 어느 탭으로 가나. 못 잰 것·덜 센 것은 증가 경로
 # 탭 설명에 사유가 나오므로 그쪽이다.

@@ -507,8 +507,12 @@ class ScanDigestSmokeTests(_GuiCase):
         super().setUp()
         from smvwp.gui.main_window import MainWindow
 
+        from smvwp.gui.scan_pages import TAB_SUMMARY
+
         self.window = MainWindow(self.data_dir, self.config)
         self.tab = self.window._scan_tab
+        # 요약 쪽을 본다 - 이 탭은 이제 현황이 먼저 열린다.
+        self.tab.detail_tabs.setCurrentIndex(TAB_SUMMARY)
 
     def tearDown(self):
         self.window.close()
@@ -743,10 +747,13 @@ class ScanTabHeightTests(_GuiCase):
         self.assertLess(needed, 760, f"창 최소 세로 {needed}px")
 
     def test_the_detail_areas_are_tabs_not_a_stack(self):
-        """요약·계정별·증가 경로·큰 파일 - 한 범주가 한 탭."""
+        """현황·요약·계정별·증가 경로·큰 파일 - 한 범주가 한 탭."""
+
+        from smvwp.gui.scan_pages import TAB_KEYS
 
         tabs = self.window._scan_tab.detail_tabs
-        self.assertEqual(tabs.count(), 4)
+        self.assertEqual(tabs.count(), len(TAB_KEYS))
+        self.assertEqual(len(TAB_KEYS), 5)
 
     def test_each_detail_tab_has_a_name(self):
         tabs = self.window._scan_tab.detail_tabs
@@ -761,14 +768,16 @@ class ScanTabHeightTests(_GuiCase):
         listing = self.window._scan_tab.summary_page.findings_list
         self.assertGreater(listing.maximumHeight(), 1000)
 
-    def test_the_summary_tab_opens_first(self):
-        """카드는 늘 보이던 자리에서 첫 탭으로 내려왔다 - 위에 늘 떠 있으면
-        세부 탭마다 300px 씩 빼앗았다. 대신 창을 열면 요약이 먼저 보인다."""
+    def test_the_overview_tab_opens_first(self):
+        """"어디까지 스캔됐고 언제 끝나나" 가 이 탭을 여는 까닭이라 현황이 먼저
+        열린다. 요약(카드 넷과 살펴볼 것)은 바로 옆 탭이다."""
 
-        from smvwp.gui.scan_pages import TAB_SUMMARY
+        from smvwp.gui.scan_pages import TAB_OVERVIEW, TAB_SUMMARY
 
         tab = self.window._scan_tab
-        self.assertEqual(tab.detail_tabs.currentIndex(), TAB_SUMMARY)
+        self.assertEqual(tab.detail_tabs.currentIndex(), TAB_OVERVIEW)
+        self.assertTrue(tab.overview_page.isVisibleTo(tab))
+        tab.detail_tabs.setCurrentIndex(TAB_SUMMARY)
         for card in (tab.summary_page.card_run, tab.summary_page.card_delta, tab.summary_page.card_biggest,
                      tab.summary_page.card_findings):
             self.assertTrue(card.isVisibleTo(tab))
@@ -1784,6 +1793,53 @@ class LoadingProgressTests(_GuiCase):
         self.assertFalse(tab.first_load_bar.isHidden())
         self.assertEqual(tab.first_load_bar.value(), 2)
         self.assertIn("3/12", tab.scan_status_label.text())
+
+
+class OverviewPageTests(_GuiCase):
+    """상세 스캔 탭의 '현황' - 실기: "날마다 스캔을 하는데 뭘 했는지 어디까지
+    했는지를 모르겠다." 진짜 스캔 기록으로 채워 본다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp import nightly_scan, scan_store
+        from smvwp.gui.main_window import MainWindow
+
+        with scan_store.session(self.data_dir) as conn:
+            for index, account in enumerate(self.config.accounts):
+                tops = [f"{account.path}/d{n}" for n in range(3 + index)]
+                scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, 1, tops)
+                for _ in tops:
+                    checkpoint = scan_store.next_pending(conn, account.account_id, scan_store.BASELINE, 1)
+                    scan_store.mark_done(conn, checkpoint["id"], size_kb=10)
+                scan_store.mark_generation_completed(conn, account.account_id, 1)
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+        self.tab = self.window._scan_tab
+        self.seen = []
+        self.tab.overview_changed.connect(self.seen.append)
+        self.tab._on_scan_status_ready(nightly_scan.get_status_snapshot(self.data_dir, self.config))
+
+    def test_it_fills_from_the_scan_records(self):
+        page = self.tab.overview_page
+        self.assertTrue(page.pass_percent.text().endswith("%"))
+        self.assertIn("/", page.pass_counts.text())
+        self.assertEqual(page.table.rowCount(), len(self.config.accounts))
+        self.assertEqual(len(page.segments.segments()), len(self.config.accounts))
+        self.assertTrue(page.pass_stats["finish"][1].text())
+
+    def test_the_home_gets_the_same_numbers(self):
+        self.assertEqual(len(self.seen), 1)
+        self.assertIs(self.seen[0], self.tab.overview)
+
+    def test_double_clicking_an_account_shows_its_growth(self):
+        from smvwp.gui.overview_page import ACCOUNT_ROLE
+        from smvwp.gui.scan_pages import TAB_GROWTH
+
+        page = self.tab.overview_page
+        page.table.cellDoubleClicked.emit(0, 0)
+        self.assertEqual(self.tab.detail_tabs.currentIndex(), TAB_GROWTH)
+        opened = page.table.item(0, 0).data(ACCOUNT_ROLE)
+        self.assertEqual(self.tab.scan_account_combo.currentData(), opened)
 
 
 class CollectedElsewhereTests(_GuiCase):

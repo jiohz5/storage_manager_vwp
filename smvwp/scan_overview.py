@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Callable, Dict, List, Optional, Sequence
 
-from . import scan_window
+from . import formatting, i18n, scan_window
 
 DONE = "done"          # 이번 바퀴에 끝냈다
 DOING = "doing"        # 재다 말았다 (다음 밤에 이어서)
@@ -188,7 +188,8 @@ def build(
     by_id = {account.account_id: account for account in config.accounts}
     entries = [entry for entry in snapshot.accounts if entry.account_id in by_id]
 
-    stored_start = scan_window.local_time_of(snapshot.pass_started_at) if snapshot.pass_started_at else None
+    stored = getattr(snapshot, "pass_started_at", None)
+    stored_start = scan_window.local_time_of(stored) if stored else None
     completions = [
         scan_window.local_time_of(entry.last_completed_at)
         for entry in entries
@@ -210,9 +211,11 @@ def build(
     if lanes_for is None:
         lanes_for = lambda items: _default_lanes(items, by_id, settings)   # noqa: E731
     lanes = max(1, int(lanes_for([by_id[item.account_id] for item in remaining]) or 1))
+    # 시간창 안인데 스캔이 돌고 있지 않으면 이 밤의 실행은 이미 끝났다(다 돌았거나
+    # 누가 멈췄다) - 남은 일은 다음 밤부터다.
     nights, finish_at, beyond = _schedule(
         remaining, now, settings.detail_scan_window_start_hour,
-        settings.detail_scan_window_end_hour, lanes,
+        settings.detail_scan_window_end_hour, lanes, skip_current=not snapshot.is_running,
     )
 
     return Overview(
@@ -224,7 +227,7 @@ def build(
         nights=nights,
         finish_at=finish_at,
         beyond=beyond,
-        runs=_runs(snapshot.recent_runs, entries),
+        runs=_runs(getattr(snapshot, "recent_runs", None), entries),
     )
 
 
@@ -344,12 +347,16 @@ def windows(now: datetime, start_hour: int, end_hour: int):
         yield max(opens, now), closes
 
 
-def _schedule(remaining, now, start_hour, end_hour, lanes):
-    """남은 계정을 순서대로 밤 시간창에 채운다. `(밤들, 다 끝나는 때, 넘쳤나)`."""
+def _schedule(remaining, now, start_hour, end_hour, lanes, skip_current=False):
+    """남은 계정을 순서대로 밤 시간창에 채운다. `(밤들, 다 끝나는 때, 넘쳤나)`.
+
+    `skip_current` 면 지금 열려 있는 시간창은 건너뛴다 (그 밤의 실행이 이미 끝났다)."""
 
     if not remaining:
         return [], None, False
     upcoming = windows(now, start_hour, end_hour)
+    if skip_current:
+        upcoming = (window for window in upcoming if window[0] > now)
     nights: List[Night] = []
 
     def next_night() -> bool:
@@ -423,3 +430,195 @@ def _runs(recent_runs, entries) -> List[RunNight]:
             accounts_done=accounts_done,
         ))
     return runs
+
+
+# -- 화면에 쓸 글 (Qt 없음 - 시험할 수 있게) -------------------------------------
+
+# 마지막 완료가 이만큼 지나면 '오래됨' 으로 칠한다.
+STALE_DAYS = 7
+
+
+def day_text(moment: datetime) -> str:
+    """`10/28(화)`"""
+
+    weekdays = i18n.t("overview.weekdays").split(",")
+    return i18n.t("overview.day", month=moment.month, day=moment.day,
+                  weekday=weekdays[moment.weekday()])
+
+
+def when_text(moment: datetime) -> str:
+    """`10/28(화) 새벽` - 어림이라 분까지 말하지 않는다."""
+
+    hour = moment.hour
+    key = ("overview.part.dawn" if hour < 6 else "overview.part.morning" if hour < 12
+           else "overview.part.afternoon" if hour < 20 else "overview.part.evening")
+    return f"{day_text(moment)} {i18n.t(key)}"
+
+
+def clock(moment: datetime) -> str:
+    return moment.strftime("%H:%M")
+
+
+def night_name(night: Night, now: datetime) -> str:
+    """`지금` / `오늘 밤` / `내일 밤` / `모레 밤` / `10/30(목) 밤`."""
+
+    if night.opens <= now:
+        return i18n.t("overview.night.now")
+    days = (night.opens.date() - now.date()).days
+    key = {0: "overview.night.tonight", 1: "overview.night.tomorrow",
+           2: "overview.night.day_after"}.get(days)
+    if key:
+        return i18n.t(key)
+    return i18n.t("overview.night.other", day=day_text(night.opens))
+
+
+def night_label(night: Night, now: datetime) -> str:
+    """밤 칸의 제목 - `오늘 밤 · 10/26(일)`, 하는 중이면 `지금 · 06:00 까지`."""
+
+    if night.opens <= now:
+        return i18n.t("overview.night.now_label", end=clock(night.closes))
+    return f"{night_name(night, now)} · {day_text(night.opens)}"
+
+
+def night_summary(night: Night) -> str:
+    carry = sum(1 for slot in night.slots if slot.carries_over)
+    if carry:
+        return i18n.t("overview.night.summary_carry", finished=night.finished, carry=carry)
+    return i18n.t("overview.night.summary", finished=night.finished)
+
+
+def slot_text(slot: Slot) -> str:
+    if slot.carries_over:
+        return i18n.t("overview.slot.carry", start=clock(slot.start))
+    return i18n.t("overview.slot.span", start=clock(slot.start), end=clock(slot.end))
+
+
+def slot_name(slot: Slot) -> str:
+    return i18n.t("overview.slot.resumed", name=slot.name) if slot.resumes else slot.name
+
+
+def age_text(item: AccountCoverage, now: datetime) -> "tuple[str, str]":
+    """마지막 완료가 언제였나 `(글, 알약 종류)`."""
+
+    days = item.age_days(now)
+    if days is None:
+        return i18n.t("overview.age.never"), "stale"
+    if days == 0:
+        return i18n.t("overview.age.today"), "done"
+    if days == 1:
+        return i18n.t("overview.age.yesterday"), "done"
+    if days == 2:
+        return i18n.t("overview.age.two_days"), "soft"
+    return i18n.t("overview.age.days", days=days), ("stale" if days >= STALE_DAYS else "soft")
+
+
+def _span_text(start: Optional[datetime], end: Optional[datetime]) -> str:
+    if start is None:
+        return i18n.t("common.none")
+    head = start.strftime("%m/%d %H:%M")
+    if end is None:
+        return head
+    tail = end.strftime("%H:%M") if end.date() == start.date() else end.strftime("%m/%d %H:%M")
+    return f"{head} ~ {tail}"
+
+
+def period_text(item: AccountCoverage) -> str:
+    """보여 주는 결과를 잰 기간. 하는 중이면 이번 세대를 처음 잰 때부터."""
+
+    if item.state == DOING and item.working_started_at is not None:
+        return i18n.t("overview.period.doing", start=item.working_started_at.strftime("%m/%d %H:%M"))
+    return _span_text(item.period_start, item.period_end)
+
+
+def progress_text(item: AccountCoverage) -> str:
+    if item.state == UNSEEN:
+        return i18n.t("overview.progress.unseen")
+    if item.state == WAITING and item.estimated_total:
+        return i18n.t("overview.progress.estimated", total=item.total_dirs)
+    return f"{item.done_dirs} / {item.total_dirs}"
+
+
+def size_text(item: AccountCoverage) -> str:
+    """잰 합계, 그 계정만의 지금 쓰는 양을 알면 함께 (그 뒤 바뀐 양)."""
+
+    if item.measured_kb is None:
+        return i18n.t("common.none")
+    measured = formatting.format_kb(item.measured_kb)
+    if item.current_kb is None:
+        return measured
+    return i18n.t("overview.size.with_now", measured=measured,
+                  current=formatting.format_kb(item.current_kb),
+                  delta=formatting.format_kb_delta(item.changed_kb))
+
+
+def next_text(item: AccountCoverage, overview: "Overview") -> str:
+    if item.state == DONE:
+        return i18n.t("overview.next.done")
+    if item.state == UNSEEN:
+        return i18n.t("overview.next.unseen")
+    for night in overview.nights:
+        if any(slot.account_id == item.account_id for slot in night.slots):
+            return i18n.t("overview.next.order", night=night_name(night, overview.now), order=item.order)
+    return i18n.t("overview.next.later")
+
+
+def pass_counts_text(overview: "Overview") -> str:
+    visible = [item for item in overview.accounts if item.state != UNSEEN]
+    return i18n.t(
+        "overview.pass.counts", done=f"{overview.done_dirs:,}", total=f"{overview.total_dirs:,}",
+        finished=overview.count(DONE), accounts=len(visible),
+    )
+
+
+def started_text(overview: "Overview") -> str:
+    if overview.pass_started_at is None:
+        return i18n.t("common.none")
+    text = when_text(overview.pass_started_at)
+    return i18n.t("overview.pass.estimated", when=text) if overview.pass_estimated else text
+
+
+def finish_text(overview: "Overview") -> str:
+    if not overview.remaining:
+        return i18n.t("overview.finish.done")
+    if overview.beyond or overview.finish_at is None:
+        return i18n.t("overview.finish.beyond", nights=MAX_NIGHTS)
+    return i18n.t("overview.finish.value", when=when_text(overview.finish_at), nights=len(overview.nights))
+
+
+def stalest_text(overview: "Overview") -> "tuple[str, str]":
+    """가장 오래 못 본 계정 `(글, 알약 종류)`."""
+
+    item = overview.stalest
+    if item is None:
+        return i18n.t("common.none"), "soft"
+    age, kind = age_text(item, overview.now)
+    return i18n.t("overview.stalest.value", name=item.name, age=age), kind
+
+
+RUN_STATUS_KEYS = {
+    "completed": ("overview.run.completed", "done"),
+    "paused": ("overview.run.paused", "soft"),
+    "stopped": ("overview.run.stopped", "stale"),
+    "error": ("overview.run.error", "stale"),
+    "running": ("overview.run.running", "doing"),
+}
+
+
+def run_why(run: RunNight) -> "tuple[str, str]":
+    key, kind = RUN_STATUS_KEYS.get(run.status, (None, "soft"))
+    return (i18n.t(key) if key else run.status), kind
+
+
+def run_done_text(run: RunNight) -> str:
+    return i18n.t("overview.run.done", accounts=run.accounts_done, dirs=f"{run.dirs_done:,}")
+
+
+def run_night_axis(run: RunNight, start_hour: int, end_hour: int) -> "tuple[datetime, datetime]":
+    """그 실행이 돈 밤의 시간창 - 지난 밤들을 같은 축(22~06)에 놓는다."""
+
+    started = run.started_at or datetime.now()
+    for opens, closes in windows(started - timedelta(days=1), start_hour, end_hour):
+        if closes > started:
+            return opens, closes
+    return started, started + timedelta(hours=8)  # pragma: no cover - 위에서 늘 돌아온다
+

@@ -34,13 +34,13 @@ def entry(name, last=None, done=0, total=0, dirs=40, speed=60.0, unseen=None, **
     return SimpleNamespace(**values)
 
 
-def overview(entries, now, pass_started_at=None, runs=(), samples=None, settings=NIGHT):
+def overview(entries, now, pass_started_at=None, runs=(), samples=None, settings=NIGHT, running=False):
     config = SimpleNamespace(
         accounts=[SimpleNamespace(account_id=e.account_id, name=e.account_name, path=f"/u/{e.account_id}")
                   for e in entries],
         settings=settings,
     )
-    snapshot = SimpleNamespace(accounts=entries, is_running=False, pass_started_at=pass_started_at,
+    snapshot = SimpleNamespace(accounts=entries, is_running=running, pass_started_at=pass_started_at,
                                recent_runs=list(runs))
     return scan_overview.build(snapshot, config, latest_samples=samples, now=now)
 
@@ -125,13 +125,21 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(result.finish_at, datetime(2026, 10, 27, 23, 0))
         self.assertEqual(first.finished, 1)
 
-    def test_inside_the_window_the_first_night_starts_now(self):
+    def test_inside_the_window_a_running_scan_goes_on_now(self):
         now = datetime(2026, 10, 27, 1, 30)
         result = overview([entry("a", last="2026-10-20T03:00:00", dirs=10, speed=60.0)], now,
-                          pass_started_at="2026-10-22T22:00:00")
+                          pass_started_at="2026-10-22T22:00:00", running=True)
         night = result.nights[0]
         self.assertEqual((night.opens, night.closes), (now, datetime(2026, 10, 27, 6, 0)))
         self.assertEqual(result.finish_at, now + timedelta(minutes=10))
+
+    def test_inside_the_window_with_nothing_running_tonight_is_over(self):
+        """시간창 안인데 스캔이 안 돈다 - 이 밤의 실행은 끝났다 (다 돌았거나 멈췄다)."""
+
+        now = datetime(2026, 10, 27, 1, 30)
+        result = overview([entry("a", last="2026-10-20T03:00:00", dirs=10, speed=60.0)], now,
+                          pass_started_at="2026-10-22T22:00:00")
+        self.assertEqual(result.nights[0].opens, datetime(2026, 10, 27, 22, 0))
 
     def test_a_half_done_account_uses_what_is_left(self):
         now = datetime(2026, 10, 26, 14, 0)

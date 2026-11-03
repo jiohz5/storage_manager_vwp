@@ -70,6 +70,24 @@ ACCENT_SOFT = "#e6edfe"  # 선택 행 배경
 DANGER = "#c62828"
 DANGER_SOFT = "#fdecec"
 
+# 상세 스캔 현황의 상태 색. 등급 색(초록·노랑·주황·빨강·보라)과 섞이지 않게 파랑
+# 계열과 회색으로 짓고, 서로는 밝기로도 갈린다 (색만으로 구분하지 않는다 - 글자가
+# 늘 같이 있다). '못 봄' 만 주황이다 - 사람이 손봐야 하는 유일한 상태라서다.
+SCAN_DONE = ACCENT
+SCAN_DOING = "#7da2ff"
+SCAN_WAITING = "#d5dde6"
+SCAN_UNSEEN = "#ef6c00"
+# 한 밤에 차례로 도는 계정들 - 같은 파랑의 짙고 옅은 단계.
+NIGHT_SLOTS = ("#0145f2", "#3d6cf5", "#7da2ff", "#b7caff")
+# 알약(칩) `(배경, 글자)`. 글자는 배경 위에서 4.5:1 이 넘는 것으로 골랐다.
+CHIPS = {
+    "done": ("#e6edfe", "#0139cc"),
+    "doing": (ACCENT, "#ffffff"),
+    "soft": ("#eef2f6", TEXT_MUTED),
+    "stale": ("#ffe8d6", "#8a3800"),
+    "unseen": ("#ffffff", "#3d4b57"),
+}
+
 # -- 타이포 스케일 ----------------------------------------------------------
 FONT_DISPLAY = 30   # 히어로 숫자
 FONT_TITLE = 20     # 화면·섹션 제목

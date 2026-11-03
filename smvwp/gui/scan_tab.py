@@ -45,12 +45,13 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import auto_scan, config as config_module, cron_status, formatting, i18n
-from .. import nightly_scan, procio, scan_digest, usage_log
+from .. import nightly_scan, procio, scan_digest, scan_overview, usage_log
 from ..scheduler import NightlyScanWorker, ScanStatusWorker
+from .overview_page import OverviewPage
 from .scan_pages import (
     TAB_GROWTH,
     TAB_KEYS,
-    TAB_SUMMARY,
+    TAB_OVERVIEW,
     AccountsPage,
     GrowthPage,
     LargeFilesPage,
@@ -102,6 +103,9 @@ class ScanTab(QFrame):
 
     status_message = pyqtSignal(str)
     banner_changed = pyqtSignal(object)   # BannerState
+    # 상세 스캔 현황 (`scan_overview.Overview`). 홈도 같은 숫자를 쓴다 - 따로 읽지
+    # 않게 이 탭이 30초(스캔 중 5초)마다 읽은 것을 넘긴다.
+    overview_changed = pyqtSignal(object)
 
     def __init__(self, data_dir: Path, get_config, parent: QWidget = None):
         super().__init__(parent)
@@ -110,6 +114,9 @@ class ScanTab(QFrame):
         self._scan_snapshot = None
         self._cron_status = None
         self._auto_scan_started_key = None
+        # 홈이 읽은 최신 표본 - 잰 합계를 지금 쓰는 양과 견줄 때 쓴다 (`set_latest_samples`).
+        self._latest_samples = {}
+        self.overview = None
 
         self._build()
 
@@ -324,12 +331,14 @@ class ScanTab(QFrame):
 
         # 쪽은 그리기만 한다. 사람이 쪽에서 무엇을 고르면 신호로 알려 오고,
         # 계정 선택과 탭 옮기기는 여기서 한다 (`scan_pages` 참고).
+        self.overview_page = OverviewPage()
         self.summary_page = SummaryPage()
         self.accounts_page = AccountsPage()
         self.growth_page = GrowthPage()
         self.large_page = LargeFilesPage()
         self._pages = (
-            self.summary_page, self.accounts_page, self.growth_page, self.large_page,
+            self.overview_page, self.summary_page, self.accounts_page, self.growth_page,
+            self.large_page,
         )
         for page, key in zip(self._pages, TAB_KEYS):
             self.detail_stack.addWidget(page)
@@ -337,7 +346,9 @@ class ScanTab(QFrame):
         self.summary_page.finding_chosen.connect(self._on_finding_chosen)
         self.accounts_page.account_selected.connect(self._on_account_selected)
         self.accounts_page.account_opened.connect(self._on_account_opened)
-        self.detail_tabs.setCurrentIndex(TAB_SUMMARY)
+        self.overview_page.account_selected.connect(self._on_account_selected)
+        self.overview_page.account_opened.connect(self._on_account_opened)
+        self.detail_tabs.setCurrentIndex(TAB_OVERVIEW)
 
     def _current_target_text(self, latest_run) -> str:
         """지금 훑고 있는 경로 한 줄."""
@@ -534,6 +545,33 @@ class ScanTab(QFrame):
         self.accounts_page.show_accounts(snapshot, self._get_config().accounts, running)
         self._refresh_growth_table()
         self._refresh_large_files()
+        self._refresh_overview()
+
+    # -- 현황 ------------------------------------------------------------
+    def set_latest_samples(self, samples) -> None:
+        """홈이 읽은 최신 표본을 받는다 - 현황의 '지금 쓰는 양' 에 쓴다."""
+
+        self._latest_samples = dict(samples or {})
+        self._refresh_overview()
+
+    def _refresh_overview(self) -> None:
+        """스냅샷으로 현황을 내 그리고, 홈에도 넘긴다. 계산은 가볍다 (DB 를 읽지 않는다)."""
+
+        if self._scan_snapshot is None:
+            return
+        config = self._get_config()
+        try:
+            overview = scan_overview.build(
+                self._scan_snapshot, config, latest_samples=self._latest_samples,
+                now=datetime.now(),
+            )
+        except Exception:
+            # 현황 하나 때문에 탭 전체가 서면 안 된다 - 나머지 쪽은 그대로 보인다.
+            logger.exception("상세 스캔 현황을 내지 못했습니다")
+            return
+        self.overview = overview
+        self.overview_page.show_overview(overview, config.settings)
+        self.overview_changed.emit(overview)
 
     # -- 요약 ------------------------------------------------------------
     def _refresh_digest(self, snapshot) -> None:
