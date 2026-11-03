@@ -86,6 +86,11 @@ CHIPS = {
     "soft": ("#eef2f6", TEXT_MUTED),
     "stale": ("#ffe8d6", "#8a3800"),
     "unseen": ("#ffffff", "#3d4b57"),
+    # 등급 알약 (홈의 '손볼 계정', 사용률 칸). 기준 색의 옅은 바탕에 짙은 글자.
+    "tier_warn": ("#fff4cf", "#6b4e00"),
+    "tier_alert": ("#ffe8d6", "#8a3800"),
+    "tier_emergency": ("#ffe1e1", "#8e1c1c"),
+    "tier_full": ("#f3e5f5", "#5a1780"),
 }
 
 # -- 타이포 스케일 ----------------------------------------------------------
@@ -328,6 +333,27 @@ QFrame#subTabsRule {{ background: {BORDER}; border: none; }}
 /* 하위 탭의 쪽들은 카드의 흰 면을 그대로 쓴다. 전역 `QWidget` 규칙을 두면
    쪽마다 창 배경색이 깔려 카드 안에 회색 판이 하나 더 생긴다. */
 QStackedWidget#subPages, QWidget#subPage {{ background: transparent; }}
+
+/* ---------- 머리줄 (홈·상세 스캔 이동) ---------- */
+/* 탭 띠 대신 머리줄의 두 단추로 오간다. 지금 있는 쪽만 흰 면으로 띄운다. */
+QFrame#nav {{ background: {BORDER}; border: none; border-radius: 12px; }}
+QPushButton#navButton {{
+    background: transparent; border: none; border-radius: 9px;
+    padding: 7px 18px; color: {TEXT_MUTED}; min-height: 18px;
+}}
+QPushButton#navButton:checked {{ background: {SURFACE}; color: {TEXT}; }}
+QPushButton#navButton:hover:!checked {{ color: {TEXT}; background: transparent; }}
+QToolButton#tools {{
+    background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: {RADIUS};
+    padding: 8px 14px; font-weight: {WEIGHT_BOLD};
+}}
+QToolButton#tools:hover {{ background: {SURFACE_SUNKEN}; border-color: {ACCENT}; }}
+QToolButton#tools::menu-indicator {{ subcontrol-position: right center; right: 6px; }}
+/* 홈 타일 - 눌러서 상세 스캔으로 가는 타일은 손 모양과 테두리로 알린다. */
+QFrame#tileLink {{
+    background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD};
+}}
+QFrame#tileLink:hover {{ border-color: {ACCENT}; }}
 
 /* ---------- 펼침 버튼 ---------- */
 /* 접힌 설정을 여는 버튼. 일반 버튼처럼 보이면 "눌러야 하는 것"으로 읽히므로,

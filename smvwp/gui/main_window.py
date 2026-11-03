@@ -7,7 +7,8 @@ DESIGN.md 2부 6절은 "대시보드 단일 화면(탭 없음)"으로 결정했�
 "화면 구조 - 단일 화면에서 탭 둘로" 참고).
 
 유지되는 것:
-- "한눈 요약 우선": 홈 탭 최상단에 히어로(가장 높은 사용률 + 주의 이상 건수).
+- "한눈 요약 우선": 홈 최상단에 타일 넷(가장 찬 곳, 손볼 계정, 상세 스캔 한 바퀴,
+  끝 예상) - 2026-11 개편 전에는 히어로 하나였다 (`_build_ui` 참고).
 - 계정 등록/설정·보고서·검색은 여전히 다이얼로그다 (탭을 더 늘리지 않는다).
 
 모든 표시 문자열은 `i18n.t`를 거친다. 언어를 바꾸면 `retranslate()`가 정적
@@ -18,21 +19,24 @@ DESIGN.md 2부 6절은 "대시보드 단일 화면(탭 없음)"으로 결정했�
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
+    QApplication,
+    QButtonGroup,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -42,6 +46,7 @@ from PyQt5.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QShortcut,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +58,7 @@ from .. import priority
 from .. import usage_log
 from .. import (
     dashboard,
+    scan_overview,
     diagnostics,
     forecast_notify,
     freshness,
@@ -62,6 +68,7 @@ from .. import (
 )
 from ..scheduler import CollectorScheduler, DashboardWorker, ThreadWorker
 from . import theme, widgets
+from .overview_widgets import Chip, SegmentBar, TimelineBar
 from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
@@ -70,8 +77,27 @@ from .search_dialog import SearchDialog
 
 logger = logging.getLogger(__name__)
 
-# 홈 왼쪽 칸(요약·동작)의 폭. 표가 열둘이라 남는 가로는 전부 표에 준다.
-HOME_LEFT_WIDTH = 300
+# 홈 오른쪽 칸('무엇부터 할까', '오늘 밤 상세 스캔')의 폭. 남는 가로는 계정 표가 쓴다.
+RIGHT_COLUMN_WIDTH = 400
+
+# 처음 여는 창 크기. 오른쪽 칸(400)을 빼고도 계정 표 여덟 열이 가로 스크롤 없이
+# 들어가는 폭이다 (1,200 에서는 표가 750 폭이라 옆으로 밀렸다). 화면이 그보다
+# 작으면 화면에 맞춘다 - 실기 화면은 세로 1,080 이 최대다.
+DEFAULT_SIZE = (1600, 960)
+MINIMUM_SIZE = (960, 700)
+
+
+def default_size(screen) -> tuple:
+    """`screen` 의 쓸 수 있는 영역 안에 드는 처음 창 크기 (가장자리 40 은 남긴다)."""
+
+    width, height = DEFAULT_SIZE
+    if screen is None:
+        return DEFAULT_SIZE
+    available = screen.availableGeometry()
+    return (
+        max(MINIMUM_SIZE[0], min(width, available.width() - 40)),
+        max(MINIMUM_SIZE[1], min(height, available.height() - 40)),
+    )
 
 COLUMN_KEYS = [
     "dashboard.col.name",
@@ -85,6 +111,11 @@ COLUMN_KEYS = [
     # 왔다" 가 훨씬 많은 것을 말하는데, 그 둘은 붙어 있어야 한 번에 읽힌다.
     "trend.col",
     "forecast.column",
+    # 그 계정의 상세 스캔이 어디쯤인가 (`scan_overview.home_chip`). 실기에서 "어디까지
+    # 스캔됐는지 모르겠다" 고 했다 - 계정을 훑는 자리에서 함께 보여야 한다.
+    "dashboard.col.scan",
+    # 수집이 멈춘 계정을 알리는 유일한 칸이라 남긴다 (시안에는 머리줄의 '마지막
+    # 수집' 하나뿐이었다).
     "dashboard.col.collected_at",
 ]
 (
@@ -94,8 +125,9 @@ COLUMN_KEYS = [
     COL_BYTE,
     COL_TREND,
     COL_FORECAST,
+    COL_SCAN,
     COL_TIME,
-) = range(7)
+) = range(8)
 
 # 이 표는 **훑어보는 목록**이다.
 #
@@ -111,13 +143,76 @@ COLUMN_KEYS = [
 # 있다) 열 하나를 통째로 쓰면서 정보는 거의 주지 않았다. 대신 경로 툴팁에
 # 넣는다 - 필요한 순간(어느 파일시스템인지 확인할 때)에만 보면 되는 값이다.
 
-# 히어로 - 창을 열자마자 시선이 먼저 닿는 자리. "지금 가장 급한 것 하나"를
-# 큰 숫자로 못박고, 나머지는 그 아래 작은 글씨로 둔다. 표를 훑기 전에 판단이
-# 끝나는 것이 목표다.
-#
-# 등급별 왼쪽 띠 색만 여기서 정하고(등급에 따라 달라지므로), 나머지 외양은
-# 전부 theme.py가 담당한다.
-HERO_ACCENT_STYLE = "background: {color}; border-radius: 3px;"
+class _Tile(QFrame):
+    """홈 맨 위의 타일 하나 - 이름, 큰 값, 그 옆 한마디, 막대나 알약, 설명 한두 줄.
+
+    값을 먼저 세우고 설명은 작게 둔다. 표를 읽고 스스로 요약을 만들게 하는 대신
+    답을 먼저 보여 주기 위한 자리다 (`widgets.StatCard` 와 같은 생각, 칸이 더 많다).
+    `link` 면 눌러서 다른 쪽으로 간다 - 손 모양 커서와 테두리로 알린다."""
+
+    clicked = pyqtSignal()
+
+    def __init__(self, link: bool = False, parent=None):
+        super().__init__(parent)
+        self._link = link
+        self.setObjectName("tileLink" if link else "card")
+        if link:
+            self.setCursor(Qt.PointingHandCursor)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(18, 14, 18, 14)
+        box.setSpacing(6)
+        self.caption = QLabel()
+        self.caption.setObjectName("statLabel")
+        box.addWidget(self.caption)
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self.value = QLabel("-")
+        self.value.setObjectName("display")
+        top.addWidget(self.value, 0, Qt.AlignBottom)
+        self.side = QLabel()
+        self.side.setObjectName("muted")
+        self.side.setVisible(False)   # 쓰는 타일만 켠다 (빈 칸 몫 간격이 생기지 않게)
+        top.addWidget(self.side, 0, Qt.AlignBottom)
+        self.chips = QHBoxLayout()
+        self.chips.setSpacing(6)
+        top.addLayout(self.chips)
+        top.addStretch(1)
+        box.addLayout(top)
+        self.bar = SegmentBar(8)
+        self.bar.setVisible(False)
+        box.addWidget(self.bar)
+        self.detail = QLabel()
+        self.detail.setObjectName("caption")
+        self.detail.setWordWrap(True)
+        box.addWidget(self.detail)
+        self.note = QLabel()
+        self.note.setWordWrap(True)
+        self.note.setVisible(False)
+        box.addWidget(self.note)
+        box.addStretch(1)
+
+    def set_chips(self, chips) -> None:
+        """`[(글, 알약 종류), ...]` - 지난 것은 지운다."""
+
+        while self.chips.count():
+            item = self.chips.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        for text, kind in chips:
+            self.chips.addWidget(Chip(text, kind))
+
+    def set_note(self, text: str, color: str = "") -> None:
+        self.note.setText(text)
+        self.note.setStyleSheet(
+            f"font-weight: {theme.WEIGHT_BOLD}; color: {color or theme.TEXT_MUTED};"
+            f" font-size: {theme.FONT_CAPTION + 1}px;"
+        )
+        self.note.setVisible(bool(text))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt 규약
+        if self._link and event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 def evaluate_freshness(data_dir: Path, config) -> Dict[str, object]:
@@ -157,11 +252,10 @@ class MainWindow(QMainWindow):
         self._trends: Dict[str, object] = {}
         i18n.set_language(config.settings.language)
 
-        # 열이 10개인 표 + 히어로 + 스캔 섹션이 한 화면에 들어가려면 이 정도는
-        # 필요하다. 최소 크기를 함께 못박아, 창을 줄였을 때 표가 한 줄도 안
-        # 보이는 상태로 무너지지 않게 한다.
-        self.resize(1200, 820)
-        self.setMinimumSize(960, 700)
+        # 최소 크기를 함께 못박아, 창을 줄였을 때 표가 한 줄도 안 보이는 상태로
+        # 무너지지 않게 한다. 그보다 좁으면 표가 옆으로 밀린다 (안 보이는 것보다 낫다).
+        self.resize(*default_size(QApplication.primaryScreen()))
+        self.setMinimumSize(*MINIMUM_SIZE)
         # 야간 상세 스캔.
         #
         # 두 갈래로 돌 수 있다. cron(`setup_cron.csh`)이 22:00에 띄우거나,
@@ -174,6 +268,9 @@ class MainWindow(QMainWindow):
         # **`_build_ui` 보다 먼저 만든다.** 화면을 짜는 쪽이 이 탭을 탭 띠에
         # 붙이고, `retranslate` 도 곧바로 이 탭에게 자기 문구를 채우라고 한다.
         self._scan_tab = ScanTab(data_dir, lambda: self._config, self)
+        # 스캔 탭이 넘겨 준 상세 스캔 현황과 "지금 도는가" (홈 타일·오늘 밤 카드가 쓴다).
+        self._overview = None
+        self._scan_banner = None
 
         self._build_ui()
 
@@ -181,6 +278,7 @@ class MainWindow(QMainWindow):
         # 만들어지기 때문이다.
         self._scan_tab.status_message.connect(self.status_bar_label.setText)
         self._scan_tab.banner_changed.connect(self._update_home_scan_banner)
+        self._scan_tab.overview_changed.connect(self._on_overview_changed)
 
         self.retranslate()
 
@@ -240,153 +338,48 @@ class MainWindow(QMainWindow):
 
     # -- UI 구성 -----------------------------------------------------
     def _build_ui(self) -> None:
+        """머리줄 하나와 두 쪽(홈 / 상세 스캔).
+
+        ## 시안대로 (2026-11 개편)
+
+        실기에서 "어디까지 스캔되고 스토리지가 어떤 상황인지 판단이 힘들다" 고 했다.
+        홈은 이제 위에서부터 묻는 순서대로 놓는다: 타일 넷(가장 찬 곳, 손볼 계정,
+        상세 스캔 한 바퀴, 끝 예상) - 계정 표 - 오른쪽에 무엇부터 할까와 오늘 밤
+        상세 스캔. 탭 띠 대신 머리줄의 두 단추로 오가고, 자주 안 쓰는 창들(검색·
+        추세·서버 부하·진단·데이터 폴더)은 '도구' 메뉴로 모은다.
+
+        ## 탭 둘은 그대로다
+
+        예전에 한 화면에 세로로 쌓았더니 상세 스캔이 세로를 너무 가져갔다 (DESIGN.md
+        2부 6절). 쪽은 여전히 `QTabWidget` 이고 띠만 숨긴다 - 쪽을 찾는 코드
+        (`indexOf(self._scan_page)`)가 그대로 돈다.
+        """
+
         self._build_menu()
 
-        # 탭 두 개: 홈(현황) / 상세 스캔.
-        #
-        # 원래는 한 화면에 세로로 쌓았는데(DESIGN.md 2부 6절 "대시보드 단일
-        # 화면"), 실제로 써 보니 **상세 스캔 영역이 세로 공간을 너무 많이
-        # 가져갔다.** 매일 보는 것은 현황이고 상세 스캔은 밤에 돌아간 결과를
-        # 가끔 확인하는 것인데, 자주 보는 쪽이 가끔 보는 쪽에 밀리는 구조였다.
-        # 스플리터로 비율을 조절하게 해 봤지만 그건 "매번 사용자가 정리해야
-        # 한다"는 뜻이라 근본 해결이 아니었다.
+        central = QWidget()
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(theme.PAD_CARD, 14, theme.PAD_CARD, theme.PAD_CARD)
+        outer.setSpacing(theme.GAP_SECTION)
+        outer.addWidget(self._build_header())
         self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        self.tabs.tabBar().hide()
+        outer.addWidget(self.tabs, 1)
+        self.setCentralWidget(central)
 
         home = QWidget()
         layout = QVBoxLayout(home)
-        layout.setContentsMargins(theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(theme.GAP_SECTION)
+        layout.addLayout(self._build_tiles())
 
-        # 홈은 두 칸이다.
-        #
-        # 예전에는 히어로·우선순위·버튼·표를 세로로 쌓았다. 위 셋이 세로의
-        # 절반 가까이를 먹어서 정작 매일 보는 계정 표가 몇 줄만 남았다 -
-        # 화면 세로가 1080 이 최대인 곳에서는 더 심했다.
-        #
-        # 요약(히어로 + 우선순위)은 폭이 좁아도 읽히지만 표는 가로가 필요하다.
-        # 그래서 요약은 왼쪽 한 칸에 쌓고, 표는 오른쪽에서 **세로를 전부**
-        # 쓴다. 스캔 배너만 두 칸 위에 걸친다 - 밤새 무엇이 도는지는 어느
-        # 쪽을 보고 있든 눈에 들어와야 한다.
         columns = QHBoxLayout()
         columns.setSpacing(theme.GAP_SECTION)
         left = QVBoxLayout()
-        left.setSpacing(theme.GAP_SECTION)
-        right = QVBoxLayout()
-        right.setSpacing(8)
+        left.setSpacing(8)
 
-        left.addWidget(self._build_hero())
-
-        # 스캔이 도는 동안에는 홈에서도 보이게 한다. 탭을 나눈 뒤로 상세 스캔
-        # 탭을 열지 않으면 밤새 뭐가 도는지 알 수 없어졌기 때문이다. 여기서는
-        # 한 줄 + 막대까지만 보여 주고 자세한 것은 그 탭에서 본다.
-        self.home_scan_banner = QFrame()
-        self.home_scan_banner.setObjectName("card")
-        self.home_scan_banner.setVisible(False)
-        banner_box = QHBoxLayout(self.home_scan_banner)
-        banner_box.setContentsMargins(14, 10, 14, 10)
-        banner_box.setSpacing(12)
-        self.home_scan_label = QLabel()
-        self.home_scan_label.setObjectName("muted")
-        self.home_scan_label.setWordWrap(True)
-        self.home_scan_progress = QProgressBar()
-        self.home_scan_progress.setRange(0, 0)
-        self.home_scan_progress.setTextVisible(False)
-        self.home_scan_progress.setFixedSize(120, 6)
-        self.home_scan_link = QPushButton()
-        # 인덱스를 박아 두면 탭이 하나 더 생기는 순간 엉뚱한 탭으로 간다.
-        self.home_scan_link.clicked.connect(
-            lambda: self.tabs.setCurrentIndex(self.tabs.indexOf(self._scan_page))
-        )
-        banner_box.addWidget(self.home_scan_progress)
-        banner_box.addWidget(self.home_scan_label, 1)
-        banner_box.addWidget(self.home_scan_link)
-        layout.addWidget(self.home_scan_banner)
-        layout.addLayout(columns, 1)
-
-        # -- 처리 우선순위 -----------------------------------------------
-        #
-        # 사용률은 아래 표에, 백업 상태는 헬스체크에, 튀는 파일은 상세 스캔
-        # 탭에 있었다. 각각은 맞는 말인데 **"그래서 오늘 뭘 먼저 하지"** 에는
-        # 아무도 답하지 않았다. 그 한 줄을 맨 위에 둔다.
-        self.priority_card = QFrame()
-        self.priority_card.setObjectName("card")
-        priority_box = QVBoxLayout(self.priority_card)
-        priority_box.setContentsMargins(14, 10, 14, 10)
-        priority_box.setSpacing(4)
-        self.priority_title = QLabel()
-        self.priority_title.setObjectName("sectionTitle")
-        priority_box.addWidget(self.priority_title)
-        self.priority_summary = QLabel()
-        self.priority_summary.setObjectName("muted")
-        self.priority_summary.setWordWrap(True)
-        priority_box.addWidget(self.priority_summary)
-        self.priority_hint = QLabel()
-        self.priority_hint.setObjectName("caption")
-        self.priority_hint.setWordWrap(True)
-        priority_box.addWidget(self.priority_hint)
-        self.priority_list = QListWidget()
-        self.priority_list.setObjectName("findings")
-        self.priority_list.setFrameShape(QListWidget.NoFrame)
-        self.priority_list.setSelectionMode(QListWidget.NoSelection)
-        self.priority_list.setFocusPolicy(Qt.NoFocus)
-        # 문장이 폭을 넘으면 옆으로 밀지 않고 접는다. 왼쪽 칸은 폭이 330px 라
-        # 대부분의 줄이 넘치는데, 가로 스크롤로 두면 문장 뒤쪽("정리하면 800GB
-        # 빕니다")이 통째로 안 보인다.
-        self.priority_list.setWordWrap(True)
-        self.priority_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.priority_list.setResizeMode(QListWidget.Adjust)
-        # 줄을 누르면 상황과 할 일이 뜬다. 손 모양 커서와 안내 한 줄로
-        # 누를 수 있다는 것을 알린다 - 반응만 하고 아무 일이 없으면 고장으로 읽힌다.
-        self.priority_list.viewport().setCursor(Qt.PointingHandCursor)
-        self.priority_list.itemClicked.connect(self._on_priority_clicked)
-        priority_box.addWidget(self.priority_list)
-        left.addWidget(self.priority_card, 1)
-
-        # 동작 버튼은 왼쪽 칸 아래에 두 줄로 놓는다. 한 줄로 늘어놓으면 칸
-        # 폭을 넘어 창 최소 폭을 버튼 일곱 개가 정하게 된다.
-        button_grid = QGridLayout()
-        button_grid.setSpacing(8)
-        self.collect_btn = QPushButton()
-        # 가장 자주 쓰는 동작 하나만 강조한다 - 전부 강조하면 아무것도 강조되지
-        # 않는다.
-        self.collect_btn.setObjectName("primary")
-        self.collect_btn.clicked.connect(self._trigger_now)
-        self.accounts_btn = QPushButton()
-        self.accounts_btn.clicked.connect(self._open_account_dialog)
-        self.reports_btn = QPushButton()
-        self.reports_btn.clicked.connect(self._open_reports_dialog)
-        self.search_btn = QPushButton()
-        self.search_btn.clicked.connect(self._open_search_dialog)
-        self.diagnose_btn = QPushButton()
-        self.diagnose_btn.clicked.connect(self._open_diagnostics)
-        # 서버 부하는 계정이 아니라 **장비**에 대한 것이라 여기 둔다. 상세 스캔
-        # 탭에 두면 "스캔이 만든 부하"로만 읽힌다 - 정작 알고 싶은 것은 그 옆에서
-        # 다른 작업이 얼마나 쓰고 있었나다.
-        self.load_btn = QPushButton()
-        self.load_btn.clicked.connect(self._open_load_dialog)
-        self.trend_btn = QPushButton()
-        self.trend_btn.clicked.connect(self._open_trend_dialog)
-        # 이 도구가 데이터 폴더에 무엇을 얼마나 언제부터 쌓았나 (보기만 한다).
-        self.data_btn = QPushButton()
-        self.data_btn.clicked.connect(self._open_data_dialog)
-        for index, button in enumerate((
-            self.accounts_btn,
-            self.reports_btn,
-            self.search_btn,
-            self.trend_btn,
-            self.load_btn,
-            self.diagnose_btn,
-            self.data_btn,
-        )):
-            button_grid.addWidget(button, index // 2, index % 2)
-        left.addLayout(button_grid)
-        columns.addLayout(left, 0)
-
-        # 계정 목록 머리. **새로고침(지금 수집)을 여기 둔다** - 목록을 보다가
-        # "지금 값이 맞나" 싶을 때 누르는 것이라, 목록에서 멀면 찾지 못한다.
         list_head = QHBoxLayout()
-        list_head.setSpacing(8)
+        list_head.setSpacing(10)
         self.list_title = QLabel()
         self.list_title.setObjectName("sectionTitle")
         list_head.addWidget(self.list_title)
@@ -394,16 +387,7 @@ class MainWindow(QMainWindow):
         self.list_hint.setObjectName("caption")
         self.list_hint.setWordWrap(True)
         list_head.addWidget(self.list_hint, 1)
-        list_head.addStretch(1)
-        # 계정이 스물을 넘으면 눈으로 찾는 것이 일이 된다. 이름이나 경로 조각을
-        # 치면 그것만 남는다 - 표를 다시 그리기만 하므로 DB 를 다시 읽지 않는다.
-        self.filter_edit = QLineEdit()
-        self.filter_edit.setClearButtonEnabled(True)
-        self.filter_edit.setMaximumWidth(220)
-        self.filter_edit.textChanged.connect(self._on_filter_changed)
-        list_head.addWidget(self.filter_edit)
-        list_head.addWidget(self.collect_btn)
-        right.addLayout(list_head)
+        left.addLayout(list_head)
 
         # 데이터를 읽는 동안의 진행. 실기(NFS)에서 창은 바로 떴지만 홈 데이터가
         # 보이기까지 15초쯤 걸렸고, 그동안 아무 표시가 없어 멈춘 줄 알았다.
@@ -419,15 +403,16 @@ class MainWindow(QMainWindow):
         loading_box.addWidget(self.loading_label)
         loading_box.addWidget(self.loading_bar, 1)
         self.loading_row.setVisible(False)
-        right.addWidget(self.loading_row)
+        left.addWidget(self.loading_row)
 
         self.table = QTableWidget(0, len(COLUMN_KEYS))
+        self.table.setObjectName(theme.TABLE_WITH_WIDGETS)
         self._configure_table_columns()
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setAlternatingRowColors(False)  # 등급 색과 겹치면 판독을 방해한다
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.setShowGrid(False)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         # 한 계정에 대한 사실은 네 군데에 흩어져 있다 (사용률·추세·스캔·백업).
@@ -449,33 +434,197 @@ class MainWindow(QMainWindow):
         self._sort_column = COL_BYTE
         self._sort_desc = True
         self._filter_text = ""
-
-        # 홈 탭에서는 계정 표가 세로 공간을 전부 가져간다.
         self.table.setMinimumHeight(140)
-        right.addWidget(self.table, 1)
-        columns.addLayout(right, 1)
+        left.addWidget(self.table, 1)
+        columns.addLayout(left, 1)
 
-        # 왼쪽 칸은 폭을 묶는다. 숫자 몇 개와 문장 몇 줄이라 넓혀도 얻는 것이
-        # 없고, 남는 가로는 열이 열둘인 표가 훨씬 아쉽다.
-        self.home_left_width = HOME_LEFT_WIDTH
-        for widget in (self._hero_card, self.priority_card):
-            widget.setFixedWidth(HOME_LEFT_WIDTH)
+        right_column = QWidget()
+        right_column.setFixedWidth(RIGHT_COLUMN_WIDTH)
+        right = QVBoxLayout(right_column)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(theme.GAP_SECTION)
+        right.addWidget(self._build_priority_card(), 1)
+        right.addWidget(self._build_tonight_card())
+        columns.addWidget(right_column)
+        layout.addLayout(columns, 1)
         self.tabs.addTab(home, "")
 
         scan_tab = QWidget()
         scan_layout = QVBoxLayout(scan_tab)
-        scan_layout.setContentsMargins(
-            theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD, theme.PAD_CARD
-        )
-        scan_layout.setSpacing(theme.GAP_SECTION)
+        scan_layout.setContentsMargins(0, 0, 0, 0)
         scan_layout.addWidget(self._scan_tab, 1)
-        # 탭 띠에 붙는 것은 이 여백용 컨테이너다 - `indexOf` 는 이것으로 해야
-        # 한다. `self._scan_tab` 으로 물으면 -1 이 나온다 (실제로 그랬다).
+        # 쪽 묶음에 붙는 것은 이 컨테이너다 - `indexOf` 는 이것으로 해야 한다.
+        # `self._scan_tab` 으로 물으면 -1 이 나온다 (실제로 그랬다).
         self._scan_page = scan_tab
         self.tabs.addTab(scan_tab, "")
+        self.tabs.currentChanged.connect(self._on_page_changed)
 
         self.status_bar_label = QLabel("")
         self.statusBar().addPermanentWidget(self.status_bar_label)
+
+    def _build_header(self) -> QWidget:
+        """제목·계정 수, 홈/상세 스캔 이동, 마지막 수집, 찾기, 동작 단추."""
+
+        header = QWidget()
+        row = QHBoxLayout(header)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(14)
+        self.app_title = QLabel()
+        self.app_title.setObjectName("title")
+        row.addWidget(self.app_title)
+        self.app_counts = QLabel()
+        self.app_counts.setObjectName("caption")
+        row.addWidget(self.app_counts)
+
+        nav = QFrame()
+        nav.setObjectName("nav")
+        nav_box = QHBoxLayout(nav)
+        nav_box.setContentsMargins(4, 4, 4, 4)
+        nav_box.setSpacing(4)
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        self.nav_home = QPushButton()
+        self.nav_scan = QPushButton()
+        for index, button in enumerate((self.nav_home, self.nav_scan)):
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            self.nav_group.addButton(button, index)
+            nav_box.addWidget(button)
+        self.nav_home.setChecked(True)
+        self.nav_group.buttonClicked.connect(
+            lambda button: self.tabs.setCurrentIndex(self.nav_group.id(button))
+        )
+        row.addWidget(nav)
+
+        # 마지막 수집 - 표마다 '최근 수집' 을 읽지 않아도 지금 값이 언제 것인지 보인다.
+        # 수집이 멈췄으면 여기가 주황으로 그 사실을 먼저 말한다.
+        self.collected_label = widgets.ElidedLabel()
+        self.collected_label.setObjectName("muted")
+        row.addWidget(self.collected_label, 1)
+
+        # 계정이 스물을 넘으면 눈으로 찾는 것이 일이 된다. 이름이나 경로 조각을
+        # 치면 그것만 남는다 - 표를 다시 그리기만 하므로 DB 를 다시 읽지 않는다.
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setMinimumWidth(160)
+        self.filter_edit.setMaximumWidth(220)
+        self.filter_edit.textChanged.connect(self._on_filter_changed)
+        row.addWidget(self.filter_edit)
+
+        self.reports_btn = QPushButton()
+        self.reports_btn.clicked.connect(self._open_reports_dialog)
+        self.accounts_btn = QPushButton()
+        self.accounts_btn.clicked.connect(self._open_account_dialog)
+        # 자주 쓰지 않는 창들은 한 메뉴로 모은다 - 단추 일곱이 머리줄 폭을 정하게
+        # 두지 않는다.
+        self.tools_btn = QToolButton()
+        self.tools_btn.setObjectName("tools")
+        self.tools_btn.setPopupMode(QToolButton.InstantPopup)
+        tools = QMenu(self.tools_btn)
+        self.search_action = tools.addAction("", self._open_search_dialog)
+        self.trend_action = tools.addAction("", self._open_trend_dialog)
+        # 서버 부하는 계정이 아니라 **장비**에 대한 것이다 - 정작 알고 싶은 것은
+        # 스캔 옆에서 다른 작업이 얼마나 쓰고 있었나다.
+        self.load_action = tools.addAction("", self._open_load_dialog)
+        self.diagnose_action = tools.addAction("", self._open_diagnostics)
+        # 이 도구가 데이터 폴더에 무엇을 얼마나 언제부터 쌓았나 (보기만 한다).
+        self.data_action = tools.addAction("", self._open_data_dialog)
+        self.tools_btn.setMenu(tools)
+        # 가장 자주 쓰는 동작 하나만 강조한다 - 전부 강조하면 아무것도 강조되지 않는다.
+        self.collect_btn = QPushButton()
+        self.collect_btn.setObjectName("primary")
+        self.collect_btn.clicked.connect(self._trigger_now)
+        for button in (self.reports_btn, self.accounts_btn, self.tools_btn, self.collect_btn):
+            row.addWidget(button)
+        return header
+
+    def _build_tiles(self) -> QHBoxLayout:
+        """타일 넷 - 가장 찬 곳, 손볼 계정, 상세 스캔 한 바퀴, 끝 예상."""
+
+        row = QHBoxLayout()
+        row.setSpacing(theme.GAP_SECTION)
+        self.tiles: Dict[str, _Tile] = {}
+        for key in ("fullest", "attention", "scan", "finish"):
+            tile = _Tile(link=(key == "scan"))
+            row.addWidget(tile, 1)
+            self.tiles[key] = tile
+        self.tiles["fullest"].bar.setVisible(True)
+        self.tiles["scan"].bar.setVisible(True)
+        self.tiles["finish"].value.setStyleSheet(
+            f"font-size: 22px; font-weight: {theme.WEIGHT_HEAVY};"
+        )
+        self.tiles["scan"].clicked.connect(
+            lambda: self.tabs.setCurrentIndex(self.tabs.indexOf(self._scan_page))
+        )
+        return row
+
+    def _build_priority_card(self) -> QFrame:
+        """처리 우선순위.
+
+        사용률은 표에, 백업 상태는 헬스체크에, 튀는 파일은 상세 스캔 탭에 있었다.
+        각각은 맞는 말인데 **"그래서 오늘 뭘 먼저 하지"** 에는 아무도 답하지
+        않았다. 그 한 줄을 모은다."""
+
+        self.priority_card = QFrame()
+        self.priority_card.setObjectName("card")
+        priority_box = QVBoxLayout(self.priority_card)
+        priority_box.setContentsMargins(16, 12, 16, 12)
+        priority_box.setSpacing(4)
+        self.priority_title = QLabel()
+        self.priority_title.setObjectName("sectionTitle")
+        priority_box.addWidget(self.priority_title)
+        self.priority_summary = QLabel()
+        self.priority_summary.setObjectName("muted")
+        self.priority_summary.setWordWrap(True)
+        priority_box.addWidget(self.priority_summary)
+        self.priority_hint = QLabel()
+        self.priority_hint.setObjectName("caption")
+        self.priority_hint.setWordWrap(True)
+        priority_box.addWidget(self.priority_hint)
+        self.priority_list = QListWidget()
+        self.priority_list.setObjectName("findings")
+        self.priority_list.setFrameShape(QListWidget.NoFrame)
+        self.priority_list.setSelectionMode(QListWidget.NoSelection)
+        self.priority_list.setFocusPolicy(Qt.NoFocus)
+        # 문장이 폭을 넘으면 옆으로 밀지 않고 접는다 - 가로 스크롤로 두면 문장
+        # 뒤쪽("정리하면 800GB 빕니다")이 통째로 안 보인다.
+        self.priority_list.setWordWrap(True)
+        self.priority_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.priority_list.setResizeMode(QListWidget.Adjust)
+        # 줄을 누르면 상황과 할 일이 뜬다. 손 모양 커서와 안내 한 줄로 누를 수
+        # 있다는 것을 알린다 - 반응만 하고 아무 일이 없으면 고장으로 읽힌다.
+        self.priority_list.viewport().setCursor(Qt.PointingHandCursor)
+        self.priority_list.itemClicked.connect(self._on_priority_clicked)
+        priority_box.addWidget(self.priority_list, 1)
+        return self.priority_card
+
+    def _build_tonight_card(self) -> QFrame:
+        """오늘 밤 상세 스캔 - 22~06 막대 위에 도는 순서와 계정마다 끝날 어림."""
+
+        self.tonight_card = QFrame()
+        self.tonight_card.setObjectName("card")
+        box = QVBoxLayout(self.tonight_card)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(8)
+        head = QHBoxLayout()
+        self.tonight_title = QLabel()
+        self.tonight_title.setObjectName("sectionTitle")
+        head.addWidget(self.tonight_title)
+        head.addStretch(1)
+        self.tonight_window = QLabel()
+        self.tonight_window.setObjectName("caption")
+        head.addWidget(self.tonight_window)
+        box.addLayout(head)
+        self.tonight_bar = TimelineBar()
+        box.addWidget(self.tonight_bar)
+        self.tonight_rows = QVBoxLayout()
+        self.tonight_rows.setSpacing(6)
+        box.addLayout(self.tonight_rows)
+        self.tonight_note = QLabel()
+        self.tonight_note.setObjectName("caption")
+        self.tonight_note.setWordWrap(True)
+        box.addWidget(self.tonight_note)
+        return self.tonight_card
 
     # 정렬 키를 만들 수 있는 열만 정렬을 허용한다. 막대·배지 열은 옆의 숫자
     # 열(사용량, 사용률)로 정렬하면 되므로 굳이 열지 않는다.
@@ -539,79 +688,6 @@ class MainWindow(QMainWindow):
             ordered = list(reversed(with_value)) + without
         return ordered
 
-    def _build_hero(self) -> QWidget:
-        """맨 위 요약 카드.
-
-        예전에는 색면 배너에 요약 문장 한 줄만 있었는데, 그러면 "지금 몇 %인가"
-        라는 가장 궁금한 값이 본문과 같은 크기로 묻혔다. 가장 높은 사용률을
-        큰 숫자로 못박고, 그 옆에 계정 수·주의 건수·마지막 수집을 붙인다."""
-
-        card = QFrame()
-        card.setObjectName("hero")
-        self._hero_card = card
-        outer = QHBoxLayout(card)
-        outer.setContentsMargins(0, 0, theme.PAD_CARD, 0)
-        outer.setSpacing(0)
-
-        # 등급을 나타내는 왼쪽 띠. 색을 넓게 칠하는 대신 가늘게 세워 두면
-        # 상태는 전달되면서 배경 소음이 되지 않는다.
-        self.hero_accent = QFrame()
-        self.hero_accent.setFixedWidth(6)
-        outer.addWidget(self.hero_accent)
-
-        body = QVBoxLayout()
-        body.setContentsMargins(theme.PAD_CARD, theme.PAD_CARD - 2, 0, theme.PAD_CARD - 2)
-        body.setSpacing(2)
-        outer.addLayout(body, 1)
-
-        self.hero_state_label = QLabel()
-        self.hero_state_label.setObjectName("caption")
-        self.hero_state_label.setWordWrap(True)
-        body.addWidget(self.hero_state_label)
-
-        self.hero_value_label = QLabel()
-        self.hero_value_label.setObjectName("display")
-        body.addWidget(self.hero_value_label)
-
-        self.hero_detail_label = QLabel()
-        self.hero_detail_label.setObjectName("muted")
-        self.hero_detail_label.setWordWrap(True)
-        body.addWidget(self.hero_detail_label)
-
-        divider = QFrame()
-        divider.setObjectName("divider")
-        divider.setFixedHeight(1)
-        body.addSpacing(10)
-        body.addWidget(divider)
-        body.addSpacing(8)
-
-        stats = QHBoxLayout()
-        stats.setSpacing(28)
-        self.hero_stats = {}
-        # 계정 수만 보면 몇 자리를 보고 있는지 모른다. 계정 아홉이 한
-        # 스토리지에 있는 것과 아홉 곳에 흩어진 것은 전혀 다른 이야기다.
-        for key in ("accounts", "storages", "attention", "collected"):
-            column = QVBoxLayout()
-            column.setSpacing(1)
-            caption = QLabel()
-            caption.setObjectName("statLabel")
-            value = QLabel()
-            value.setObjectName("statValue")
-            column.addWidget(caption)
-            column.addWidget(value)
-            stats.addLayout(column)
-            self.hero_stats[key] = (caption, value)
-        stats.addStretch(1)
-        body.addLayout(stats)
-
-        # df 특성 안내는 히어로 숫자의 해석에 직접 걸리는 단서라 같은 카드에 둔다.
-        self.caveat_label = QLabel()
-        self.caveat_label.setObjectName("caption")
-        self.caveat_label.setWordWrap(True)
-        body.addSpacing(8)
-        body.addWidget(self.caveat_label)
-
-        return card
 
     def _configure_table_columns(self) -> None:
         """열마다 폭 정책을 따로 준다.
@@ -633,7 +709,10 @@ class MainWindow(QMainWindow):
         # 전체가 있다)에 나머지를 준다.
         # 막대가 들어가는 칸은 내용 기준으로 재면 너무 좁아진다.
         header.setSectionResizeMode(COL_BYTE, QHeaderView.Fixed)
-        self.table.setColumnWidth(COL_BYTE, 148)
+        self.table.setColumnWidth(COL_BYTE, 200)
+        # '상세 스캔' 칸도 위젯(알약 + 옆 글)이라 내용 기준 폭이 머리글 폭으로 줄어든다.
+        header.setSectionResizeMode(COL_SCAN, QHeaderView.Fixed)
+        self.table.setColumnWidth(COL_SCAN, 230)
         header.setSectionResizeMode(COL_FORECAST, QHeaderView.Stretch)
         header.setStretchLastSection(False)
         header.setHighlightSections(False)
@@ -675,7 +754,9 @@ class MainWindow(QMainWindow):
         self.language_menu.setTitle(i18n.t("menu.language"))
         self.tabs.setTabText(0, i18n.t("tab.home"))
         self.tabs.setTabText(1, i18n.t("tab.scan"))
-        self.caveat_label.setText(i18n.t("dashboard.df_caveat"))
+        self.app_title.setText(i18n.t("home.title"))
+        self.nav_home.setText(i18n.t("tab.home"))
+        self.nav_scan.setText(i18n.t("tab.scan"))
         self.list_title.setText(i18n.t("dashboard.list_title"))
         self.list_hint.setText(i18n.t("dashboard.list_hint"))
         self.filter_edit.setPlaceholderText(i18n.t("dashboard.filter"))
@@ -683,15 +764,21 @@ class MainWindow(QMainWindow):
         self.collect_btn.setToolTip(i18n.t("dashboard.btn.collect_now_tooltip"))
         self.accounts_btn.setText(i18n.t("dashboard.btn.accounts"))
         self.reports_btn.setText(i18n.t("dashboard.btn.reports"))
-        self.search_btn.setText(i18n.t("dashboard.btn.search"))
-        self.load_btn.setText(i18n.t("load.btn.open"))
-        self.trend_btn.setText(i18n.t("trend.btn.open"))
-        self.diagnose_btn.setText(i18n.t("dashboard.btn.diagnose"))
-        self.data_btn.setText(i18n.t("data.btn.open"))
+        self.tools_btn.setText(i18n.t("home.tools"))
+        self.search_action.setText(i18n.t("dashboard.btn.search"))
+        self.load_action.setText(i18n.t("load.btn.open"))
+        self.trend_action.setText(i18n.t("trend.btn.open"))
+        self.diagnose_action.setText(i18n.t("dashboard.btn.diagnose"))
+        self.data_action.setText(i18n.t("data.btn.open"))
+        for key, caption_key in (("fullest", "home.tile.fullest"), ("attention", "home.tile.attention"),
+                                 ("scan", "home.tile.scan"), ("finish", "home.tile.finish")):
+            self.tiles[key].caption.setText(i18n.t(caption_key))
+        self.tiles["attention"].setToolTip(i18n.t("dashboard.df_caveat"))
+        self.tonight_note.setText(i18n.t("home.tonight.note"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
-
-        self.home_scan_link.setText(i18n.t("tab.scan"))
         self._scan_tab.retranslate()
+        if self._overview is not None:
+            self._show_overview(self._overview)
 
     def _change_language(self, language: str) -> None:
         if language == i18n.get_language():
@@ -819,7 +906,7 @@ class MainWindow(QMainWindow):
         self.loading_label.setText(i18n.t("dashboard.loading_start"))
         self.loading_row.setVisible(True)
         if not self._latest_samples:
-            self.hero_state_label.setText(i18n.t("dashboard.loading_start"))
+            self.tiles["fullest"].detail.setText(i18n.t("dashboard.loading_start"))
 
     def _on_dashboard_progress(self, index: int, total: int, key: str) -> None:
         self.loading_bar.setRange(0, total)
@@ -837,6 +924,8 @@ class MainWindow(QMainWindow):
         self._trends = getattr(data, "trends", {}) or {}
         self._render_table(data.samples)
         self._refresh_priority(getattr(data, "plan", None))
+        # 상세 스캔 현황의 '지금 쓰는 양' 도 같은 표본으로 본다 (따로 읽지 않는다).
+        self._scan_tab.set_latest_samples(data.samples)
         self._dashboard_newest = getattr(data, "newest", None)
         wanted, self._newest_wanted = self._newest_wanted, None
         if wanted is not None and not dashboard.already_shows(self._dashboard_newest, wanted):
@@ -950,6 +1039,7 @@ class MainWindow(QMainWindow):
                     self.table.setItem(row, column, item)
                 self.table.setCellWidget(row, COL_BYTE, widgets.UsageBar(None, tiers.UNKNOWN))
                 self.table.setCellWidget(row, COL_TREND, self._spark_for(account.account_id))
+                self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account.account_id))
                 # "아직 수집 전"은 '-' 로 두면 고장으로 읽힌다.
                 self.table.setItem(
                     row, COL_TIME, QTableWidgetItem(i18n.t("dashboard.not_collected"))
@@ -965,7 +1055,7 @@ class MainWindow(QMainWindow):
             self._style_value_item(size_item, COL_SIZE)
             self.table.setItem(row, COL_SIZE, size_item)
 
-            usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier)
+            usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier, show_tier=True)
             # 등급 배지 열을 뺀 대신 등급 글자를 여기 붙인다 - 색만으로는
             # 경계값이 어느 쪽인지 말해 주지 못한다.
             usage_bar.setToolTip(
@@ -993,6 +1083,7 @@ class MainWindow(QMainWindow):
             if self._is_placeholder(forecast_item.text()):
                 forecast_item.setForeground(QColor(theme.TEXT_FAINT))
             self.table.setItem(row, COL_FORECAST, forecast_item)
+            self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account.account_id))
 
             # 절대 시각보다 "얼마나 오래됐나"가 판단에 직접 쓰인다. 원본
             # 타임스탬프는 툴팁에 남긴다.
@@ -1032,9 +1123,13 @@ class MainWindow(QMainWindow):
         worst_tier = tiers.NORMAL
         worst_account_label: Optional[str] = None
         warn_or_worse_count = 0
-        # 히어로의 큰 숫자에 쓸 값 (가장 높은 사용률과 그 계정).
+        # 타일의 큰 숫자에 쓸 값 (가장 높은 사용률과 그 계정), 등급마다 계정 수.
         self._worst_pct: Optional[float] = None
         self._worst_account_name: Optional[str] = None
+        self._worst_account_id: Optional[str] = None
+        self._worst_tier = tiers.UNKNOWN
+        self._tier_counts: Dict[str, int] = {}
+        self._ok_count = 0
 
         for account in accounts:
             sample = latest.get(account.account_id)
@@ -1045,8 +1140,12 @@ class MainWindow(QMainWindow):
             ):
                 self._worst_pct = sample.byte_pct
                 self._worst_account_name = account.name
+                self._worst_account_id = account.account_id
+                self._worst_tier = sample.overall_tier
             if not sample.ok:
                 continue
+            self._ok_count += 1
+            self._tier_counts[sample.overall_tier] = self._tier_counts.get(sample.overall_tier, 0) + 1
             if tiers.is_at_least(sample.overall_tier, "warn"):
                 warn_or_worse_count += 1
             if tiers.severity(sample.overall_tier) > tiers.severity(worst_tier):
@@ -1097,47 +1196,80 @@ class MainWindow(QMainWindow):
     def _update_summary(
         self, warn_or_worse_count: int, worst_account_label: Optional[str], worst_tier: str
     ) -> None:
+        """머리줄의 계정 수·마지막 수집과 타일 둘(가장 찬 곳, 손볼 계정).
+
+        **거른 목록이 아니라 늘 전체를 본다** (`_summarize`)."""
+
+        self.app_counts.setText(i18n.t(
+            "home.counts", accounts=len(self._config.accounts), storages=self._storage_count() or "-",
+        ))
+        self._update_collected_label()
+
+        fullest = self.tiles["fullest"]
+        attention = self.tiles["attention"]
         if not self._config.accounts:
-            self.hero_state_label.setText(i18n.t("dashboard.no_accounts"))
-            self.hero_value_label.setText(i18n.t("common.none"))
-            self.hero_detail_label.setText("")
-            self._apply_hero_tier(tiers.UNKNOWN)
-            self._update_hero_stats(0)
+            fullest.value.setText(i18n.t("common.none"))
+            fullest.detail.setText(i18n.t("dashboard.no_accounts"))
+            fullest.set_chips([])
+            fullest.bar.set_segments([])
+            attention.value.setText("0")
+            attention.set_chips([])
             return
 
-        banner_tier = worst_tier if warn_or_worse_count else tiers.NORMAL
-        if warn_or_worse_count == 0:
-            text = i18n.t("dashboard.all_normal", count=len(self._config.accounts))
-        else:
-            text = i18n.t(
-                "dashboard.warn_summary", count=warn_or_worse_count, worst=worst_account_label
-            )
+        pct = self._worst_pct
+        fullest.value.setText(f"{pct:.1f}%" if pct is not None else i18n.t("common.none"))
+        tier = self._worst_tier
+        kind = widgets.UsageBar.PILL_TIERS.get(tier, "tier_normal")
+        fullest.set_chips([(tiers.label(tier), kind)] if pct is not None else [])
+        fullest.bar.set_segments(
+            [(1, max(0.0, min(1.0, (pct or 0) / 100)), tiers.color(tier), theme.BORDER, "")]
+            if pct is not None else []
+        )
+        forecast = self._forecasts.get(self._worst_account_id) if self._worst_account_id else None
+        fullest.detail.setText(
+            i18n.t("home.tile.fullest_detail", account=self._worst_account_name,
+                   forecast=formatting.format_forecast_cell(forecast))
+            if self._worst_account_name else ""
+        )
 
-        # 수집이 멈춰 있으면 사용률 요약보다 그게 먼저다 - 멈춘 데이터를 보고
-        # "정상"이라고 판단하는 것이 가장 위험하다.
+        attention.value.setText(str(warn_or_worse_count))
+        attention.side.setVisible(True)
+        attention.side.setText(i18n.t("home.tile.attention_of", total=len(self._config.accounts)))
+        chips = []
+        for tier_code in (tiers.FULL, tiers.EMERGENCY, tiers.ALERT, tiers.WARN):
+            count = self._tier_counts.get(tier_code, 0)
+            if count or tier_code in (tiers.EMERGENCY, tiers.ALERT, tiers.WARN):
+                chips.append((
+                    i18n.t("home.tile.attention_chip", tier=tiers.label(tier_code), count=count),
+                    widgets.UsageBar.PILL_TIERS[tier_code],
+                ))
+        attention.set_chips(chips)
+        attention.detail.setText(i18n.t(
+            "home.tile.attention_detail", normal=self._tier_counts.get(tiers.NORMAL, 0),
+        ))
+
+    def _update_collected_label(self) -> None:
+        """머리줄의 '마지막 수집'. 수집이 멈췄으면 그 경고가 먼저다 - 멈춘 데이터를
+        보고 "정상" 이라고 판단하는 것이 가장 위험하다."""
+
         warning = self._freshness_warning()
         if warning:
-            text = f"{warning} · {text}"
-            banner_tier = tiers.worse(banner_tier, tiers.ALERT)
-
-        self.hero_state_label.setText(text)
-
-        # 큰 숫자에는 "가장 높은 사용률"을 둔다. 여러 계정을 한 화면에서 볼 때
-        # 사람이 실제로 찾는 값이 그것이다.
-        self.hero_value_label.setText(
-            f"{self._worst_pct:.1f}%" if self._worst_pct is not None else i18n.t("common.none")
-        )
-        self.hero_value_label.setStyleSheet(f"color: {tiers.color(banner_tier)};")
-        self.hero_detail_label.setText(
-            i18n.t("dashboard.hero_detail", account=self._worst_account_name)
-            if self._worst_account_name
-            else ""
-        )
-        self._apply_hero_tier(banner_tier)
-        self._update_hero_stats(warn_or_worse_count)
-
-    def _apply_hero_tier(self, tier: str) -> None:
-        self.hero_accent.setStyleSheet(HERO_ACCENT_STYLE.format(color=tiers.color(tier)))
+            self.collected_label.setText(warning)
+            self.collected_label.setStyleSheet(
+                f"color: {tiers.color(tiers.ALERT)}; font-weight: {theme.WEIGHT_BOLD};"
+            )
+            return
+        stamps = [sample.collected_at for sample in self._latest_samples.values() if sample.collected_at]
+        newest = max(stamps, key=lambda stamp: formatting.to_local(stamp) or datetime.min) if stamps else None
+        moment = formatting.to_local(newest) if newest else None
+        if moment is None:
+            self.collected_label.setText(i18n.t("home.collected_never"))
+        else:
+            age = (datetime.now(moment.tzinfo) - moment).total_seconds()
+            self.collected_label.setText(i18n.t(
+                "home.collected", time=moment.strftime("%H:%M"), age=freshness.format_age(age),
+            ))
+        self.collected_label.setStyleSheet("")
 
     def _storage_count(self) -> int:
         """지금 보고 있는 **스토리지** 수 (계정이 아니라).
@@ -1153,23 +1285,173 @@ class MainWindow(QMainWindow):
             keys.add(priority._storage_key(sample))
         return len(keys)
 
-    def _update_hero_stats(self, warn_or_worse_count: int) -> None:
-        newest = [
-            info.age_seconds
-            for info in self._freshness.values()
-            if getattr(info, "age_seconds", None) is not None
-        ]
-        collected = freshness.format_age(min(newest)) if newest else i18n.t("common.none")
+    # -- 상세 스캔 현황 (스캔 탭이 넘겨 준다) -------------------------------
+    def _on_overview_changed(self, overview) -> None:
+        self._overview = overview
+        self._show_overview(overview)
 
-        for key, value in (
-            ("accounts", str(len(self._config.accounts))),
-            ("storages", str(self._storage_count() or "-")),
-            ("attention", str(warn_or_worse_count)),
-            ("collected", collected),
-        ):
-            caption, value_label = self.hero_stats[key]
-            caption.setText(i18n.t(f"dashboard.stat.{key}"))
-            value_label.setText(value)
+    def _show_overview(self, overview) -> None:
+        """타일 둘(한 바퀴, 끝 예상), 오늘 밤 카드, 표의 '상세 스캔' 칸."""
+
+        scan = self.tiles["scan"]
+        scan.value.setText(f"{overview.percent}%")
+        scan.side.setVisible(True)
+        visible = [item for item in overview.accounts if item.state != scan_overview.UNSEEN]
+        scan.side.setText(i18n.t(
+            "home.tile.scan_counts", finished=overview.count(scan_overview.DONE), accounts=len(visible),
+        ))
+        from .overview_page import STATE_COLORS
+
+        scan.bar.set_segments([
+            (1, 1.0 if item.state in (scan_overview.DONE, scan_overview.UNSEEN) else item.fraction,
+             STATE_COLORS[item.state][0], STATE_COLORS[item.state][1], item.name)
+            for item in overview.accounts
+        ])
+        self._show_scan_tile_detail()
+
+        finish = self.tiles["finish"]
+        if overview.remaining and not overview.beyond and overview.finish_at is not None:
+            finish.value.setText(scan_overview.when_text(overview.finish_at))
+        else:
+            finish.value.setText(scan_overview.finish_text(overview))
+        finish.detail.setText(scan_overview.finish_detail(overview))
+        stalest = overview.stalest
+        if stalest is not None:
+            age, kind = scan_overview.age_text(stalest, overview.now)
+            finish.set_note(
+                i18n.t("home.tile.stalest", name=stalest.name, age=age),
+                theme.CHIPS["stale"][1] if kind == "stale" else "",
+            )
+        else:
+            finish.set_note("")
+
+        self._show_tonight(overview)
+        for row in range(self.table.rowCount()):
+            account_id = self._account_id_at_row(row)
+            if account_id:
+                self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account_id))
+
+    def _show_scan_tile_detail(self) -> None:
+        """한 바퀴 타일의 설명 - 도는 중이면 어디를 재는지, 아니면 상태별 계정 수."""
+
+        scan = self.tiles["scan"]
+        state = self._scan_banner
+        if state is not None and state.running:
+            scan.detail.setText(
+                i18n.t("scan.scanning_now", path=state.path) if state.path else i18n.t("scan.started")
+            )
+            return
+        overview = self._overview
+        if overview is None:
+            scan.detail.setText("")
+            return
+        scan.detail.setText(i18n.t(
+            "home.tile.scan_legend",
+            done=overview.count(scan_overview.DONE), doing=overview.count(scan_overview.DOING),
+            waiting=overview.count(scan_overview.WAITING), unseen=overview.count(scan_overview.UNSEEN),
+        ))
+
+    def _show_tonight(self, overview) -> None:
+        while self.tonight_rows.count():
+            item = self.tonight_rows.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        if not overview.nights:
+            self.tonight_title.setText(
+                i18n.t("home.tonight.title", night=i18n.t("overview.night.tonight"))
+            )
+            self.tonight_window.setText("")
+            self.tonight_bar.set_timeline(overview.now, overview.now, [])
+            empty = QLabel(i18n.t("home.tonight.empty"))
+            empty.setObjectName("muted")
+            empty.setWordWrap(True)
+            self.tonight_rows.addWidget(empty)
+            return
+        night = overview.nights[0]
+        settings = self._config.settings
+        length = timedelta(hours=(settings.detail_scan_window_end_hour
+                                  - settings.detail_scan_window_start_hour) % 24 or 24)
+        axis_start = night.closes - length
+        self.tonight_title.setText(i18n.t(
+            "home.tonight.title", night=scan_overview.night_name(night, overview.now),
+        ))
+        self.tonight_window.setText(i18n.t(
+            "home.tonight.window", start=scan_overview.clock(axis_start),
+            end=scan_overview.clock(night.closes),
+        ))
+        coverage = {item.account_id: item for item in overview.accounts}
+        colors: Dict[str, str] = {}
+        spans = []
+        for slot in night.slots:
+            color = colors.setdefault(slot.account_id, theme.NIGHT_SLOTS[len(colors) % len(theme.NIGHT_SLOTS)])
+            spans.append((slot.start, slot.end, color))
+        self.tonight_bar.set_timeline(axis_start, night.closes, spans)
+        for slot in night.slots:
+            self.tonight_rows.addWidget(self._tonight_row(
+                slot, coverage.get(slot.account_id), colors[slot.account_id], overview.now,
+            ))
+
+    def _tonight_row(self, slot, item, color: str, now) -> QWidget:
+        row = QWidget()
+        # 카드 위에 얹히는 줄이라 자기 바탕(창 바탕색)을 그리면 회색 띠가 된다.
+        row.setStyleSheet("background: transparent;")
+        box = QHBoxLayout(row)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(10)
+        number = QLabel(str(item.order) if item is not None and item.order else "·")
+        number.setAlignment(Qt.AlignCenter)
+        number.setFixedSize(24, 24)
+        light = color in theme.NIGHT_SLOTS[2:]
+        number.setStyleSheet(
+            f"background: {color}; color: {theme.TEXT if light else '#ffffff'}; "
+            f"border-radius: 6px; font-weight: {theme.WEIGHT_HEAVY};"
+        )
+        box.addWidget(number)
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        name = QLabel(scan_overview.slot_name(slot))
+        name.setStyleSheet(f"font-weight: {theme.WEIGHT_BOLD};")
+        text.addWidget(name)
+        why = QLabel(scan_overview.tonight_why(item, now) if item is not None else "")
+        why.setObjectName("caption")
+        text.addWidget(why)
+        box.addLayout(text, 1)
+        end = QLabel(
+            i18n.t("home.tonight.carry") if slot.carries_over
+            else i18n.t("home.tonight.end", time=scan_overview.clock(slot.end))
+        )
+        end.setStyleSheet(
+            f"font-weight: {theme.WEIGHT_BOLD}; color: "
+            f"{theme.CHIPS['stale'][1] if slot.carries_over else theme.TEXT};"
+        )
+        box.addWidget(end)
+        return row
+
+    def _scan_cell(self, account_id: str) -> QWidget:
+        """표의 '상세 스캔' 칸 - 알약(어디쯤인가)과 옆 글(오늘 밤 몇 번째 등)."""
+
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        box = QHBoxLayout(container)
+        box.setContentsMargins(4, 8, 4, 8)
+        box.setSpacing(8)
+        overview = self._overview
+        item = None
+        if overview is not None:
+            item = next((entry for entry in overview.accounts if entry.account_id == account_id), None)
+        if item is None:
+            dash = QLabel(i18n.t("common.none"))
+            dash.setObjectName("muted")
+            box.addWidget(dash)
+        else:
+            text, kind, note = scan_overview.home_chip(item, overview)
+            box.addWidget(Chip(text, kind))
+            if note:
+                label = QLabel(note)
+                label.setObjectName("caption")
+                box.addWidget(label)
+        box.addStretch(1)
+        return container
 
     # -- 이벤트 핸들러 --------------------------------------------------
     def _trigger_now(self) -> None:
@@ -1344,24 +1626,21 @@ class MainWindow(QMainWindow):
 
 
     def _update_home_scan_banner(self, state) -> None:
-        """홈 탭 위쪽의 "지금 스캔 중" 배너.
+        """스캔 탭이 보내 온 "지금 도는가" - 한 바퀴 타일의 설명 줄에 쓴다.
 
         스캔 탭이 위젯을 직접 만지지 않고 값만 보내 온다 - 그래야 두 화면을
         따로 옮길 수 있다."""
 
-        self.home_scan_banner.setVisible(state.running)
-        if not state.running:
-            return
-        self.home_scan_label.setText(
-            i18n.t("scan.scanning_now", path=state.path)
-            if state.path
-            else i18n.t("scan.started")
-        )
-        if state.total:
-            self.home_scan_progress.setRange(0, state.total)
-            self.home_scan_progress.setValue(state.done)
-        else:
-            self.home_scan_progress.setRange(0, 0)
+        self._scan_banner = state
+        self._show_scan_tile_detail()
+
+    def _on_page_changed(self, index: int) -> None:
+        """머리줄의 이동 단추를 지금 쪽에 맞춘다. 찾기 칸은 홈 표에만 듣는다."""
+
+        button = self.nav_group.button(index)
+        if button is not None and not button.isChecked():
+            button.setChecked(True)
+        self.filter_edit.setVisible(index == 0)
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt 콜백 이름 규칙)
         """창을 닫을 때 우리가 띄운 작업을 확실히 정리한다.

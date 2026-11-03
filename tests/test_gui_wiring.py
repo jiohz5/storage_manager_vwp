@@ -103,8 +103,8 @@ class TabBoundaryTests(unittest.TestCase):
 
     def test_scan_tab_does_not_touch_home_widgets(self):
         text = self._source("scan_tab.py")
-        for name in ("home_scan_banner", "home_scan_label", "home_scan_progress"):
-            self.assertNotIn(name, text, f"스캔 탭이 홈 탭 위젯({name})을 직접 만집니다")
+        for name in ("tiles[", "tonight_card", "tonight_rows", "collected_label", "nav_home"):
+            self.assertNotIn(name, text, f"스캔 탭이 홈 위젯({name})을 직접 만집니다")
 
     def test_scan_tab_does_not_touch_the_status_bar(self):
         """상태 줄은 창의 것이다 - `status_message` 신호로 넘긴다."""
@@ -122,7 +122,7 @@ class TabBoundaryTests(unittest.TestCase):
 
         text = self._source("scan_pages.py")
         for name in ("scan_account_combo", "detail_tabs", "detail_stack",
-                     "_get_config", "home_scan_banner", "status_bar_label"):
+                     "_get_config", "tiles[", "status_bar_label"):
             self.assertNotIn(name, text, f"쪽이 {name} 을(를) 직접 만집니다")
 
     def test_main_window_does_not_reach_into_scan_widgets(self):

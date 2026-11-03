@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt5.QtCore import QRectF, QSize, Qt
+from PyQt5.QtCore import QEvent, QRectF, QSize, Qt
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
     QTableWidget,
@@ -26,6 +27,41 @@ from PyQt5.QtWidgets import (
 from .. import i18n, tiers
 from ..formatting import tier_badge_text
 from . import theme
+
+
+class ElidedLabel(QLabel):
+    """한 줄 글 - 폭이 모자라면 끝을 '…' 로 줄이고 전체는 툴팁으로 보인다.
+
+    머리줄처럼 옆 단추들과 폭을 나눠 쓰는 자리에서 긴 경고 문장이 단추를 밀어내거나
+    중간에서 잘려 뜻이 끊기지 않게 한다. `text()` 는 줄이기 전 전체를 돌려준다."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        # 폭은 남는 만큼만 쓴다 - 글 길이가 머리줄 폭을 정하지 않게.
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt 규약
+        self._full = text or ""
+        self._elide()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._elide()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() in (QEvent.FontChange, QEvent.StyleChange):
+            self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self._full, Qt.ElideRight, max(0, self.width()))
+        QLabel.setText(self, shown)
+        self.setToolTip(self._full if shown != self._full else "")
 
 
 class TierBadge(QLabel):
@@ -164,12 +200,21 @@ class UsageBar(QWidget):
 
     BAR_HEIGHT = 7
     TEXT_WIDTH = 52
+    PILL_WIDTH = 46
+    # 알약을 붙이는 등급 - 정상에는 붙이지 않는다 (색은 눈이 가야 할 곳에만).
+    PILL_TIERS = {
+        tiers.WARN: "tier_warn", tiers.ALERT: "tier_alert",
+        tiers.EMERGENCY: "tier_emergency", tiers.FULL: "tier_full",
+    }
 
-    def __init__(self, pct: Optional[float], tier: str, parent=None):
+    def __init__(self, pct: Optional[float], tier: str, parent=None, show_tier: bool = False):
         super().__init__(parent)
         self._pct = pct
         self._tier = tier
-        self.setMinimumWidth(self.TEXT_WIDTH + 60)
+        # 홈 표는 막대 오른쪽에 등급 글자를 알약으로 붙인다 - 색만으로는 경계값이
+        # 어느 쪽인지 말해 주지 못한다.
+        self._pill = self.PILL_TIERS.get(tier) if show_tier else None
+        self.setMinimumWidth(self.TEXT_WIDTH + 60 + (self.PILL_WIDTH if self._pill else 0))
         # 칸 위젯은 표 배경 위에 얹히므로 자기 배경을 그리면 안 된다.
         self.setStyleSheet("background: transparent;")
 
@@ -193,7 +238,20 @@ class UsageBar(QWidget):
             return
 
         track_left = self.TEXT_WIDTH + 4
-        track_width = max(0, self.width() - track_left - 6)
+        reserve = self.PILL_WIDTH + 6 if self._pill else 0
+        track_width = max(0, self.width() - track_left - 6 - reserve)
+        if self._pill:
+            background, foreground = theme.CHIPS[self._pill]
+            pill = QRectF(self.width() - self.PILL_WIDTH - 2, (self.height() - 18) / 2,
+                          self.PILL_WIDTH, 18)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(background))
+            painter.drawRoundedRect(pill, 9, 9)
+            painter.setPen(QColor(foreground))
+            small = painter.font()
+            small.setPixelSize(theme.FONT_CAPTION - 1)
+            painter.setFont(small)
+            painter.drawText(pill, Qt.AlignCenter, tiers.label(self._tier))
         top = (self.height() - self.BAR_HEIGHT) / 2
         radius = self.BAR_HEIGHT / 2
 

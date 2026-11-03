@@ -131,14 +131,29 @@ class MainWindowSmokeTests(_GuiCase):
         index = self.window.tabs.indexOf(self.window._scan_page)
         self.assertGreaterEqual(index, 0)
 
-    def test_home_banner_link_switches_to_the_scan_tab(self):
+    def test_the_scan_tile_switches_to_the_scan_tab(self):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+
         self.window.tabs.setCurrentIndex(0)
-        self.window.home_scan_link.click()
+        QTest.mouseClick(self.window.tiles["scan"], Qt.LeftButton)
         _app().processEvents()
         self.assertEqual(
             self.window.tabs.currentWidget(), self.window._scan_page,
-            "홈 배너 링크가 스캔 탭으로 가지 않습니다",
+            "상세 스캔 타일이 스캔 탭으로 가지 않습니다",
         )
+
+    def test_the_header_buttons_move_between_pages_and_follow_them(self):
+        """탭 띠를 숨겼다 - 머리줄의 두 단추가 그 일을 한다. 다른 길(타일, 계정
+        더블클릭)로 쪽이 바뀌어도 단추가 지금 쪽을 가리켜야 한다."""
+
+        self.window.nav_scan.click()
+        _app().processEvents()
+        self.assertEqual(self.window.tabs.currentWidget(), self.window._scan_page)
+        self.window.tabs.setCurrentIndex(0)
+        _app().processEvents()
+        self.assertTrue(self.window.nav_home.isChecked())
+        self.assertFalse(self.window.nav_scan.isChecked())
 
     def test_banner_signal_reaches_the_window(self):
         """탭이 값만 보내고 창이 그린다 - 그 신호 경계가 실제로 이어져 있는가."""
@@ -146,15 +161,14 @@ class MainWindowSmokeTests(_GuiCase):
         from smvwp.gui.scan_tab import BannerState
 
         self.window._scan_tab.banner_changed.emit(
-            BannerState(running=True, path="/x", done=3, total=10)
+            BannerState(running=True, path="/x/top7", done=3, total=10)
         )
         _app().processEvents()
-        self.assertTrue(self.window.home_scan_banner.isVisibleTo(self.window))
-        self.assertEqual(self.window.home_scan_progress.maximum(), 10)
+        self.assertIn("/x/top7", self.window.tiles["scan"].detail.text())
 
         self.window._scan_tab.banner_changed.emit(BannerState(running=False))
         _app().processEvents()
-        self.assertFalse(self.window.home_scan_banner.isVisibleTo(self.window))
+        self.assertNotIn("/x/top7", self.window.tiles["scan"].detail.text())
 
     def test_status_message_signal_reaches_the_status_bar(self):
         self.window._scan_tab.status_message.emit("hello")
@@ -959,11 +973,12 @@ class ScanTabLayoutTests(_GuiCase):
 
 
 class HomeLayoutTests(_GuiCase):
-    """홈은 두 칸이다 - 왼쪽에 요약, 오른쪽에 계정 목록.
+    """홈은 타일 한 줄 아래에 두 칸이다 - 왼쪽에 계정 목록, 오른쪽에 무엇부터
+    할까와 오늘 밤 상세 스캔 (2026-11 개편).
 
     예전에는 히어로·우선순위·버튼·표를 세로로 쌓아 위 셋이 세로의 절반을
     먹었고, 열이 열둘인 표는 1,200 창에서 그것만으로 가로 스크롤이 났다.
-    소스를 읽어서는 알 수 없는 것들이라 실제 크기로 띄워 잰다.
+    소스를 읽어서는 알 수 없는 것들이라 처음 여는 크기로 띄워 잰다.
     """
 
     GB = 1024 * 1024
@@ -972,9 +987,11 @@ class HomeLayoutTests(_GuiCase):
         super().setUp()
         from smvwp.gui.main_window import MainWindow
 
+        from smvwp.gui.main_window import DEFAULT_SIZE
+
         self.window = MainWindow(self.data_dir, self.config)
         self._fill_samples()
-        self.window.resize(1200, 820)
+        self.window.resize(*DEFAULT_SIZE)
         self.window.show()
         for _ in range(4):
             _app().processEvents()
@@ -1006,41 +1023,48 @@ class HomeLayoutTests(_GuiCase):
             _app().processEvents()
 
     # -- 배치 ------------------------------------------------------------
-    def test_the_account_list_sits_beside_the_summary_not_below_it(self):
-        table = self.window.table
-        hero = self.window._hero_card
-        self.assertGreaterEqual(
-            table.mapTo(self.window, table.rect().topLeft()).x(),
-            hero.mapTo(self.window, hero.rect().topRight()).x(),
-            "계정 목록이 요약 오른쪽에 있어야 한다",
-        )
+    def _top(self, widget):
+        return widget.mapTo(self.window, widget.rect().topLeft())
 
-    def test_the_summary_cards_are_stacked_in_the_left_column(self):
-        hero = self.window._hero_card
+    def _bottom_right(self, widget):
+        return widget.mapTo(self.window, widget.rect().bottomRight())
+
+    def test_the_tiles_come_before_the_list(self):
+        """답(가장 찬 곳, 손볼 계정, 한 바퀴, 끝 예상)이 먼저, 표는 그 아래."""
+
+        table_top = self._top(self.window.table).y()
+        for key, tile in self.window.tiles.items():
+            self.assertLessEqual(self._bottom_right(tile).y(), table_top, key)
+
+    def test_the_four_tiles_share_one_row(self):
+        tops = {self._top(tile).y() for tile in self.window.tiles.values()}
+        self.assertEqual(len(tops), 1, tops)
+
+    def test_the_right_column_sits_beside_the_list(self):
+        table = self.window.table
         priority = self.window.priority_card
-        self.assertGreater(
-            priority.mapTo(self.window, priority.rect().topLeft()).y(),
-            hero.mapTo(self.window, hero.rect().topLeft()).y(),
-            "우선순위 카드는 히어로 아래에 있어야 한다",
-        )
-        self.assertEqual(hero.width(), priority.width())
+        tonight = self.window.tonight_card
+        self.assertGreaterEqual(self._top(priority).x(), self._bottom_right(table).x())
+        self.assertGreater(self._top(tonight).y(), self._top(priority).y(),
+                           "오늘 밤 카드는 무엇부터 할까 아래에 있어야 한다")
+        self.assertEqual(priority.width(), tonight.width())
 
     def test_the_list_gets_most_of_the_height(self):
-        """표가 세로를 거의 다 써야 한 화면에 계정이 다 들어온다."""
+        """타일 줄을 뺀 세로는 표가 거의 다 쓴다."""
 
         page = self.window.tabs.widget(0)
         ratio = self.window.table.height() / page.height()
-        self.assertGreater(ratio, 0.7, f"표 자리 {ratio:.0%}")
+        self.assertGreater(ratio, 0.55, f"표 자리 {ratio:.0%}")
 
-    def test_the_refresh_button_is_with_the_list(self):
-        """목록을 보다가 누르는 버튼이라, 목록에서 멀면 찾지 못한다."""
+    def test_the_refresh_button_is_in_the_header(self):
+        """가장 자주 누르는 단추라 늘 같은 자리(머리줄)에 있어야 한다 - 쪽을
+        바꿔도 사라지지 않는다."""
 
         button = self.window.collect_btn
-        table = self.window.table
-        self.assertGreaterEqual(
-            button.mapTo(self.window, button.rect().center()).x(),
-            table.mapTo(self.window, table.rect().topLeft()).x(),
-        )
+        self.assertLess(self._bottom_right(button).y(), self._top(self.window.tiles["fullest"]).y())
+        self.window.tabs.setCurrentIndex(self.window.tabs.indexOf(self.window._scan_page))
+        _app().processEvents()
+        self.assertTrue(button.isVisible())
 
     # -- 가로 스크롤 ------------------------------------------------------
     def test_the_list_does_not_scroll_sideways_at_the_default_size(self):
@@ -1602,9 +1626,9 @@ class ManyAccountsTests(_GuiCase):
         self.window.filter_edit.setText("proj")   # 한산한 계정만 남긴다
         _app().processEvents()
         self.assertEqual(self.names_in_order(), ["proj"])
-        # 히어로는 여전히 꽉 찬 쪽을 말한다.
-        self.assertIn("96", self.window.hero_value_label.text())
-        self.assertEqual(self.window.hero_stats["attention"][1].text(), "1")
+        # 타일은 여전히 꽉 찬 쪽을 말한다.
+        self.assertIn("96", self.window.tiles["fullest"].value.text())
+        self.assertEqual(self.window.tiles["attention"].value.text(), "1")
 
     def test_a_filter_that_matches_nothing_is_not_a_crash(self):
         self.window.filter_edit.setText("없는계정")
@@ -1842,6 +1866,156 @@ class OverviewPageTests(_GuiCase):
         self.assertEqual(self.tab.scan_account_combo.currentData(), opened)
 
 
+class HomeOverviewTests(_GuiCase):
+    """스캔 탭이 만든 상세 스캔 현황이 홈(타일 둘, 계정 표 칸, 오늘 밤 카드)에
+    닿는가. 실기: "어디까지 스캔되고 스토리지가 어떤 상황인지 판단이 힘들다" -
+    홈에서 그 답이 보여야 한다. 한 계정은 다시 재다 말았다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp import nightly_scan, scan_store
+        from smvwp.gui.main_window import MainWindow
+
+        with scan_store.session(self.data_dir) as conn:
+            for account in self.config.accounts:
+                tops = [f"{account.path}/d{n}" for n in range(4)]
+                scan_store.seed_checkpoints(conn, account.account_id, scan_store.BASELINE, 1, tops)
+                for _ in tops:
+                    checkpoint = scan_store.next_pending(conn, account.account_id, scan_store.BASELINE, 1)
+                    scan_store.mark_done(conn, checkpoint["id"], size_kb=10)
+                scan_store.mark_generation_completed(conn, account.account_id, 1)
+            self.halfway = self.config.accounts[0]
+            tops = [f"{self.halfway.path}/d{n}" for n in range(4)]
+            scan_store.seed_checkpoints(conn, self.halfway.account_id, scan_store.BASELINE, 2, tops)
+            checkpoint = scan_store.next_pending(conn, self.halfway.account_id, scan_store.BASELINE, 2)
+            scan_store.mark_done(conn, checkpoint["id"], size_kb=10)
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+        self.window._scan_tab._on_scan_status_ready(
+            nightly_scan.get_status_snapshot(self.data_dir, self.config)
+        )
+        _app().processEvents()
+        self.overview = self.window._scan_tab.overview
+
+    def test_the_scan_tiles_show_the_pass(self):
+        tiles = self.window.tiles
+        self.assertEqual(tiles["scan"].value.text(), f"{self.overview.percent}%")
+        self.assertEqual(len(tiles["scan"].bar.segments()), len(self.config.accounts))
+        self.assertTrue(tiles["finish"].value.text())
+        self.assertTrue(tiles["finish"].detail.text())
+
+    def test_each_account_row_says_where_its_detail_scan_is(self):
+        from PyQt5.QtCore import Qt
+
+        from smvwp.gui.main_window import COL_NAME, COL_SCAN
+        from smvwp.gui.overview_widgets import Chip
+
+        table = self.window.table
+        self.window._render_table({})
+        kinds = {}
+        for row in range(table.rowCount()):
+            account_id = table.item(row, COL_NAME).data(Qt.UserRole)
+            chips = table.cellWidget(row, COL_SCAN).findChildren(Chip)
+            kinds[account_id] = chips[0].kind if chips else None
+        self.assertEqual(kinds[self.halfway.account_id], "doing")
+        self.assertTrue(all(kinds.values()), kinds)
+
+    def test_tonight_lists_the_half_done_account_first(self):
+        from PyQt5.QtWidgets import QLabel
+
+        rows = [self.window.tonight_rows.itemAt(i).widget() for i in range(self.window.tonight_rows.count())]
+        self.assertTrue(rows)
+        names = [label.text() for label in rows[0].findChildren(QLabel)]
+        self.assertIn(self.halfway.name, names)
+        self.assertTrue(self.window.tonight_window.text())
+
+    def test_switching_language_redraws_the_tiles(self):
+        from smvwp import i18n
+
+        self.window._change_language("en")
+        self.addCleanup(i18n.set_language, "ko")
+        self.assertEqual(self.window.tiles["scan"].caption.text(), i18n.t("home.tile.scan"))
+        self.assertEqual(self.window.tiles["finish"].value.text() != "", True)
+
+
+class HomeHeaderTests(_GuiCase):
+    """머리줄의 '마지막 수집' - 수집이 멈췄으면 그 경고가 그 자리에 먼저 온다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+
+    def test_a_stalled_collection_takes_the_place_of_the_time(self):
+        from types import SimpleNamespace
+
+        from smvwp import freshness
+
+        self.window._freshness = {
+            account.account_id: SimpleNamespace(
+                needs_attention=True, status=freshness.STATUS_STALE, age_seconds=7200, coverage_pct=0,
+            )
+            for account in self.config.accounts
+        }
+        self.window._update_collected_label()
+        warning = self.window._freshness_warning()
+        self.assertTrue(warning)
+        self.assertEqual(self.window.collected_label.text(), warning)
+
+    def test_a_long_warning_is_shortened_with_the_whole_in_the_tooltip(self):
+        """머리줄 단추를 밀어내거나 중간에서 잘려 뜻이 끊기지 않게."""
+
+        from smvwp.gui.widgets import ElidedLabel
+
+        label = ElidedLabel()
+        self.addCleanup(label.close)
+        label.resize(80, 20)
+        label.show()   # 숨은 위젯은 보일 때에야 크기 바뀜을 받는다 - 창에서는 늘 보인다
+        long_text = "계정 12개는 최근 24시간 중 26%만 수집됐습니다. cron 이 돌지 않을 수 있습니다"
+        label.setText(long_text)
+        self.assertEqual(label.text(), long_text)
+        self.assertNotEqual(QLabel_text(label), long_text)
+        self.assertEqual(label.toolTip(), long_text)
+        label.resize(2000, 20)
+        _app().processEvents()
+        self.assertEqual(QLabel_text(label), long_text)
+        self.assertEqual(label.toolTip(), "")
+
+
+def QLabel_text(label):  # noqa: N802 - 화면에 실제로 그리는 글 (ElidedLabel.text 가 아니라)
+    from PyQt5.QtWidgets import QLabel
+
+    return QLabel.text(label)
+
+
+class DefaultSizeTests(unittest.TestCase):
+    """처음 창 크기 - 시안 폭(1600)이 들어가면 그대로, 화면이 작으면 화면에 맞춘다."""
+
+    def screen(self, width, height):
+        from types import SimpleNamespace
+
+        from PyQt5.QtCore import QRect
+
+        return SimpleNamespace(availableGeometry=lambda: QRect(0, 0, width, height))
+
+    def test_a_full_hd_screen_gets_the_designed_size(self):
+        from smvwp.gui.main_window import DEFAULT_SIZE, default_size
+
+        self.assertEqual(default_size(self.screen(1920, 1040)), DEFAULT_SIZE)
+
+    def test_a_small_screen_gets_what_fits_but_not_below_the_minimum(self):
+        from smvwp.gui.main_window import MINIMUM_SIZE, default_size
+
+        self.assertEqual(default_size(self.screen(1366, 728)), (1326, MINIMUM_SIZE[1]))
+
+    def test_no_screen_is_the_designed_size(self):
+        from smvwp.gui.main_window import DEFAULT_SIZE, default_size
+
+        self.assertEqual(default_size(None), DEFAULT_SIZE)
+
+
 class CollectedElsewhereTests(_GuiCase):
     """창을 열면 홈 읽기와 첫 수집이 함께 시작된다. cron 이 방금 수집했으면 창의
     수집은 건너뛰는데, 그래도 늘 홈을 새로 읽어 창을 열 때마다 홈을 두 번 읽었다.
@@ -1946,12 +2120,13 @@ class DataFolderDialogTests(_GuiCase):
         self.assertTrue(self.dialog.loading_row.isHidden())
         self.assertTrue(self.dialog.summary_label.text())
 
-    def test_the_main_window_has_a_button_for_it(self):
+    def test_the_main_window_has_a_way_to_it(self):
         from smvwp.gui.main_window import MainWindow
 
         window = MainWindow(self.data_dir, self.config)
         self.addCleanup(window.close)
-        self.assertTrue(window.data_btn.text())
+        self.assertTrue(window.data_action.text())
+        self.assertIn(window.data_action, window.tools_btn.menu().actions())
 
 
 class AccountDialogScanTimesTests(_GuiCase):

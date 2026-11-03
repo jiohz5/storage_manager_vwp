@@ -208,6 +208,69 @@ class RunsTests(unittest.TestCase):
         self.assertEqual(run.ended_at, datetime(2026, 10, 26, 6, 0))
 
 
+class HomeTextTests(unittest.TestCase):
+    """홈의 계정 표 '상세 스캔' 칸, 오늘 밤 카드, 끝 예상 타일이 쓰는 글."""
+
+    NOW = datetime(2026, 10, 26, 14, 0)
+
+    def result(self):
+        return overview([
+            entry("a", last="2026-10-25T03:00:00"),
+            entry("b", last="2026-10-18T03:00:00"),
+            entry("c", last="2026-10-24T03:00:00", done=17, total=40),
+            entry("d", last="2026-10-25T03:00:00", unseen="unreadable"),
+            entry("e"),
+        ], self.NOW, pass_started_at="2026-10-22T22:00:00")
+
+    def item(self, result, account_id):
+        return next(item for item in result.accounts if item.account_id == account_id)
+
+    def test_each_state_has_its_own_chip(self):
+        result = self.result()
+        kinds = {key: scan_overview.home_chip(self.item(result, key), result)[1] for key in "acd"}
+        self.assertEqual(kinds, {"a": "done", "c": "doing", "d": "unseen"})
+
+    def test_the_doing_chip_says_how_far(self):
+        result = self.result()
+        text, _kind, note = scan_overview.home_chip(self.item(result, "c"), result)
+        self.assertIn("17/40", text)
+        self.assertTrue(note, "하다 만 계정은 언제 이어서 하는지 옆에 말해야 한다")
+
+    def test_a_finished_account_needs_no_note(self):
+        result = self.result()
+        self.assertEqual(scan_overview.home_chip(self.item(result, "a"), result)[2], "")
+
+    def test_why_tonight_says_what_is_left_or_that_it_never_finished(self):
+        result = self.result()
+        self.assertIn("23", scan_overview.tonight_why(self.item(result, "c"), self.NOW))
+        never = scan_overview.tonight_why(self.item(result, "e"), self.NOW)
+        self.assertEqual(never, scan_overview.i18n.t("home.tonight.why_never", count=40))
+
+    def test_the_finish_detail_has_no_empty_tail(self):
+        """한 계정이 사흘 밤을 넘게 걸리면 가까운 밤들에 끝나는 계정이 없다 -
+        그때 `남은 1개 · ` 로 끝나면 무언가 빠진 것처럼 읽힌다."""
+
+        slow = overview([entry("big", last="2026-10-18T03:00:00", dirs=2000, speed=60.0)], self.NOW)
+        self.assertEqual(scan_overview.nights_text(slow), "")
+        self.assertEqual(scan_overview.finish_detail(slow),
+                         scan_overview.i18n.t("home.tile.finish_left", count=1))
+        result = self.result()
+        self.assertIn(scan_overview.nights_text(result), scan_overview.finish_detail(result))
+
+    def test_nothing_left_has_no_finish_detail(self):
+        done = overview([entry("a", last="2026-10-25T03:00:00")], self.NOW,
+                        pass_started_at="2026-10-22T22:00:00")
+        self.assertEqual(scan_overview.finish_detail(done), "")
+
+    def test_nights_text_names_only_nights_that_finish_something(self):
+        result = self.result()
+        text = scan_overview.nights_text(result)
+        finishing = [night for night in result.nights[:3] if night.finished]
+        self.assertEqual(text.count(","), len(finishing) - 1)
+        for night in finishing:
+            self.assertIn(scan_overview.night_name(night, self.NOW), text)
+
+
 class AdvancePassTests(unittest.TestCase):
     """야간 스캔이 끝날 때 '한 바퀴' 의 시작을 남긴다 (`nightly_scan.advance_pass`)."""
 

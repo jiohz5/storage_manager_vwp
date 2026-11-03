@@ -622,3 +622,53 @@ def run_night_axis(run: RunNight, start_hour: int, end_hour: int) -> "tuple[date
             return opens, closes
     return started, started + timedelta(hours=8)  # pragma: no cover - 위에서 늘 돌아온다
 
+
+def home_chip(item: AccountCoverage, overview: "Overview") -> "tuple[str, str, str]":
+    """홈 계정 표의 '상세 스캔' 칸 `(알약 글, 알약 종류, 옆 글)`."""
+
+    if item.state == UNSEEN:
+        return i18n.t("overview.state.unseen"), "unseen", i18n.t("overview.next.unseen")
+    if item.state == DOING:
+        text = i18n.t("overview.chip.doing", done=item.done_dirs, total=item.total_dirs)
+        return text, "doing", next_text(item, overview)
+    age, kind = age_text(item, overview.now)
+    if item.state == DONE:
+        return i18n.t("overview.chip.done", age=age), "done", ""
+    return age, kind, next_text(item, overview)
+
+
+def tonight_why(item: AccountCoverage, now: datetime) -> str:
+    """오늘 밤 목록의 둘째 줄 - 왜 이 순서인가."""
+
+    if item.state == DOING:
+        return i18n.t("home.tonight.why_doing", count=max(0, item.total_dirs - item.done_dirs))
+    if item.last_completed_at is None:
+        return i18n.t("home.tonight.why_never", count=item.total_dirs)
+    age, _kind = age_text(item, now)
+    return i18n.t("home.tonight.why_old", age=age, count=item.total_dirs)
+
+
+def finish_detail(overview: "Overview") -> str:
+    """끝 예상 타일의 설명 - `남은 3개 · 내일 밤 2개, 모레 밤 1개`.
+
+    가까운 밤들에 끝나는 계정이 없으면 (한 계정이 여러 밤에 걸칠 때) 남은 수만 -
+    `남은 3개 · ` 처럼 빈 꼬리를 남기지 않는다."""
+
+    if not overview.remaining:
+        return ""
+    nights = nights_text(overview)
+    if not nights:
+        return i18n.t("home.tile.finish_left", count=len(overview.remaining))
+    return i18n.t("home.tile.finish_nights", count=len(overview.remaining), nights=nights)
+
+
+def nights_text(overview: "Overview", shown: int = 3) -> str:
+    """`오늘 밤 3개, 내일 밤 4개, 모레 밤 1개` - 밤마다 끝낼 계정 수."""
+
+    parts = [
+        i18n.t("home.tile.night_count", night=night_name(night, overview.now), count=night.finished)
+        for night in overview.nights[:shown]
+        if night.finished
+    ]
+    return ", ".join(parts)
+
