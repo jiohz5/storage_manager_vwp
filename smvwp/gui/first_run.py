@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 
 from .. import config as config_module
 from .. import diagnostics, i18n
+from . import theme
 
 
 class FirstRunDialog(QDialog):
@@ -42,7 +43,7 @@ class FirstRunDialog(QDialog):
         root = QVBoxLayout(self)
 
         heading = QLabel(i18n.t("firstrun.heading"))
-        heading.setStyleSheet("font-size: 13pt; font-weight: bold;")
+        heading.setObjectName("title")
         heading.setWordWrap(True)
         root.addWidget(heading)
 
@@ -56,8 +57,8 @@ class FirstRunDialog(QDialog):
         status = QLabel(diagnostics.format_report(result))
         status.setWordWrap(True)
         status.setStyleSheet(
-            "font-family: monospace; font-size: 9pt; padding: 6px; "
-            f"background: {'#e8f5e9' if result['ok'] else '#fff3e0'};"
+            f"font-family: monospace; font-size: {theme.FONT_CAPTION}px; padding: 8px; "
+            f"border-radius: 8px; background: {theme.GOOD_SOFT if result['ok'] else theme.WARN_SOFT};"
         )
         root.addWidget(status)
         root.addStretch(1)

@@ -193,6 +193,13 @@ class ScanTab(QFrame):
         for index, key in enumerate(TAB_KEYS):
             self.detail_tabs.setTabText(index, i18n.t(key))
 
+    def retheme(self) -> None:
+        """화면 색이 바뀌었다 - 읽어 둔 스냅샷으로 쪽들을 다시 그린다. 표 글자색과
+        알약은 그릴 때 정해지므로 다시 그려야 바뀐다. 디스크는 다시 읽지 않는다."""
+
+        if self._scan_snapshot is not None:
+            self._on_scan_status_ready(self._scan_snapshot)
+
     def _build(self) -> None:
         """상세 스캔 화면.
 

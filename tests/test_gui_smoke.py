@@ -175,6 +175,23 @@ class MainWindowSmokeTests(_GuiCase):
         _app().processEvents()
         self.assertEqual(self.window.status_bar_label.text(), "hello")
 
+    def test_there_is_no_menu_bar_row_and_language_is_in_tools(self):
+        """메뉴 줄에 `언어` 하나만 있어 창 맨 위 한 줄(약 35px)을 통째로 썼다.
+        언어는 도구 메뉴 안으로 - 다른 말을 쓰는 사람도 찾게 제목에 두 말을 다 둔다."""
+
+        from smvwp import i18n
+
+        self.assertIsNone(self.window.menuWidget())
+        tools = self.window.tools_btn.menu()
+        self.assertIn(self.window.language_menu.menuAction(), tools.actions())
+        self.addCleanup(i18n.set_language, "ko")
+        for code in ("ko", "en"):
+            i18n.set_language(code)
+            self.window.retranslate()
+            title = self.window.language_menu.title()
+            self.assertIn("Language", title)
+            self.assertIn("언어", title)
+
     def test_switching_language_does_not_crash(self):
         from smvwp import i18n
 
@@ -460,12 +477,14 @@ class LargeFilesTableTests(_GuiCase):
 
         from smvwp import tiers
         from PyQt5.QtGui import QColor
+        from smvwp.gui import theme
         from smvwp.gui.scan_pages import LARGE_PATH
 
         self._snapshot_with([("/a/huge", 500_000, 500_000)], measured_kb=1_000_000)
         item = self.tab.large_page.table.item(0, LARGE_PATH)
+        # 글자에는 등급 색의 '글자용' 쪽을 쓴다 - 노랑 그대로는 흰 바탕에서 안 읽힌다.
         self.assertEqual(
-            item.foreground().color().name(), QColor(tiers.color(tiers.WARN)).name()
+            item.foreground().color().name(), QColor(theme.tier_text(tiers.WARN)).name()
         )
         self.assertTrue(item.toolTip(), "왜 눈에 띄는지 설명이 있어야 한다")
 
@@ -1920,6 +1939,75 @@ class HomeOverviewTests(_GuiCase):
         self.assertEqual(kinds[self.halfway.account_id], "doing")
         self.assertTrue(all(kinds.values()), kinds)
 
+    def test_dark_mode_switches_live_and_leaves_no_light_color_behind(self):
+        """도구 메뉴의 '어두운 화면' 은 창을 다시 열지 않고 바로 바뀐다.
+
+        그릴 때 정한 색(표 글자색, 알약, 행 색, 타일 막대, 오늘 밤 번호)이 밝은
+        쪽으로 남으면 어두운 화면에서 그 칸만 하얗게 뜬다. 창 안의 모든 위젯의
+        스타일시트와 표 글자색에 밝은 화면에만 있는 값이 하나도 없어야 한다."""
+
+        from datetime import datetime, timezone
+
+        from PyQt5.QtGui import QColor
+        from PyQt5.QtWidgets import QTableWidget, QWidget
+
+        from smvwp import store
+        from smvwp.gui import theme
+
+        app = _app()
+
+        def back_to_light():
+            theme.use(theme.LIGHT)
+            theme.restyle(app)
+
+        self.addCleanup(back_to_light)
+        total = 10 * 1024 ** 3
+        samples = {}
+        for index, account in enumerate(self.config.accounts):
+            pct = (96.0, 91.0, 40.0)[index % 3]
+            samples[account.account_id] = store.SampleRecord(
+                account_id=account.account_id, collected_at=datetime.now(timezone.utc).isoformat(),
+                ok=True, filesystem="nfs4", mount_point="/ifs", total_kb=total,
+                used_kb=int(total * pct / 100), avail_kb=1, byte_pct=pct,
+                overall_tier="alert" if pct > 95 else "warn" if pct > 90 else "normal",
+            )
+        self.window._latest_samples = samples
+        self.window._render_table(samples)
+        _app().processEvents()
+
+        with patch.object(theme, "save_mode") as saved:
+            self.window.dark_action.trigger()
+        _app().processEvents()
+        saved.assert_called_once_with(theme.DARK)
+        self.assertTrue(theme.is_dark())
+        self.assertTrue(self.window.dark_action.isChecked())
+        self.assertIn(theme.DARK_TOKENS["BG"], app.styleSheet())
+
+        light_only = {value.lower() for value in theme.palette_values(theme.LIGHT)} - {
+            value.lower() for value in theme.palette_values(theme.DARK)
+        }
+        stale = []
+        for widget in [self.window, *self.window.findChildren(QWidget)]:
+            sheet = widget.styleSheet().lower()
+            stale += [f"{type(widget).__name__}: {value}" for value in light_only if value in sheet]
+        for table in self.window.findChildren(QTableWidget):
+            for row in range(table.rowCount()):
+                for column in range(table.columnCount()):
+                    item = table.item(row, column)
+                    if item is None or item.foreground().style() == 0:
+                        continue
+                    color = item.foreground().color().name().lower()
+                    if color in light_only:
+                        stale.append(f"{table.objectName() or 'table'}[{row},{column}]: {color}")
+        self.assertEqual(stale, [])
+        self.assertFalse(self.window.grab().isNull())
+
+        with patch.object(theme, "save_mode"):
+            self.window.dark_action.trigger()
+        self.assertFalse(theme.is_dark())
+        self.assertIn(theme.LIGHT_TOKENS["BG"], app.styleSheet())
+        self.assertNotEqual(QColor(theme.BG), QColor(theme.DARK_TOKENS["BG"]))
+
     def test_tonight_lists_the_half_done_account_first(self):
         from PyQt5.QtWidgets import QLabel
 
@@ -1982,6 +2070,69 @@ class HomeHeaderTests(_GuiCase):
         _app().processEvents()
         self.assertEqual(QLabel_text(label), long_text)
         self.assertEqual(label.toolTip(), "")
+
+
+class CountingLabelTests(unittest.TestCase):
+    """타일의 큰 숫자는 바뀔 때 잠깐 세어 간다 - 방금 새 값을 읽었다는 표시.
+
+    세는 동안의 글자는 그림일 뿐이다. `text()` 는 늘 마지막에 받은 값이어야 한다 -
+    화면 코드와 시험이 그 값을 읽는다."""
+
+    def setUp(self):
+        _app()
+        from smvwp.gui.widgets import CountingLabel
+
+        self.label = CountingLabel("-")
+        self.addCleanup(self.label.close)
+        self.label.show()
+
+    def pump(self, seconds):
+        import time
+
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            _app().processEvents()
+            time.sleep(0.01)
+
+    def test_the_value_is_final_at_once_and_the_display_counts_to_it(self):
+        self.label.setText("96.0%")
+        self.assertEqual(self.label.text(), "96.0%")
+        self.pump(0.12)
+        shown = QLabel_text(self.label)
+        self.assertRegex(shown, r"^\d+\.\d%$")
+        self.assertNotEqual(shown, "96.0%", "세는 중이어야 합니다")
+        self.pump(self.label.DURATION_MS / 1000 + 0.3)
+        self.assertEqual(QLabel_text(self.label), "96.0%")
+
+    def test_it_counts_from_the_last_number_not_from_zero(self):
+        self.label.setText("40")
+        self.pump(self.label.DURATION_MS / 1000 + 0.3)
+        self.label.setText("44")
+        self.pump(0.05)
+        self.assertGreaterEqual(int(QLabel_text(self.label)), 40)
+
+    def test_words_change_at_once(self):
+        """`11/11(수) 새벽` 같은 글은 셀 것이 없다."""
+
+        self.label.setText("11/11(수) 새벽")
+        self.assertEqual(QLabel_text(self.label), "11/11(수) 새벽")
+        self.label.setText("-")
+        self.assertEqual(QLabel_text(self.label), "-")
+
+    def test_a_hidden_label_does_not_count(self):
+        self.label.hide()
+        self.label.setText("67%")
+        self.assertEqual(QLabel_text(self.label), "67%")
+
+    def test_the_width_does_not_wobble_while_counting(self):
+        """세는 동안 글자 폭이 바뀌면 옆의 알약이 따라 흔들린다."""
+
+        self.label.setText("96.0%")
+        self.pump(0.05)
+        self.assertGreaterEqual(self.label.minimumWidth(),
+                                self.label.fontMetrics().horizontalAdvance("96.0%"))
+        self.pump(self.label.DURATION_MS / 1000 + 0.3)
+        self.assertEqual(self.label.minimumWidth(), 0)
 
 
 def QLabel_text(label):  # noqa: N802 - 화면에 실제로 그리는 글 (ElidedLabel.text 가 아니라)

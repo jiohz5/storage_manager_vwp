@@ -244,7 +244,7 @@ class LoadDialog(QDialog):
                 for column in range(table.columnCount()):
                     item = table.item(row, column)
                     if item is not None:
-                        item.setForeground(QColor(tiers.color(tiers.WARN)))
+                        item.setForeground(QColor(theme.tier_text(tiers.WARN)))
             elif not bucket.scan_free:
                 for column in range(table.columnCount()):
                     item = table.item(row, column)
@@ -290,7 +290,7 @@ class LoadDialog(QDialog):
             # 그 구분이 다음에 병렬을 올릴지 내릴지를 가른다.
             rtt, queue = entry["rtt_avg"], entry["queue_avg"]
             if rtt is not None and queue is not None and queue > rtt:
-                queue_item.setForeground(QColor(tiers.color(tiers.WARN)))
+                queue_item.setForeground(QColor(theme.tier_text(tiers.WARN)))
                 queue_item.setToolTip(i18n.t("load.queue_tip"))
             table.setItem(row, 3, queue_item)
 

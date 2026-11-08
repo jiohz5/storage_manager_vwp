@@ -30,7 +30,7 @@ from .. import admin_auth, config as config_module
 from .. import formatting
 from .. import i18n, search_index, tiers
 from ..scheduler import ThreadWorker
-from . import widgets
+from . import theme, widgets
 from .pin_dialog import PinChangeDialog
 
 
@@ -115,7 +115,7 @@ class SearchDialog(QDialog):
         # 기본 PIN을 그대로 쓰고 있으면 눈에 띄게 알린다.
         self.pin_warning = QLabel(i18n.t("search.pin_default_warning"))
         self.pin_warning.setStyleSheet(
-            f"color: {tiers.color(tiers.ALERT)}; font-weight: bold;"
+            f"color: {theme.tier_text(tiers.ALERT)}; font-weight: bold;"
         )
         self.pin_warning.setWordWrap(True)
         self.pin_warning.setVisible(

@@ -39,7 +39,7 @@ class PinChangeDialog(QDialog):
         root = QVBoxLayout(self)
 
         caveat = QLabel(i18n.t("search.pin_caveat"))
-        caveat.setStyleSheet("color: #757575; font-size: 9pt;")
+        caveat.setObjectName("caption")
         caveat.setWordWrap(True)
         root.addWidget(caveat)
 

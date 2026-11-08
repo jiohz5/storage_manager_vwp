@@ -488,7 +488,8 @@ STRINGS = {
     # -- 메뉴 --------------------------------------------------
     "tab.home": "홈",
     "tab.scan": "상세 스캔",
-    "menu.language": "언어",
+    # 다른 말을 쓰는 사람도 찾아야 하므로 두 말을 다 쓴다.
+    "menu.language": "언어 (Language)",
     # -- 상세 스캔 ---------------------------------------------
     "scan.headline.running": "실행 중",
     "scan.headline.running_pct": "실행 중 · {percent}%",
@@ -888,6 +889,7 @@ STRINGS = {
     "forecast.unavailable": "예측 불가",
     "forecast.hours": "약 {hours}시간",
     "forecast.days": "약 {days}일",
+    "forecast.years": "약 {years}년",
     "forecast.within_hour": "1시간 이내",
     "forecast.pair": "{short} / {long}",
     "forecast.tooltip": (
@@ -898,6 +900,10 @@ STRINGS = {
     "forecast.reason.insufficient_samples": "표본 부족",
     "forecast.reason.not_growing": "증가 추세 아님",
     "forecast.reason.too_far": "예측 범위 초과",
+    # 표 칸에 들어가는 짧은 이유. 긴 말(위)은 툴팁에 남는다.
+    "forecast.cell.insufficient_samples": "표본 부족",
+    "forecast.cell.not_growing": "늘지 않음",
+    "forecast.cell.too_far": "아주 느림",
     # -- 최초 실행 안내 ----------------------------------------
     "firstrun.title": "시작하기",
     "firstrun.heading": "Storage Manager VWP를 시작합니다",
@@ -1041,6 +1047,7 @@ STRINGS = {
     "home.counts": "계정 {accounts}개 · 스토리지 {storages}곳",
     "home.collected": "마지막 수집 {time} · {age}",
     "home.collected_never": "아직 수집 전",
+    "home.dark_mode": "어두운 화면",
     "home.tools": "도구",
     "home.tile.fullest": "가장 찬 스토리지",
     "home.tile.fullest_detail": "{account} · FULL 예상 {forecast}",

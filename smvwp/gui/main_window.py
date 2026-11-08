@@ -166,7 +166,8 @@ class _Tile(QFrame):
         box.addWidget(self.caption)
         top = QHBoxLayout()
         top.setSpacing(10)
-        self.value = QLabel("-")
+        # 바뀌면 잠깐 세어 간다 - 새로고침이 먹었다는 것이 숫자에서 보인다.
+        self.value = widgets.CountingLabel("-")
         self.value.setObjectName("display")
         top.addWidget(self.value, 0, Qt.AlignBottom)
         self.side = QLabel()
@@ -529,6 +530,13 @@ class MainWindow(QMainWindow):
         self.diagnose_action = tools.addAction("", self._open_diagnostics)
         # 이 도구가 데이터 폴더에 무엇을 얼마나 언제부터 쌓았나 (보기만 한다).
         self.data_action = tools.addAction("", self._open_data_dialog)
+        tools.addSeparator()
+        tools.addMenu(self.language_menu)
+        # 어두운 화면 - 바로 바뀐다 (`_set_dark`). 이 PC 사용자의 설정에 남는다.
+        self.dark_action = QAction(self, checkable=True)
+        self.dark_action.setChecked(theme.is_dark())
+        self.dark_action.triggered.connect(self._set_dark)
+        tools.addAction(self.dark_action)
         self.tools_btn.setMenu(tools)
         # 가장 자주 쓰는 동작 하나만 강조한다 - 전부 강조하면 아무것도 강조되지 않는다.
         self.collect_btn = QPushButton()
@@ -730,9 +738,12 @@ class MainWindow(QMainWindow):
         )
 
     def _build_menu(self) -> None:
-        """언어 메뉴 - 즉시 전환된다 (재시작 불필요)."""
+        """언어 메뉴 - 즉시 전환된다 (재시작 불필요).
 
-        self.language_menu = self.menuBar().addMenu("")
+        메뉴 줄에 두지 않고 머리줄의 도구 메뉴 안에 붙인다 (`_build_header`). 메뉴
+        줄에 `언어` 하나만 있어 창 맨 위 한 줄을 통째로 썼다."""
+
+        self.language_menu = QMenu(self)
         self._language_actions = {}
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -770,6 +781,7 @@ class MainWindow(QMainWindow):
         self.trend_action.setText(i18n.t("trend.btn.open"))
         self.diagnose_action.setText(i18n.t("dashboard.btn.diagnose"))
         self.data_action.setText(i18n.t("data.btn.open"))
+        self.dark_action.setText(i18n.t("home.dark_mode"))
         for key, caption_key in (("fullest", "home.tile.fullest"), ("attention", "home.tile.attention"),
                                  ("scan", "home.tile.scan"), ("finish", "home.tile.finish")):
             self.tiles[key].caption.setText(i18n.t(caption_key))
@@ -779,6 +791,30 @@ class MainWindow(QMainWindow):
         self._scan_tab.retranslate()
         if self._overview is not None:
             self._show_overview(self._overview)
+
+    def _set_dark(self, dark: bool) -> None:
+        """어두운 화면 켜고 끄기 - 창을 다시 열지 않고 바로 바꾼다.
+
+        팔레트와 QSS 는 `theme.restyle` 이 앱 전체에 한 번에 입힌다. 그릴 때 정한 색
+        (표 글자색, 알약, 행 색, 타일 막대, 오늘 밤 번호)은 다시 그려야 바뀐다 - 언어를
+        바꿀 때와 같은 길이고, 디스크는 다시 읽지 않는다 (읽어 둔 값으로 그린다).
+        고른 것은 `config.json` 이 아니라 이 PC 사용자의 설정에 남긴다 - 데이터 폴더는
+        여러 사람이 같이 쓴다."""
+
+        name = theme.DARK if dark else theme.LIGHT
+        self.dark_action.setChecked(dark)
+        if name == theme.mode():
+            return
+        theme.use(name)
+        theme.save_mode(name)
+        theme.restyle(QApplication.instance())
+        self._render_table(self._latest_samples)
+        self._update_collected_label()
+        if self._overview is not None:
+            self._show_overview(self._overview)
+        self._scan_tab.retheme()
+        for widget in self.findChildren(QWidget):
+            widget.update()
 
     def _change_language(self, language: str) -> None:
         if language == i18n.get_language():
@@ -828,9 +864,9 @@ class MainWindow(QMainWindow):
         for action in plan.actions:
             item = QListWidgetItem(self._priority_text(action))
             if action.critical:
-                item.setForeground(QColor(tiers.color(tiers.EMERGENCY)))
+                item.setForeground(QColor(theme.tier_text(tiers.EMERGENCY)))
             elif action.level == priority.LEVEL_HIGH:
-                item.setForeground(QColor(tiers.color(tiers.ALERT)))
+                item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
             if action.path:
                 item.setToolTip(action.path)
             item.setData(Qt.UserRole, action)
@@ -1079,8 +1115,9 @@ class MainWindow(QMainWindow):
                     forecast.imminent.hours_to_full, self._config.settings
                 )
                 if imminent_tier is not None:
-                    forecast_item.setForeground(QColor(tiers.color(imminent_tier)))
-            if self._is_placeholder(forecast_item.text()):
+                    forecast_item.setForeground(QColor(theme.tier_text(imminent_tier)))
+            # 예측이 하나도 서지 않았으면 (`늘지 않음`, `표본 부족`) 흐리게 둔다.
+            if not formatting.forecast_has_estimate(forecast):
                 forecast_item.setForeground(QColor(theme.TEXT_FAINT))
             self.table.setItem(row, COL_FORECAST, forecast_item)
             self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account.account_id))
@@ -1095,12 +1132,12 @@ class MainWindow(QMainWindow):
             )
             time_item.setToolTip(formatting.local_datetime_text(sample.collected_at))
             if status_info is not None and status_info.needs_attention:
-                time_item.setForeground(QColor(tiers.color(tiers.ALERT)))
+                time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
             # 수집 실패는 열을 따로 두지 않고 여기서 말한다. 실패하면 숫자가
             # 낡은 것이므로, 사람이 보는 곳은 결국 "언제 잰 값인가" 다.
             if not sample.ok:
                 time_item.setText(i18n.t("dashboard.collect_error_short"))
-                time_item.setForeground(QColor(tiers.color(tiers.ALERT)))
+                time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
                 time_item.setToolTip(
                     i18n.t("dashboard.collect_failed", message=sample.error_message)
                 )
@@ -1170,7 +1207,7 @@ class MainWindow(QMainWindow):
         return text in {
             i18n.t("common.none"),
             i18n.t("common.unknown_value"),
-        } or text.startswith(i18n.t("forecast.unavailable"))
+        }
 
     def _style_value_item(self, item, column: int) -> None:
         if column in self.NUMERIC_COLUMNS:
@@ -1187,7 +1224,7 @@ class MainWindow(QMainWindow):
         정상/확인불가는 칠하지 않는다 - 계정 대부분이 정상인 것이 보통이라
         전부 칠하면 색이 배경 소음이 되어 문제 있는 행이 오히려 묻힌다."""
 
-        background = tiers.row_background(tier)
+        background = theme.row_tint(tier)
         if background is None:
             self._row_tints.pop(row, None)
         else:
@@ -1222,7 +1259,7 @@ class MainWindow(QMainWindow):
         kind = widgets.UsageBar.PILL_TIERS.get(tier, "tier_normal")
         fullest.set_chips([(tiers.label(tier), kind)] if pct is not None else [])
         fullest.bar.set_segments(
-            [(1, max(0.0, min(1.0, (pct or 0) / 100)), tiers.color(tier), theme.BORDER, "")]
+            [(1, max(0.0, min(1.0, (pct or 0) / 100)), theme.tier_color(tier), theme.BORDER, "")]
             if pct is not None else []
         )
         forecast = self._forecasts.get(self._worst_account_id) if self._worst_account_id else None
@@ -1256,7 +1293,7 @@ class MainWindow(QMainWindow):
         if warning:
             self.collected_label.setText(warning)
             self.collected_label.setStyleSheet(
-                f"color: {tiers.color(tiers.ALERT)}; font-weight: {theme.WEIGHT_BOLD};"
+                f"color: {theme.tier_text(tiers.ALERT)}; font-weight: {theme.WEIGHT_BOLD};"
             )
             return
         stamps = [sample.collected_at for sample in self._latest_samples.values() if sample.collected_at]
@@ -1300,11 +1337,11 @@ class MainWindow(QMainWindow):
         scan.side.setText(i18n.t(
             "home.tile.scan_counts", finished=overview.count(scan_overview.DONE), accounts=len(visible),
         ))
-        from .overview_page import STATE_COLORS
+        from .overview_page import state_colors
 
         scan.bar.set_segments([
             (1, 1.0 if item.state in (scan_overview.DONE, scan_overview.UNSEEN) else item.fraction,
-             STATE_COLORS[item.state][0], STATE_COLORS[item.state][1], item.name)
+             *state_colors(item.state), item.name)
             for item in overview.accounts
         ])
         self._show_scan_tile_detail()
@@ -1401,9 +1438,8 @@ class MainWindow(QMainWindow):
         number = QLabel(str(item.order) if item is not None and item.order else "·")
         number.setAlignment(Qt.AlignCenter)
         number.setFixedSize(24, 24)
-        light = color in theme.NIGHT_SLOTS[2:]
         number.setStyleSheet(
-            f"background: {color}; color: {theme.TEXT if light else '#ffffff'}; "
+            f"background: {color}; color: {theme.ink_on(color)}; "
             f"border-radius: 6px; font-weight: {theme.WEIGHT_HEAVY};"
         )
         box.addWidget(number)

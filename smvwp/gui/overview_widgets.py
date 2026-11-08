@@ -27,7 +27,7 @@ class Chip(QLabel):
     def set_kind(self, kind: str) -> None:
         self.kind = kind
         background, foreground = theme.CHIPS.get(kind, theme.CHIPS["soft"])
-        border = "1px dashed #8fa3b5" if kind == "unseen" else f"1px solid {background}"
+        border = f"1px dashed {theme.TEXT_FAINT}" if kind == "unseen" else f"1px solid {background}"
         self.setStyleSheet(
             f"background: {background}; color: {foreground}; border: {border}; "
             f"border-radius: 10px; padding: 2px 9px; font-weight: bold; "
@@ -205,9 +205,10 @@ class MiniBar(QWidget):
 
 
 class Swatch(QWidget):
-    """범례의 작은 색 네모."""
+    """범례의 작은 색 네모. `color` 는 색이나, 그릴 때 색을 돌려주는 함수 -
+    범례는 한 번 만들고 오래 남으므로, 화면 색을 바꿨을 때 따라 바뀌려면 함수를 준다."""
 
-    def __init__(self, color: str, size: int = 10, parent=None):
+    def __init__(self, color, size: int = 10, parent=None):
         super().__init__(parent)
         self._color = color
         self.setFixedSize(size, size)
@@ -217,6 +218,6 @@ class Swatch(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(self._color))
+        painter.setBrush(QColor(self._color() if callable(self._color) else self._color))
         painter.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 2, 2)
         painter.end()

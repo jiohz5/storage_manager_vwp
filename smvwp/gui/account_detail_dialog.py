@@ -341,7 +341,7 @@ class AccountDetailDialog(QDialog):
         self.usage_label.setText(
             f"{sample.byte_pct:.1f}%" if sample.byte_pct is not None else dash
         )
-        self.usage_label.setStyleSheet(f"color: {tiers.color(detail.tier)};")
+        self.usage_label.setStyleSheet(f"color: {theme.tier_text(detail.tier)};")
         old = self.usage_bar
         self.usage_bar = widgets.UsageBar(sample.byte_pct, detail.tier)
         self.usage_bar.setFixedHeight(18)
@@ -508,7 +508,7 @@ class AccountDetailDialog(QDialog):
                 for column in range(table.columnCount()):
                     cell = table.item(row, column)
                     if cell is not None:
-                        cell.setForeground(QColor(tiers.color(tiers.WARN)))
+                        cell.setForeground(QColor(theme.tier_text(tiers.WARN)))
 
     def _fill_growth(self, detail) -> None:
         table = self.growth_table
@@ -560,7 +560,7 @@ class AccountDetailDialog(QDialog):
             table.setItem(index, 0, label)
             status = QTableWidgetItem(i18n.t(f"health.status.{item.status}"))
             if item.risky:
-                status.setForeground(QColor(tiers.color(tiers.WARN)))
+                status.setForeground(QColor(theme.tier_text(tiers.WARN)))
             table.setItem(index, 1, status)
             table.setItem(
                 index, 2,

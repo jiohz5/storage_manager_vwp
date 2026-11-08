@@ -158,9 +158,10 @@ def command_gui(args) -> int:
 
     # 위젯을 만들기 전에 테마를 입힌다 - 나중에 적용하면 이미 만들어진
     # 위젯이 기본 외양으로 한 번 그려졌다가 바뀌어 깜빡인다.
-    from smvwp.gui.theme import apply as apply_theme
+    from smvwp.gui import theme
 
-    apply_theme(app)
+    # 어두운 화면을 골랐던 사람이면 처음부터 어둡게 - 밝게 그렸다가 바꾸면 깜빡인다.
+    theme.apply(app, theme.saved_mode())
 
     try:
         data_dir = _resolve_data_dir_interactive(args.data_dir)

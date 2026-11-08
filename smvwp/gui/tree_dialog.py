@@ -297,7 +297,7 @@ class TreeDialog(QDialog):
 
         if node.is_notable:
             for column in range(len(COLUMN_KEYS)):
-                item.setForeground(column, QColor(tiers.color(tiers.WARN)))
+                item.setForeground(column, QColor(theme.tier_text(tiers.WARN)))
         elif node.kind in (tree_view.REST, tree_view.MORE):
             # 진짜 디렉터리가 아니라 계산으로 만든 줄이다. 같은 색이면 사람이
             # 눌러서 들어가려 한다.

@@ -218,18 +218,14 @@ class TreemapView(QWidget):
         hue = hues.get(id(tile))
         if node.kind in (tree_view.REST, tree_view.MORE):
             # 계산으로 만든 줄이다. 색이 같으면 눌러서 들어가려 한다.
-            fill = QColor(theme.SURFACE_SUNKEN).darker(105 + tile.depth * 6)
+            fill = theme.recede(QColor(theme.SURFACE_SUNKEN), 105 + tile.depth * 6)
         elif hue is None:
             # 덩어리를 담는 그릇. 거의 흰색으로 두어 안에 든 것이 드러나게 한다.
             fill = QColor(theme.SURFACE_SUNKEN)
         else:
             # 깊이가 깊을수록 옅게. 안에 든 것이 위에 얹힌 느낌이 된다.
             depth_in_group = max(0, tile.depth - self._group_depth())
-            fill = QColor.fromHsv(
-                hue,
-                max(24, 105 - depth_in_group * 34),
-                min(252, 205 + depth_in_group * 18),
-            )
+            fill = QColor.fromHsv(*theme.treemap_fill(hue, depth_in_group))
 
         painter.fillRect(rect, fill)
 

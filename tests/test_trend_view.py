@@ -54,6 +54,18 @@ def gapped():
     return trend.build([at(0, 40.0), at(1, 42.0), at(80, 90.0)], buckets=20)
 
 
+def level(pct):
+    """한 수준에 머문 이력 - 칸마다 값이 있어 끊기지 않는 선이 된다."""
+
+    return trend.build([at(index, pct) for index in range(20)], buckets=20)
+
+
+def SPARK_HEIGHT():  # noqa: N802 - 상수처럼 읽히게
+    from smvwp.gui.trend_view import SPARK_HEIGHT as height
+
+    return height
+
+
 @unittest.skipUnless(HAVE_QT, "PyQt5 없음")
 class SparklineTests(unittest.TestCase):
     def setUp(self):
@@ -115,7 +127,53 @@ class SparklineTests(unittest.TestCase):
     def test_it_fits_in_a_table_row(self):
         """행 높이를 넘으면 표가 통째로 늘어난다."""
 
-        self.assertLessEqual(self.view.height(), 42)
+        self.assertLessEqual(self.view.sizeHint().height(), 42)
+        self.assertLessEqual(self.view.minimumSizeHint().height(), 42)
+
+    # -- 칸 안에서의 자리 -------------------------------------------------
+    CELL = (120, 44)
+
+    def painted_rows(self, series, tier=tiers.NORMAL):
+        """칸 크기로 늘인 추세선을 그려, 무언가 칠해진 줄 번호들을 준다."""
+
+        from PyQt5.QtCore import Qt
+
+        self.view.set_series(series, tier)
+        self.view.resize(*self.CELL)
+        pixmap = QPixmap(self.view.size())
+        pixmap.fill(Qt.white)
+        self.view.render(pixmap)
+        image = pixmap.toImage()
+        white = image.pixelColor(0, 0)
+        return image, sorted({
+            y for y in range(image.height()) for x in range(image.width())
+            if image.pixelColor(x, y) != white
+        })
+
+    def test_the_cell_stretches_it_to_the_row(self):
+        """표는 칸 위젯을 칸 크기로 늘인다. 크기를 못박아 두면 칸 왼쪽 위에
+        붙어, 사용률이 높은 계정의 선이 **행 윗선처럼** 보인다."""
+
+        self.view.resize(*self.CELL)
+        self.assertEqual((self.view.width(), self.view.height()), self.CELL)
+
+    def test_a_full_line_sits_in_the_middle_band_not_on_the_top_edge(self):
+        _image, rows = self.painted_rows(level(100.0))
+        band_top = (self.CELL[1] - SPARK_HEIGHT()) // 2
+        self.assertTrue(rows)
+        self.assertGreaterEqual(min(rows), band_top - 2, rows)
+        self.assertLessEqual(max(rows), band_top + SPARK_HEIGHT() + 2, rows)
+
+    def test_the_level_is_filled_below_the_line(self):
+        """0~100 축이라 선만 있으면 90% 와 95% 가 모두 '위쪽 어딘가의 평평한 선' 이다.
+        선 아래를 옅게 채우면 **얼마나 찼는지** 가 면적으로 읽힌다."""
+
+        image, _rows = self.painted_rows(level(50.0))
+        # 실제로 그린 크기에서 띠를 잡는다 - 칸 크기로 못 늘어난 위젯이면 띠가 곧 위젯이다.
+        band_bottom = (image.height() + SPARK_HEIGHT()) // 2
+        below = image.pixelColor(image.width() // 2, band_bottom - 3)
+        self.assertTrue(below.isValid())
+        self.assertNotEqual(below, image.pixelColor(0, 0))
 
 
 @unittest.skipUnless(HAVE_QT, "PyQt5 없음")

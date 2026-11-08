@@ -217,6 +217,85 @@ class RelativePathTests(unittest.TestCase):
         self.assertEqual(formatting.relative_path("/x", "/"), "/x")
 
 
+def _prediction(value):
+    """숫자면 그 날 수 뒤에 찬다는 예측, 글자면 그 이유로 못 낸 예측."""
+
+    from smvwp.analytics import Prediction
+
+    if isinstance(value, str):
+        return Prediction(ok=False, reason=value)
+    return Prediction(ok=True, hours_to_full=value * 24)
+
+
+def _forecast(short, long, imminent="insufficient_samples"):
+    from smvwp.analytics import CapacityForecast
+
+    return CapacityForecast(account_id="a", imminent=_prediction(imminent),
+                            short_trend=_prediction(short), long_trend=_prediction(long))
+
+
+class ForecastCellTests(unittest.TestCase):
+    """홈 표의 `FULL 예상` 칸.
+
+    이 칸은 표에서 남는 폭을 받는 칸이라, 긴 문구는 두 줄로 접혀 행 하나만 키가
+    커진다 (`예측 불가(예측 범위 초과) / 약 2105일`). 칸에는 짧게, 긴 설명은
+    툴팁에 둔다."""
+
+    def setUp(self):
+        i18n.set_language("ko")
+        self.addCleanup(i18n.set_language, "ko")
+
+    def test_the_same_number_is_not_written_twice(self):
+        """`약 15일 / 약 15일` - 두 추세가 같으면 한 번이면 된다."""
+
+        self.assertEqual(formatting.format_forecast_cell(_forecast(15.2, 14.9)), "약 15일")
+
+    def test_two_different_numbers_stay_side_by_side(self):
+        """다르면 둘 다 둔다 - 빨라졌는지 느려졌는지가 그 차이에 있다."""
+
+        self.assertEqual(formatting.format_forecast_cell(_forecast(98, 104)), "약 98일 / 약 104일")
+
+    def test_a_year_or_more_is_said_in_years(self):
+        """`약 2105일` 은 세어 봐야 안다. `약 5.8년` 은 바로 읽힌다."""
+
+        self.assertEqual(formatting.format_prediction(_prediction(2105)), "약 5.8년")
+        self.assertEqual(formatting.format_prediction(_prediction(364)), "약 364일")
+        self.assertEqual(formatting.format_prediction(_prediction(365)), "약 1.0년")
+        self.assertEqual(formatting.format_prediction(_prediction(4400)), "약 12년")
+
+    def test_a_missing_estimate_is_a_short_word_in_the_cell(self):
+        text = formatting.format_forecast_cell(_forecast("too_far", 2105))
+        self.assertEqual(text, "아주 느림 / 약 5.8년")
+        self.assertNotIn(i18n.t("forecast.unavailable"), text)
+
+    def test_both_missing_for_the_same_reason_is_one_word(self):
+        self.assertEqual(formatting.format_forecast_cell(_forecast("not_growing", "not_growing")),
+                         "늘지 않음")
+
+    def test_an_unknown_reason_still_says_no_estimate(self):
+        self.assertEqual(formatting.format_forecast_cell(_forecast("", "")),
+                         i18n.t("forecast.unavailable"))
+
+    def test_the_tooltip_keeps_the_whole_reason(self):
+        tip = formatting.format_forecast_tooltip(_forecast("too_far", 2105), 48)
+        self.assertIn(i18n.t("forecast.reason.too_far"), tip)
+
+    def test_an_imminent_fill_is_still_hours(self):
+        self.assertEqual(formatting.format_forecast_cell(_forecast(3, 4, imminent=1.25)), "약 30시간")
+
+    def test_english_cells_are_short_too(self):
+        i18n.set_language("en")
+        self.assertEqual(formatting.format_forecast_cell(_forecast("too_far", 2105)), "Very slow / ~5.8y")
+        self.assertEqual(formatting.format_forecast_cell(_forecast(15.2, 14.9)), "~15d")
+
+    def test_has_estimate(self):
+        """칸을 흐리게 둘지는 글자가 아니라 예측이 하나라도 섰는지로 정한다."""
+
+        self.assertFalse(formatting.forecast_has_estimate(None))
+        self.assertFalse(formatting.forecast_has_estimate(_forecast("too_far", "not_growing")))
+        self.assertTrue(formatting.forecast_has_estimate(_forecast("too_far", 2105)))
+
+
 class LanguageTests(unittest.TestCase):
     def tearDown(self):
         i18n.set_language("ko")

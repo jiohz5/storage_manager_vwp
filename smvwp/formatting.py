@@ -214,17 +214,52 @@ def _unavailable_text(prediction) -> str:
     return unavailable
 
 
-def format_prediction(prediction) -> str:
-    """예측 하나를 짧은 표시 문자열로. 실패 사유도 사람이 읽게 옮긴다."""
+def _estimate_text(prediction) -> str:
+    """선 예측의 남은 시간 - 시간, 날, 해 중 읽기 쉬운 단위로."""
 
-    if not prediction.ok or prediction.hours_to_full is None:
-        return _unavailable_text(prediction)
     if prediction.hours_to_full < 1:
         # 반올림해서 '약 0시간'이 되면 "이미 찼다"는 뜻인지 "곧"인지 모호하다.
         return i18n.t("forecast.within_hour")
     if prediction.hours_to_full < 48:
         return i18n.t("forecast.hours", hours=f"{prediction.hours_to_full:.0f}")
-    return i18n.t("forecast.days", days=f"{prediction.days_to_full:.0f}")
+    days = prediction.days_to_full
+    if days < 365:
+        return i18n.t("forecast.days", days=f"{days:.0f}")
+    # `약 2105일` 은 세어 봐야 안다. 해로 옮기고, 10년이 안 되면 소수 한 자리까지 -
+    # `약 1년` 과 `약 1.9년` 은 다른 이야기다.
+    years = days / 365
+    return i18n.t("forecast.years", years=f"{years:.1f}" if years < 10 else f"{years:.0f}")
+
+
+def format_prediction(prediction) -> str:
+    """예측 하나를 짧은 표시 문자열로. 실패 사유도 사람이 읽게 옮긴다."""
+
+    if not prediction.ok or prediction.hours_to_full is None:
+        return _unavailable_text(prediction)
+    return _estimate_text(prediction)
+
+
+def _cell_prediction(prediction) -> str:
+    """표 칸에 들어갈 예측 하나. 못 낸 예측은 이유를 한 낱말로 (`늘지 않음`) -
+    `예측 불가(증가 추세 아님)` 은 칸을 두 줄로 접는다. 긴 말은 툴팁에 있다."""
+
+    if prediction.ok and prediction.hours_to_full is not None:
+        return _estimate_text(prediction)
+    key = f"forecast.cell.{prediction.reason}" if prediction.reason else ""
+    text = i18n.t(key) if key else ""
+    # 번역 키가 없으면 t()가 키를 그대로 돌려준다.
+    return text if text and text != key else i18n.t("forecast.unavailable")
+
+
+def forecast_has_estimate(forecast) -> bool:
+    """예측이 하나라도 섰는가 - 칸을 흐리게 둘지는 글자가 아니라 이것으로 정한다."""
+
+    if forecast is None:
+        return False
+    return any(
+        prediction.ok and prediction.hours_to_full is not None
+        for prediction in (forecast.imminent, forecast.short_trend, forecast.long_trend)
+    )
 
 
 def format_forecast_cell(forecast, imminent_hours: float = 48.0) -> str:
@@ -240,14 +275,13 @@ def format_forecast_cell(forecast, imminent_hours: float = 48.0) -> str:
         if forecast.imminent.hours_to_full < imminent_hours:
             return format_prediction(forecast.imminent)
 
-    short, long = forecast.short_trend, forecast.long_trend
-    # 둘 다 같은 이유로 불가면 같은 문구를 두 번 쓰지 않는다 - 칸만 길어지고
-    # 읽는 사람이 얻는 정보는 같다.
-    if not short.ok and not long.ok and short.reason == long.reason:
-        return _unavailable_text(short)
-    return i18n.t(
-        "forecast.pair", short=format_prediction(short), long=format_prediction(long)
-    )
+    short = _cell_prediction(forecast.short_trend)
+    long = _cell_prediction(forecast.long_trend)
+    # 둘이 같은 글자면 (`약 15일 / 약 15일`, 같은 이유로 못 냄) 한 번만 쓴다 -
+    # 칸만 길어지고 읽는 사람이 얻는 정보는 같다.
+    if short == long:
+        return short
+    return i18n.t("forecast.pair", short=short, long=long)
 
 
 def format_forecast_tooltip(forecast, window_hours: int) -> str:

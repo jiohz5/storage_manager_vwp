@@ -468,7 +468,7 @@ STRINGS = {
     # -- Menu --------------------------------------------------
     "tab.home": "Home",
     "tab.scan": "Detail scan",
-    "menu.language": "Language",
+    "menu.language": "Language (언어)",
     # -- Detail scan -------------------------------------------
     "scan.headline.running": "Running",
     "scan.headline.running_pct": "Running · {percent}%",
@@ -881,6 +881,7 @@ STRINGS = {
     "forecast.unavailable": "No estimate",
     "forecast.hours": "~{hours}h",
     "forecast.days": "~{days}d",
+    "forecast.years": "~{years}y",
     "forecast.within_hour": "within 1h",
     "forecast.pair": "{short} / {long}",
     "forecast.tooltip": (
@@ -891,6 +892,9 @@ STRINGS = {
     "forecast.reason.insufficient_samples": "Not enough samples",
     "forecast.reason.not_growing": "Not trending up",
     "forecast.reason.too_far": "Beyond forecast range",
+    "forecast.cell.insufficient_samples": "Few samples",
+    "forecast.cell.not_growing": "Not growing",
+    "forecast.cell.too_far": "Very slow",
     # -- First run ---------------------------------------------
     "firstrun.title": "Getting started",
     "firstrun.heading": "Welcome to Storage Manager VWP",
@@ -1034,6 +1038,7 @@ STRINGS = {
     "home.counts": "{accounts} accounts · {storages} storages",
     "home.collected": "Last collected {time} · {age}",
     "home.collected_never": "Not collected yet",
+    "home.dark_mode": "Dark mode",
     "home.tools": "Tools",
     "home.tile.fullest": "Fullest storage",
     "home.tile.fullest_detail": "{account} · FULL in {forecast}",

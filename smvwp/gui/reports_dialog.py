@@ -58,7 +58,7 @@ class ReportsDialog(QDialog):
         root.addLayout(top_row)
 
         self.path_label = QLabel("")
-        self.path_label.setStyleSheet("color: #757575; font-size: 9pt;")
+        self.path_label.setObjectName("caption")
         self.path_label.setWordWrap(True)
         root.addWidget(self.path_label)
 

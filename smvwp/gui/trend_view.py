@@ -33,6 +33,10 @@ from . import theme
 # 숫자가 필요하면 추세 창이 있다.
 SPARK_WIDTH = 90
 SPARK_HEIGHT = 26
+# 칸 양옆에 남기는 여백 - 선이 옆 칸 글자에 붙지 않게.
+SPARK_INSET = 8
+# 선 아래를 채우는 옅은 면의 진하기 (등급 색에 곱한다).
+SPARK_FILL_ALPHA = 0.16
 
 # 큰 그래프의 안쪽 여백 (왼쪽은 축 글자 자리).
 CHART_LEFT = 44
@@ -59,10 +63,24 @@ class Sparkline(QWidget):
         super().__init__(parent)
         self._series: Optional[trend.Series] = None
         self._tier = tiers.UNKNOWN
-        self.setFixedSize(SPARK_WIDTH, SPARK_HEIGHT)
+        # 크기를 못박지 않는다. 표는 칸 위젯을 칸 크기로 늘이는데, 못박아 두면
+        # 위젯이 칸 왼쪽 위에 붙는다 - 0~100 축에서 사용률 높은 계정의 선은 그
+        # 작은 상자의 맨 위라, **행 윗선처럼** 보였다. 그림은 칸 가운데 띠에 그린다.
+        self.setMinimumSize(SPARK_WIDTH, SPARK_HEIGHT)
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt 규약
+        return QSize(SPARK_WIDTH + 2 * SPARK_INSET, SPARK_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt 규약
         return QSize(SPARK_WIDTH, SPARK_HEIGHT)
+
+    def _band(self) -> QRectF:
+        """선을 그릴 띠 - 칸 가운데에 `SPARK_HEIGHT` 높이로."""
+
+        inset = min(SPARK_INSET, max(0, (self.width() - SPARK_WIDTH) // 2))
+        height = min(self.height(), SPARK_HEIGHT)
+        return QRectF(inset, (self.height() - height) / 2,
+                      self.width() - 2 * inset, height)
 
     def set_series(self, series, tier: str = tiers.UNKNOWN) -> None:
         self._series = series
@@ -97,29 +115,50 @@ class Sparkline(QWidget):
             painter.end()
             return
 
-        width = self.width()
-        height = self.height() - 4
-        top = 2.0
+        band = self._band()
+        left, width = band.left(), band.width()
+        # 선 굵기(2px)만큼 위아래를 남긴다 - 100% 와 0% 선이 잘리지 않게.
+        top = band.top() + 2
+        height = band.height() - 4
+        bottom = top + height
         count = max(1, len(series.points) - 1)
+        color = QColor(theme.tier_color(self._tier))
+        fill = QColor(color)
+        fill.setAlphaF(SPARK_FILL_ALPHA)
 
-        pen = QPen(QColor(tiers.color(self._tier)))
+        def point(index):
+            return QPointF(left + width * index / count,
+                           _y_for(series.points[index].value, top, height))
+
+        pen = QPen(color)
         pen.setWidth(2)
-        painter.setPen(pen)
+        last = None
         for run in trend.segments(series):
             if len(run) < 2:
                 # 점 하나짜리 구간은 선이 안 된다. 그래도 있었다는 것은
                 # 보여야 하므로 점으로 찍는다.
-                index = run[0]
-                x = width * index / count
-                y = _y_for(series.points[index].value, top, height)
-                painter.drawPoint(QPointF(x, y))
+                painter.setPen(pen)
+                painter.drawPoint(point(run[0]))
+                last = point(run[0])
                 continue
-            polygon = QPolygonF([
-                QPointF(width * index / count,
-                        _y_for(series.points[index].value, top, height))
-                for index in run
-            ])
-            painter.drawPolyline(polygon)
+            line = [point(index) for index in run]
+            # 선 아래를 옅게 채운다. 0~100 축이라 선만 두면 90% 와 95% 가 모두
+            # '위쪽 어딘가의 평평한 선' 인데, 면이 있으면 **얼마나 찼는지** 가
+            # 면적으로 읽힌다. 구멍(수집이 멈춘 곳)은 채우지 않는다 - 선과 같은 이유.
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(fill)
+            painter.drawPolygon(QPolygonF(
+                line + [QPointF(line[-1].x(), bottom), QPointF(line[0].x(), bottom)]
+            ))
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(pen)
+            painter.drawPolyline(QPolygonF(line))
+            last = line[-1]
+        if last is not None:
+            # 끝점 - '지금' 이 어디인지. 옆 칸의 숫자가 이 점의 값이다.
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(last, 2.6, 2.6)
         painter.end()
 
 
@@ -185,7 +224,7 @@ class TrendChart(QWidget):
             (tiers.ALERT_THRESHOLD, tiers.ALERT),
         ):
             y = _y_for(threshold, plot.top(), plot.height())
-            pen = QPen(QColor(tiers.color(tier)))
+            pen = QPen(QColor(theme.tier_color(tier)))
             pen.setWidth(1)
             pen.setStyle(Qt.DashLine)
             painter.setPen(pen)

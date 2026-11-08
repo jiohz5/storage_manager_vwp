@@ -44,7 +44,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import action_guide, config as config_module, i18n, priority, tiers
-from . import widgets
+from . import theme, widgets
 from .account_detail_dialog import DetailReader
 
 # 급함 단계의 색. 목록 줄과 같은 색을 쓴다 - 창을 열어도 "아까 그 빨간 줄"
@@ -221,8 +221,9 @@ class ActionDialog(QDialog):
 
         tier = LEVEL_TIERS.get(guide.level, tiers.WARN)
         self.level_chip.setText(guide.level_text)
+        background, foreground = theme.tier_chip(tier)
         self.level_chip.setStyleSheet(
-            f"background: {tiers.color(tier)}; color: #ffffff; border-radius: 9px;"
+            f"background: {background}; color: {foreground}; border-radius: 9px;"
             f" padding: 3px 10px; font-weight: bold;"
         )
         self.headline.setText(guide.headline)
@@ -296,7 +297,7 @@ class ActionDialog(QDialog):
         )
         header.setSectionResizeMode(last if wide_last else 0, QHeaderView.Stretch)
         table.setRowCount(len(guide.evidence_rows))
-        warn = QColor(tiers.color(tiers.WARN))
+        warn = QColor(theme.tier_text(tiers.WARN))
         for row, evidence in enumerate(guide.evidence_rows):
             for column, text in enumerate(evidence.cells):
                 item = QTableWidgetItem(text)

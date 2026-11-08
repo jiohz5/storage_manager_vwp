@@ -286,7 +286,7 @@ class SummaryPage(QWidget):
                 i18n.t("digest.delta_detail", count=digest.accounts_compared),
                 # 늘어난 것만 물들인다. 줄어든 것은 좋은 소식이라 경고가 아니다.
                 color=(
-                    tiers.color(tiers.WARN) if digest.total_delta_kb > 0 else None
+                    theme.tier_text(tiers.WARN) if digest.total_delta_kb > 0 else None
                 ),
             )
 
@@ -313,7 +313,7 @@ class SummaryPage(QWidget):
             self.card_findings.show_value(
                 str(len(digest.findings)),
                 i18n.t("digest.findings_detail", urgent=digest.urgent_count),
-                color=tiers.color(tiers.ALERT) if digest.urgent_count else None,
+                color=theme.tier_text(tiers.ALERT) if digest.urgent_count else None,
             )
 
         self._show_findings(digest)
@@ -329,7 +329,7 @@ class SummaryPage(QWidget):
         for finding in digest.findings:
             item = QListWidgetItem(self._finding_text(finding))
             if finding.urgent:
-                item.setForeground(QColor(tiers.color(tiers.ALERT)))
+                item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
             if finding.path:
                 item.setToolTip(finding.path)
             item.setData(FINDING_ACCOUNT_ROLE, finding.account_id)
@@ -553,7 +553,7 @@ class AccountsPage(QWidget):
                 )
             note_item = QTableWidgetItem("  ·  ".join(notes) if notes else "")
             if entry.failed_count or entry.partial_paths:
-                note_item.setForeground(QColor(tiers.color(tiers.WARN)))
+                note_item.setForeground(QColor(theme.tier_text(tiers.WARN)))
             table.setItem(row, SCAN_ACCT_NOTE, note_item)
 
 
@@ -801,4 +801,4 @@ class LargeFilesPage(QWidget):
                 for column in range(len(LARGE_COLUMN_KEYS)):
                     cell = table.item(row, column)
                     if cell is not None:
-                        cell.setForeground(QColor(tiers.color(tiers.WARN)))
+                        cell.setForeground(QColor(theme.tier_text(tiers.WARN)))

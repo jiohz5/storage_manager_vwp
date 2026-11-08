@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
-from PyQt5.QtCore import QEvent, QRectF, QSize, Qt
+from PyQt5.QtCore import QEasingCurve, QEvent, QRectF, QSize, Qt, QVariantAnimation
 from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import (
     QFrame,
@@ -27,6 +28,64 @@ from PyQt5.QtWidgets import (
 from .. import i18n, tiers
 from ..formatting import tier_badge_text
 from . import theme
+
+
+class CountingLabel(QLabel):
+    """바뀌면 잠깐 세어 가는 큰 숫자 (홈 타일의 `96.0%`, `3`, `67%`).
+
+    꾸밈이 아니라 **방금 새 값을 읽었다** 는 신호다. 새로고침을 눌러도 숫자가
+    그대로면 눌린 건지 알 수 없다. 처음 읽을 때는 0 에서, 그 뒤로는 지난 값에서 센다.
+
+    - 숫자가 아닌 값(`11/11(수) 새벽`, `-`)은 그 자리에서 바뀐다.
+    - 숨은 동안에는 세지 않는다 (아무도 안 보는 그림을 그릴 까닭이 없다).
+    - `text()` 는 **늘 마지막에 받은 값**이다. 세는 도중의 글자는 그림일 뿐 - 화면
+      코드와 시험이 그 값을 읽는다 (`ElidedLabel` 과 같은 약속).
+    - 세는 동안은 마지막 값의 폭을 잡아 둔다. 글자 폭이 바뀌면 옆 알약이 흔들린다.
+    """
+
+    DURATION_MS = 450
+    # 앞뒤 글 없이 숫자 하나와 단위 (`96.0%`, `3`, `67%`).
+    _NUMBER = re.compile(r"^(\d+(?:\.(\d+))?)(\D*)$")
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._target = text
+        self._shape = (0, "")   # (소수 자리, 단위) - 세는 동안 쓸 모양
+        self._animation = QVariantAnimation(self)
+        self._animation.setDuration(self.DURATION_MS)
+        self._animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._animation.valueChanged.connect(self._show_step)
+        self._animation.finished.connect(self._settle)
+
+    def text(self) -> str:  # noqa: D401 - QLabel 과 같은 이름
+        return self._target
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt 규약
+        previous, self._target = self._target, text
+        self._animation.stop()
+        new = self._NUMBER.match(text)
+        if new is None or not self.isVisible():
+            self._settle()
+            return
+        old = self._NUMBER.match(previous)
+        start = float(old.group(1)) if old and old.group(3) == new.group(3) else 0.0
+        end = float(new.group(1))
+        if start == end:
+            self._settle()
+            return
+        self._shape = (len(new.group(2) or ""), new.group(3))
+        self.setMinimumWidth(self.fontMetrics().horizontalAdvance(text))
+        self._animation.setStartValue(start)
+        self._animation.setEndValue(end)
+        self._animation.start()
+
+    def _show_step(self, value) -> None:
+        decimals, unit = self._shape
+        super().setText(f"{float(value):.{decimals}f}{unit}")
+
+    def _settle(self) -> None:
+        super().setText(self._target)
+        self.setMinimumWidth(0)
 
 
 class ElidedLabel(QLabel):
@@ -74,9 +133,9 @@ class TierBadge(QLabel):
 
     def set_tier(self, tier: str, pct: Optional[float]) -> None:
         self.setText(tier_badge_text(tier, pct))
-        color = tiers.color(tier)
+        background, foreground = theme.tier_chip(tier)
         self.setStyleSheet(
-            f"background-color: {color}; color: white; border-radius: 9px; "
+            f"background-color: {background}; color: {foreground}; border-radius: 9px; "
             f"padding: 3px 10px; font-weight: bold; font-size: {theme.FONT_CAPTION}px;"
         )
 
@@ -267,7 +326,7 @@ class UsageBar(QWidget):
             # 아주 작은 값도 보이도록 최소 폭을 준다 (0.5%가 아예 안 보이면
             # "측정이 안 된 것"과 구분되지 않는다).
             filled = max(filled, self.BAR_HEIGHT)
-            painter.setBrush(QColor(tiers.color(self._tier)))
+            painter.setBrush(QColor(theme.tier_color(self._tier)))
             painter.drawRoundedRect(
                 QRectF(track_left, top, filled, self.BAR_HEIGHT), radius, radius
             )

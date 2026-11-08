@@ -40,11 +40,37 @@ weight를 Medium/Black으로 지정해도 렌더가 Normal/Bold와 픽셀 단위
 색만으로 정보를 전달하지 않는다는 기존 원칙(DESIGN.md)을 그대로 지킨다. 이
 테마는 "어디를 먼저 볼지" 돕는 보조 수단이고, 등급·상태는 항상 글자로도
 보인다.
+
+## 어두운 화면
+
+색을 뒤집는 것이 아니라 **같은 이름에 다른 값**을 준다 (`LIGHT_TOKENS` /
+`DARK_TOKENS`). 화면 코드는 `theme.BG` 처럼 이름만 쓰고, `use()` 가 이 모듈의
+값을 갈아 끼운다. 그래서 지킬 것이 셋이다 (`tests/test_theme.py` 가 본다).
+
+- 화면 코드에 색을 박지 않는다 (`#ffffff`, `Qt.white`). 박은 색은 어두운 화면에서
+  혼자 밝게 남는다.
+- 모듈을 읽을 때 색을 표에 담아 두지 않는다 (`STATE_COLORS = {..: theme.ACCENT}`).
+  그 표만 옛 색으로 남는다 - 그릴 때 이름으로 꺼낸다.
+- 등급 색은 `tiers.color` 가 아니라 `tier_color` (막대·선) / `tier_text` (글자) 로
+  받는다. `tiers.py` 의 색은 흰 바탕용 한 벌이고 보고서도 쓴다 - 거기는 그대로 두고,
+  색조는 같게 밝기만 화면에 맞춘다. 노랑(#f9a825) 글자는 흰 바탕에서 1.9:1 이라
+  밝은 화면에서도 글자에는 짙은 쪽을 쓴다.
+
+강조색은 둘로 나뉜다. 어두운 바탕 위의 파랑 **글자**는 밝아야 읽히고, 흰 글자를
+얹는 파랑 **면**(주요 단추)은 어두워야 읽힌다 - `ACCENT` 와 `ACCENT_FILL`.
+밝은 화면에서는 둘이 같다.
+
+창을 다시 열지 않고 바뀐다 (`MainWindow._set_dark`). 고른 것은 이 PC 사용자의
+설정 파일(`QSettings`, 리눅스면 `~/.config/smvwp/`)에 남긴다 - 데이터 폴더의
+`config.json` 은 여러 사람이 같이 쓰므로, 한 사람이 어둡게 바꿨다고 남의 화면까지
+바뀌면 안 된다.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+
+from .. import tiers
 
 FONT_DIR = Path(__file__).resolve().parent / "fonts"
 FONT_FAMILY = "Pretendard"
@@ -53,6 +79,7 @@ FONT_FAMILY = "Pretendard"
 FALLBACK_FAMILIES = ["Noto Sans KR", "Malgun Gothic", "AppleSDGothicNeo", "sans-serif"]
 
 # -- 팔레트 ----------------------------------------------------------------
+# 아래 값은 밝은 화면이다. 어두운 화면 값은 `DARK_TOKENS`, 바꾸는 것은 `use()`.
 # 회색조는 푸른 기가 아주 약간 도는 한 계열로 통일한다.
 BG = "#edf1f5"          # 창 배경 (카드가 떠 보이도록 흰색보다 약간 어둡게)
 SURFACE = "#ffffff"     # 카드·입력칸 배경
@@ -63,12 +90,23 @@ TEXT = "#0a1829"        # 본문 (거의 검정이지만 남색 기를 남겨 �
 TEXT_MUTED = "#3d5e78"  # 보조 설명
 TEXT_FAINT = "#8fa3b5"  # 플레이스홀더
 
-ACCENT = "#0145f2"      # 강조 (주요 동작·선택·포커스)
+ACCENT = "#0145f2"      # 강조 글자·선 (선택·포커스·링크)
+ACCENT_FILL = "#0145f2"  # 강조 면 - 흰 글자를 얹는 주요 단추 (어두운 화면에서는 ACCENT 보다 짙다)
 ACCENT_HOVER = "#0139cc"
 ACCENT_PRESSED = "#012fa8"
 ACCENT_SOFT = "#e6edfe"  # 선택 행 배경
+ON_ACCENT = "#ffffff"    # 강조 면 위의 글자
+PRIMARY_DISABLED = "#a8bdf7"
+PRIMARY_DISABLED_TEXT = "#eef2ff"
+BUTTON_PRESSED = "#e8eef4"
 DANGER = "#c62828"
 DANGER_SOFT = "#fdecec"
+DANGER_BORDER = "#eda9a9"
+TOOLTIP_BG = "#0a1829"
+TOOLTIP_TEXT = "#ffffff"
+GOOD_TEXT = "#1e5e23"    # '끝남' 처럼 잘 된 것을 말하는 글자
+GOOD_SOFT = "#e8f5e9"
+WARN_SOFT = "#fff3e0"
 
 # 상세 스캔 현황의 상태 색. 등급 색(초록·노랑·주황·빨강·보라)과 섞이지 않게 파랑
 # 계열과 회색으로 짓고, 서로는 밝기로도 갈린다 (색만으로 구분하지 않는다 - 글자가
@@ -77,21 +115,237 @@ SCAN_DONE = ACCENT
 SCAN_DOING = "#7da2ff"
 SCAN_WAITING = "#d5dde6"
 SCAN_UNSEEN = "#ef6c00"
-# 한 밤에 차례로 도는 계정들 - 같은 파랑의 짙고 옅은 단계.
+# 한 밤에 차례로 도는 계정들 - 같은 파랑의 짙고 옅은 단계 (바탕 쪽으로 갈수록 뒤).
 NIGHT_SLOTS = ("#0145f2", "#3d6cf5", "#7da2ff", "#b7caff")
 # 알약(칩) `(배경, 글자)`. 글자는 배경 위에서 4.5:1 이 넘는 것으로 골랐다.
 CHIPS = {
     "done": ("#e6edfe", "#0139cc"),
-    "doing": (ACCENT, "#ffffff"),
+    "doing": (ACCENT_FILL, ON_ACCENT),
     "soft": ("#eef2f6", TEXT_MUTED),
     "stale": ("#ffe8d6", "#8a3800"),
     "unseen": ("#ffffff", "#3d4b57"),
-    # 등급 알약 (홈의 '손볼 계정', 사용률 칸). 기준 색의 옅은 바탕에 짙은 글자.
+    # 등급 알약 (홈의 '손볼 계정', 사용률 칸, 계정 상세). 기준 색의 옅은 바탕에 짙은 글자.
+    "tier_normal": ("#e7f4e8", "#1e5e23"),
     "tier_warn": ("#fff4cf", "#6b4e00"),
     "tier_alert": ("#ffe8d6", "#8a3800"),
     "tier_emergency": ("#ffe1e1", "#8e1c1c"),
     "tier_full": ("#f3e5f5", "#5a1780"),
 }
+# 등급 색 - 막대·선(`TIER_FILL`)은 `tiers.py` 그대로, 글자(`TIER_TEXT`)는 같은 색조의
+# 짙은 쪽, 행 바탕(`ROW_TINTS`)은 `tiers.py` 그대로.
+TIER_FILL = dict(tiers.LABELS)
+TIER_TEXT = {
+    tiers.NORMAL: "#2e7d32",
+    tiers.WARN: "#7d5c00",
+    tiers.ALERT: "#b04600",
+    tiers.EMERGENCY: "#c62828",
+    tiers.FULL: "#6a1b9a",
+    tiers.UNKNOWN: "#5f6b75",
+}
+ROW_TINTS = dict(tiers.ROW_BACKGROUNDS)
+# 트리맵 덩어리의 채도·명도 `(채도, 깊이마다 채도, 채도 한계, 명도, 깊이마다 명도, 명도 한계)`.
+# 밝은 화면은 깊을수록 옅게(흰 바탕 쪽), 어두운 화면은 깊을수록 어둡게(바탕 쪽).
+TREEMAP = (105, -34, 24, 205, 18, 252)
+
+# 이름 목록 - 두 화면이 같은 이름을 갖는다.
+TOKEN_NAMES = (
+    "BG", "SURFACE", "SURFACE_SUNKEN", "BORDER", "BORDER_STRONG",
+    "TEXT", "TEXT_MUTED", "TEXT_FAINT",
+    "ACCENT", "ACCENT_FILL", "ACCENT_HOVER", "ACCENT_PRESSED", "ACCENT_SOFT", "ON_ACCENT",
+    "PRIMARY_DISABLED", "PRIMARY_DISABLED_TEXT", "BUTTON_PRESSED",
+    "DANGER", "DANGER_SOFT", "DANGER_BORDER", "TOOLTIP_BG", "TOOLTIP_TEXT",
+    "GOOD_TEXT", "GOOD_SOFT", "WARN_SOFT",
+    "SCAN_DONE", "SCAN_DOING", "SCAN_WAITING", "SCAN_UNSEEN", "NIGHT_SLOTS",
+    "CHIPS", "TIER_FILL", "TIER_TEXT", "ROW_TINTS", "TREEMAP",
+)
+LIGHT_TOKENS = {name: globals()[name] for name in TOKEN_NAMES}
+
+# 어두운 화면. 바탕은 같은 푸른 회색 계열을 어둡게 내린 것이고, 글자·선 색은
+# 그 위에서 4.5:1 이 넘게 밝게 올렸다 (`tests/test_theme.py`).
+_DARK_ACCENT = "#6b98ff"
+_DARK_ACCENT_FILL = "#2d5fe0"
+_DARK_TEXT_MUTED = "#9fb2c5"
+DARK_TOKENS = {
+    "BG": "#0f151c",
+    "SURFACE": "#171f29",
+    "SURFACE_SUNKEN": "#1d2733",
+    "BORDER": "#283544",
+    "BORDER_STRONG": "#36475b",
+    "TEXT": "#e6edf5",
+    "TEXT_MUTED": _DARK_TEXT_MUTED,
+    "TEXT_FAINT": "#66798d",
+    "ACCENT": _DARK_ACCENT,
+    "ACCENT_FILL": _DARK_ACCENT_FILL,
+    "ACCENT_HOVER": "#3a6cf0",
+    "ACCENT_PRESSED": "#244fc0",
+    "ACCENT_SOFT": "#1c2d52",
+    "ON_ACCENT": "#ffffff",
+    "PRIMARY_DISABLED": "#25385f",
+    "PRIMARY_DISABLED_TEXT": "#7f93b8",
+    "BUTTON_PRESSED": "#222e3b",
+    "DANGER": "#ff6b6b",
+    "DANGER_SOFT": "#3a1d22",
+    "DANGER_BORDER": "#7a3a40",
+    "TOOLTIP_BG": "#283442",
+    "TOOLTIP_TEXT": "#e6edf5",
+    "GOOD_TEXT": "#7bd389",
+    "GOOD_SOFT": "#16291b",
+    "WARN_SOFT": "#33240f",
+    "SCAN_DONE": _DARK_ACCENT,
+    "SCAN_DOING": "#3f63b8",
+    "SCAN_WAITING": "#2b3846",
+    "SCAN_UNSEEN": "#ff8a3d",
+    "NIGHT_SLOTS": (_DARK_ACCENT, "#3f69cf", "#2f4f9a", "#253c70"),
+    "CHIPS": {
+        "done": ("#1c2d52", "#a9c2ff"),
+        "doing": (_DARK_ACCENT_FILL, "#ffffff"),
+        "soft": ("#212c38", _DARK_TEXT_MUTED),
+        "stale": ("#3a2512", "#ffb27a"),
+        "unseen": ("#171f29", "#b7c3cf"),
+        "tier_normal": ("#173022", "#7bd389"),
+        "tier_warn": ("#3a3112", "#f2c94c"),
+        "tier_alert": ("#3a2512", "#ffb27a"),
+        "tier_emergency": ("#3d1c20", "#ff9e9e"),
+        "tier_full": ("#2f1f40", "#d7a8f7"),
+    },
+    "TIER_FILL": {
+        tiers.NORMAL: "#43a85a",
+        tiers.WARN: "#e0b23a",
+        tiers.ALERT: "#f08a3c",
+        tiers.EMERGENCY: "#f25f5c",
+        tiers.FULL: "#b07ae0",
+        tiers.UNKNOWN: "#7f8c99",
+    },
+    "TIER_TEXT": {
+        tiers.NORMAL: "#7bd389",
+        tiers.WARN: "#f2c94c",
+        tiers.ALERT: "#ffb27a",
+        tiers.EMERGENCY: "#ff9e9e",
+        tiers.FULL: "#d7a8f7",
+        tiers.UNKNOWN: "#a7b3bf",
+    },
+    "ROW_TINTS": {
+        tiers.WARN: "#2a2513",
+        tiers.ALERT: "#2e2014",
+        tiers.EMERGENCY: "#321c20",
+        tiers.FULL: "#291e36",
+    },
+    "TREEMAP": (110, -22, 40, 104, -14, 52),
+}
+
+LIGHT = "light"
+DARK = "dark"
+MODES = (LIGHT, DARK)
+_mode = LIGHT
+
+# 등급 -> 알약 종류. 정상도 알약이 있다 (계정 상세의 등급 배지).
+_TIER_CHIPS = {
+    tiers.NORMAL: "tier_normal", tiers.WARN: "tier_warn", tiers.ALERT: "tier_alert",
+    tiers.EMERGENCY: "tier_emergency", tiers.FULL: "tier_full",
+}
+
+
+def use(name: str) -> None:
+    """화면 색을 바꾼다 - 이 모듈의 이름들에 그 화면의 값을 넣는다.
+
+    이미 그려진 위젯은 저절로 안 바뀐다. 앱에는 `restyle()`, 창에는 다시 그리기가
+    따라야 한다 (`MainWindow._set_dark`)."""
+
+    global _mode
+    _mode = DARK if name == DARK else LIGHT
+    globals().update(DARK_TOKENS if _mode == DARK else LIGHT_TOKENS)
+
+
+def mode() -> str:
+    return _mode
+
+
+def is_dark() -> bool:
+    return _mode == DARK
+
+
+def tier_color(tier: str) -> str:
+    """막대·선·점에 쓰는 등급 색."""
+
+    return TIER_FILL.get(tier, TIER_FILL[tiers.UNKNOWN])
+
+
+def tier_text(tier: str) -> str:
+    """글자에 쓰는 등급 색 - 같은 색조에서 지금 바탕 위에 읽히는 쪽."""
+
+    return TIER_TEXT.get(tier, TIER_TEXT[tiers.UNKNOWN])
+
+
+def row_tint(tier: str):
+    """표 행 바탕. 정상·모름은 칠하지 않는다 (None)."""
+
+    return ROW_TINTS.get(tier)
+
+
+def tier_chip(tier: str):
+    """등급 알약 `(배경, 글자)`."""
+
+    return CHIPS[_TIER_CHIPS.get(tier, "soft")]
+
+
+def _luminance(color: str) -> float:
+    def channel(value: int) -> float:
+        c = value / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def ink_on(color: str) -> str:
+    """색 면(오늘 밤 순번 네모 등) 위의 글자 - 흰 글자와 짙은 글자 중 더 읽히는 쪽.
+    짙은 글자는 밝은 화면이면 본문색, 어두운 화면이면 창 바탕색 (오려 낸 듯 보인다)."""
+
+    ground = _luminance(color)
+
+    def contrast(ink: str) -> float:
+        high, low = sorted((ground, _luminance(ink)), reverse=True)
+        return (high + 0.05) / (low + 0.05)
+
+    return max((ON_ACCENT, BG if is_dark() else TEXT), key=contrast)
+
+
+def treemap_fill(hue: int, depth: int):
+    """트리맵 덩어리 칠 `(색조, 채도, 명도)` - 깊을수록 바탕 쪽으로."""
+
+    sat, sat_step, sat_bound, val, val_step, val_bound = TREEMAP
+    saturation = max(sat_bound, sat + depth * sat_step)
+    value = val + depth * val_step
+    value = min(val_bound, value) if val_step > 0 else max(val_bound, value)
+    return hue, saturation, value
+
+
+def recede(color, amount: int):
+    """`QColor` 를 바탕 쪽으로 한 단계 - 밝은 화면은 어둡게, 어두운 화면은 밝게
+    (흰 바탕 위 회색은 짙어져야, 검은 바탕 위 회색은 옅어져야 눈에 띈다)."""
+
+    return color.lighter(amount) if is_dark() else color.darker(amount)
+
+
+def palette_values(name: str) -> list:
+    """그 화면이 쓰는 색 값 전부 (시험이 '박힌 색이 없는가' 를 볼 때 쓴다)."""
+
+    tokens = DARK_TOKENS if name == DARK else LIGHT_TOKENS
+    values = []
+
+    def collect(value) -> None:
+        if isinstance(value, str) and value.startswith("#"):
+            values.append(value)
+        elif isinstance(value, dict):
+            for inner in value.values():
+                collect(inner)
+        elif isinstance(value, (tuple, list)):
+            for inner in value:
+                collect(inner)
+
+    collect(list(tokens.values()))
+    return values
+
 
 # -- 타이포 스케일 ----------------------------------------------------------
 FONT_DISPLAY = 30   # 히어로 숫자
@@ -156,8 +410,8 @@ QMainWindow, QDialog {{ background: {BG}; }}
 QLabel {{ background: transparent; }}
 
 QToolTip {{
-    background: {TEXT};
-    color: #ffffff;
+    background: {TOOLTIP_BG};
+    color: {TOOLTIP_TEXT};
     border: none;
     padding: 7px 10px;
     border-radius: 8px;
@@ -210,21 +464,23 @@ QPushButton {{
     min-height: 20px;
 }}
 QPushButton:hover {{ background: {SURFACE_SUNKEN}; border-color: {ACCENT}; }}
-QPushButton:pressed {{ background: #e8eef4; }}
+QPushButton:pressed {{ background: {BUTTON_PRESSED}; }}
 QPushButton:disabled {{ color: {TEXT_FAINT}; background: {SURFACE_SUNKEN}; border-color: {BORDER}; }}
 
 /* 주요 동작 하나만 채운 버튼으로 둔다 - 전부 강조하면 아무것도 강조되지 않는다 */
 QPushButton#primary {{
-    background: {ACCENT};
-    color: #ffffff;
-    border: 1px solid {ACCENT};
+    background: {ACCENT_FILL};
+    color: {ON_ACCENT};
+    border: 1px solid {ACCENT_FILL};
 }}
 QPushButton#primary:hover {{ background: {ACCENT_HOVER}; border-color: {ACCENT_HOVER}; }}
 QPushButton#primary:pressed {{ background: {ACCENT_PRESSED}; }}
-QPushButton#primary:disabled {{ background: #a8bdf7; border-color: #a8bdf7; color: #eef2ff; }}
+QPushButton#primary:disabled {{
+    background: {PRIMARY_DISABLED}; border-color: {PRIMARY_DISABLED}; color: {PRIMARY_DISABLED_TEXT};
+}}
 
 /* 되돌리기 어려운 동작은 색으로 구분한다 */
-QPushButton#danger {{ color: {DANGER}; border-color: #eda9a9; }}
+QPushButton#danger {{ color: {DANGER}; border-color: {DANGER_BORDER}; }}
 QPushButton#danger:hover {{ background: {DANGER_SOFT}; border-color: {DANGER}; }}
 QPushButton#danger:disabled {{ color: {TEXT_FAINT}; border-color: {BORDER}; background: {SURFACE_SUNKEN}; }}
 
@@ -234,8 +490,8 @@ QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QComboBox {{
     border: 1px solid {BORDER_STRONG};
     border-radius: {RADIUS};
     padding: 8px 12px;
-    selection-background-color: {ACCENT};
-    selection-color: #ffffff;
+    selection-background-color: {ACCENT_FILL};
+    selection-color: {ON_ACCENT};
 }}
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus,
 QSpinBox:focus, QComboBox:focus {{
@@ -403,7 +659,68 @@ QSplitter::handle:hover {{ background: {BORDER}; border-radius: 2px; }}
 """
 
 
-def apply(app) -> None:
+def qpalette():
+    """Qt 팔레트 - QSS 가 닿지 않는 곳(체크 상자 안, 메시지 상자, 비활성 글자)도
+    같은 색을 쓰게 한다. 없으면 어두운 화면에서 체크 상자만 흰 네모로 뜬다."""
+
+    from PyQt5.QtGui import QColor, QPalette
+
+    palette = QPalette()
+    roles = {
+        QPalette.Window: BG, QPalette.WindowText: TEXT,
+        QPalette.Base: SURFACE, QPalette.AlternateBase: SURFACE_SUNKEN,
+        QPalette.Text: TEXT, QPalette.Button: SURFACE, QPalette.ButtonText: TEXT,
+        QPalette.BrightText: DANGER, QPalette.Highlight: ACCENT_FILL,
+        QPalette.HighlightedText: ON_ACCENT, QPalette.Link: ACCENT,
+        QPalette.ToolTipBase: TOOLTIP_BG, QPalette.ToolTipText: TOOLTIP_TEXT,
+        QPalette.Light: SURFACE, QPalette.Midlight: BORDER, QPalette.Mid: BORDER_STRONG,
+        QPalette.Dark: BORDER_STRONG, QPalette.Shadow: BORDER_STRONG,
+    }
+    placeholder = getattr(QPalette, "PlaceholderText", None)  # Qt 5.12+
+    if placeholder is not None:
+        roles[placeholder] = TEXT_FAINT
+    for role, value in roles.items():
+        palette.setColor(role, QColor(value))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        palette.setColor(QPalette.Disabled, role, QColor(TEXT_FAINT))
+    return palette
+
+
+def restyle(app) -> None:
+    """지금 화면 색으로 앱 팔레트와 QSS 를 다시 입힌다."""
+
+    app.setPalette(qpalette())
+    app.setStyleSheet(stylesheet())
+
+
+def _settings():
+    from PyQt5.QtCore import QSettings
+
+    return QSettings(QSettings.IniFormat, QSettings.UserScope, "smvwp", "storage_manager_vwp")
+
+
+def saved_mode() -> str:
+    """이 PC 사용자가 고른 화면 (없거나 못 읽으면 밝은 화면)."""
+
+    try:
+        value = _settings().value("theme", LIGHT)
+    except Exception:  # noqa: BLE001 - 표시 설정일 뿐, 못 읽어도 창은 떠야 한다
+        return LIGHT
+    return value if value in MODES else LIGHT
+
+
+def save_mode(name: str) -> None:
+    """고른 화면을 남긴다. 못 남겨도 이번 창은 그대로 바뀐다."""
+
+    try:
+        settings = _settings()
+        settings.setValue("theme", name)
+        settings.sync()
+    except Exception:  # noqa: BLE001 - 표시 설정일 뿐
+        pass
+
+
+def apply(app, name: str = LIGHT) -> None:
     """`QApplication`에 폰트와 테마를 적용한다.
 
     Fusion 스타일을 먼저 지정한다 - 플랫폼 기본 스타일은 QSS를 부분적으로만
@@ -412,6 +729,7 @@ def apply(app) -> None:
 
     from PyQt5.QtGui import QFont
 
+    use(name)
     app.setStyle("Fusion")
     load_fonts()
     # QSS의 font-family만으로도 대부분 먹지만, 기본 폰트를 함께 지정해야
@@ -421,4 +739,4 @@ def apply(app) -> None:
     base_font = QFont(FONT_FAMILY)
     base_font.setPixelSize(FONT_BODY)
     app.setFont(base_font)
-    app.setStyleSheet(stylesheet())
+    restyle(app)

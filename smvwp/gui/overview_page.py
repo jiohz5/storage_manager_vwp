@@ -29,12 +29,16 @@ from .. import i18n, scan_overview
 from . import theme, widgets
 from .overview_widgets import Chip, MiniBar, SegmentBar, Swatch, TimelineBar
 
-STATE_COLORS = {
-    scan_overview.DONE: (theme.SCAN_DONE, theme.SCAN_DONE),
-    scan_overview.DOING: (theme.SCAN_DOING, theme.ACCENT_SOFT),
-    scan_overview.WAITING: (theme.SCAN_WAITING, theme.SCAN_WAITING),
-    scan_overview.UNSEEN: (theme.SCAN_UNSEEN, theme.SCAN_UNSEEN),
-}
+def state_colors(state: str):
+    """상태의 `(채운 색, 바탕 색)`. 그릴 때마다 묻는다 - 모듈을 읽을 때 표로 담아 두면
+    어두운 화면으로 바꿔도 그 표만 밝은 색으로 남는다."""
+
+    return {
+        scan_overview.DONE: (theme.SCAN_DONE, theme.SCAN_DONE),
+        scan_overview.DOING: (theme.SCAN_DOING, theme.ACCENT_SOFT),
+        scan_overview.WAITING: (theme.SCAN_WAITING, theme.SCAN_WAITING),
+        scan_overview.UNSEEN: (theme.SCAN_UNSEEN, theme.SCAN_UNSEEN),
+    }[state]
 
 STATE_KEYS = {
     scan_overview.DONE: "overview.state.done",
@@ -204,7 +208,7 @@ class OverviewPage(QWidget):
                            (scan_overview.DOING, "overview.legend.doing"),
                            (scan_overview.WAITING, "overview.legend.waiting"),
                            (scan_overview.UNSEEN, "overview.legend.unseen")):
-            legend.addWidget(Swatch(STATE_COLORS[state][0]))
+            legend.addWidget(Swatch(lambda state=state: state_colors(state)[0]))
             label = _label("caption")
             legend.addWidget(label)
             legend.addSpacing(10)
@@ -319,7 +323,7 @@ class OverviewPage(QWidget):
         )
         segments = []
         for item in overview.accounts:
-            color, track = STATE_COLORS[item.state]
+            color, track = state_colors(item.state)
             tip = i18n.t(
                 "overview.segment.tip", name=item.name,
                 state=i18n.t(STATE_KEYS[item.state]),
@@ -358,7 +362,7 @@ class OverviewPage(QWidget):
             name = QTableWidgetItem(item.name)
             name.setData(ACCOUNT_ROLE, item.account_id)
             self.table.setItem(row, COL_ACCOUNT, name)
-            color, _track = STATE_COLORS[item.state]
+            color, _track = state_colors(item.state)
             self.table.setCellWidget(row, COL_PROGRESS, MiniBar(
                 item.fraction if item.state != scan_overview.UNSEEN else 1.0, color,
                 scan_overview.progress_text(item),
@@ -400,7 +404,7 @@ class OverviewPage(QWidget):
             time_label = _label("muted", span)
             why_label = _label("", why)
             why_color = theme.CHIPS["stale"][1] if kind == "stale" else (
-                "#1e5e23" if kind == "done" else theme.TEXT_MUTED)
+                theme.GOOD_TEXT if kind == "done" else theme.TEXT_MUTED)
             why_label.setStyleSheet(f"font-weight: {theme.WEIGHT_BOLD}; color: {why_color};")
             done = _label("muted", scan_overview.run_done_text(run))
             for column, widget in enumerate((date, bar, time_label, why_label, done)):
