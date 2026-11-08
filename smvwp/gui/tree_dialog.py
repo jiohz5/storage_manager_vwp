@@ -47,7 +47,7 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import formatting, i18n, scan_store, tiers, tree_view, usage_log
 from ..scheduler import ThreadWorker
-from . import theme
+from . import theme, visuals, widgets
 from .treemap_view import TreemapView
 
 COLUMN_KEYS = ("tree.col.path", "tree.col.size", "tree.col.share", "tree.col.change")
@@ -185,6 +185,13 @@ class TreeDialog(QDialog):
         top.addStretch(1)
         root.addLayout(top)
 
+        # 계정 합계와 맨 위 폴더들의 몫을 한 줄로 (`visuals.SummaryBand`). 예전에는 그
+        # 자리가 "261109 스캔 기준 (261108 스캔과 견줌) · 디렉터리 28개 · 계정 합계 32.8 TB
+        # · 야간 스캔이 남긴 기록을 읽은 것이라 ..." 한 문단이었다.
+        self.stack = visuals.ShareStack()
+        self.band = visuals.SummaryBand(self.stack)
+        self.band.setVisible(False)
+        root.addWidget(self.band)
         self.caption = QLabel()
         self.caption.setObjectName("muted")
         self.caption.setWordWrap(True)
@@ -215,8 +222,15 @@ class TreeDialog(QDialog):
         header = self.tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, header.Stretch)
-        for column in (COL_SIZE, COL_SHARE, COL_CHANGE):
-            header.setSectionResizeMode(column, header.ResizeToContents)
+        header.setSectionResizeMode(COL_SIZE, header.ResizeToContents)
+        # 비중·증감 칸에는 막대가 들어간다 (`widgets.CellDelegate`) - 내용 폭에 맞추면
+        # 막대가 글자 밑에 숨는다.
+        for column, width in ((COL_SHARE, 150), (COL_CHANGE, 170)):
+            header.setSectionResizeMode(column, header.Interactive)
+            self.tree.setColumnWidth(column, width)
+        self.cells = widgets.ChangeBarDelegate(self.tree)
+        for column in (COL_SHARE, COL_CHANGE):
+            self.tree.setItemDelegateForColumn(column, self.cells)
         self.tree.itemExpanded.connect(self._on_expanded)
         list_box.addWidget(self.tree, 1)
         self.tabs.addTab(list_page, i18n.t("tree.tab.list"))
@@ -249,9 +263,10 @@ class TreeDialog(QDialog):
 
         # 목록의 회색 줄·나머지 줄을 설명하는 말이라 목록 쪽에 둔다. 창 아래에 두면
         # 그림 탭에서도 보여, 그림의 안내와 두 덩어리가 겹쳐 읽혔다.
-        self.legend = QLabel(i18n.t("tree.legend"))
+        # 두 줄 문단이던 것을 한 줄로 줄이고 나머지는 툴팁에 둔다.
+        self.legend = QLabel(i18n.t("tree.legend_short"))
         self.legend.setObjectName("caption")
-        self.legend.setWordWrap(True)
+        self.legend.setToolTip(i18n.t("tree.legend"))
         list_box.addWidget(self.legend)
 
         bottom = QHBoxLayout()
@@ -265,6 +280,7 @@ class TreeDialog(QDialog):
     def _reload(self) -> None:
         account_id = self.account_combo.currentData()
         self.tree.clear()
+        self.band.setVisible(False)
         if not account_id:
             self.caption.setText(i18n.t("tree.no_account"))
             return
@@ -289,6 +305,7 @@ class TreeDialog(QDialog):
 
         self.tree.clear()
         self.treemap.set_roots([])
+        self.band.setVisible(False)
         self.caption.setText(i18n.t("tree.no_scan"))
 
     def _on_loaded(self, result: TreeResult) -> None:
@@ -309,6 +326,11 @@ class TreeDialog(QDialog):
             i18n.t("scan.col.delta_dated", previous=previous) if previous
             else i18n.t("tree.col.change"),
         )
+        # 증감 막대는 맨 위 폴더들 가운데 가장 큰 변화가 칸을 다 채운다 - 안쪽 폴더는
+        # 그보다 짧다 (같은 자로 재야 어디가 컸는지 견줄 수 있다).
+        self.cells.scale = max(
+            (abs(node.delta_kb or 0) for node in roots if node.compared), default=0
+        )
         for node in roots:
             item = self._make_item(node)
             self.tree.addTopLevelItem(item)
@@ -316,15 +338,37 @@ class TreeDialog(QDialog):
         for index in range(self.tree.topLevelItemCount()):
             self.tree.topLevelItem(index).setExpanded(True)
         when = formatting.scan_label(result.current_at, result.generation)
-        self.caption.setText(
-            i18n.t(
-                "tree.caption",
-                when=when,
-                compared=i18n.t("tree.caption_compared", previous=previous) if previous else "",
-                count=f"{tree_view.count_directories(roots):,}",
-                total=formatting.format_kb(result.total_kb),
-            )
+        self._show_band(result, when, previous)
+        self.caption.setText(i18n.t("tree.caption_short"))
+
+    def _show_band(self, result: TreeResult, when: str, previous: Optional[str]) -> None:
+        """계정 합계, 맨 위 폴더들의 몫(쌓은 막대), 두 스캔의 날짜와 디렉터리 수 알약."""
+
+        band = self.band
+        band.setVisible(True)
+        band.caption.setText(i18n.t("tree.band.title"))
+        band.set_value(formatting.format_kb(result.total_kb))
+        band.sub.setText(
+            i18n.t("tree.chip.when", when=when)
+            + ("  ·  " + i18n.t("tree.chip.compared", previous=previous) if previous else "")
         )
+        total = result.total_kb or 0
+        ordered = sorted(result.roots, key=lambda node: -(node.size_kb or 0))
+        self.stack.set_parts([
+            (
+                node.size_kb or 0, "attention" if node.is_notable else "accent",
+                i18n.t(
+                    "tree.root_tip", name=self._label_for(node),
+                    size=formatting.format_kb(node.size_kb),
+                    pct=f"{(node.size_kb or 0) / total * 100:.1f}" if total else "-",
+                ),
+            )
+            for node in ordered
+        ], total)
+        band.set_chips([
+            (i18n.t("tree.chip.dirs", count=f"{tree_view.count_directories(result.roots):,}"),
+             "soft", ""),
+        ])
 
     # -- 노드 ---------------------------------------------------------
     def _make_item(self, node) -> QTreeWidgetItem:
@@ -340,9 +384,22 @@ class TreeDialog(QDialog):
         share = node.share_pct
         item.setText(COL_SHARE, f"{share:.1f}%" if share is not None else "-")
         item.setTextAlignment(COL_SHARE, Qt.AlignRight | Qt.AlignVCenter)
+        if share is not None and node.kind not in (tree_view.REST, tree_view.MORE):
+            # 계정에서의 몫 - 0~100% 가 칸 하나다 (안쪽 폴더는 그만큼 짧다). 계산으로
+            # 만든 줄(직접 있는 파일, 그 밖 폴더)에는 막대를 두지 않는다 - 흐린 줄이다.
+            item.setData(COL_SHARE, widgets.CellDelegate.BAR_ROLE, (
+                share / 100, "attention" if node.is_notable else "accent",
+            ))
 
         item.setText(COL_CHANGE, formatting.format_tree_change(node))
         item.setTextAlignment(COL_CHANGE, Qt.AlignRight | Qt.AlignVCenter)
+        if node.kind not in (tree_view.REST, tree_view.MORE) and node.compared:
+            if node.previous_kb is None:
+                # '지난 스캔에 없던 것' / '목록에 없던 파일' 은 알약으로.
+                item.setData(COL_CHANGE, widgets.CellDelegate.CHIP_ROLE,
+                             (item.text(COL_CHANGE), "stale"))
+            elif node.delta_kb:
+                item.setData(COL_CHANGE, widgets.CellDelegate.VALUE_ROLE, node.delta_kb)
         if node.compared and node.previous_kb is not None and node.delta_kb == 0:
             # '변화 없음' 이 줄마다 같은 색이면 변한 줄이 묻힌다.
             item.setForeground(COL_CHANGE, QColor(theme.TEXT_MUTED))

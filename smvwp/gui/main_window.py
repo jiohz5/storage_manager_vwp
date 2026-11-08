@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
@@ -69,6 +69,7 @@ from .. import (
 from ..scheduler import CollectorScheduler, DashboardWorker, ThreadWorker
 from . import theme, widgets
 from .overview_widgets import Chip, SegmentBar, TimelineBar
+from .visuals import ActionDelegate, ChangeList, CollectStrip
 from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
@@ -440,11 +441,14 @@ class MainWindow(QMainWindow):
         columns.addLayout(left, 1)
 
         right_column = QWidget()
+        self.right_column = right_column
+        right_column.installEventFilter(self)
         right_column.setFixedWidth(RIGHT_COLUMN_WIDTH)
         right = QVBoxLayout(right_column)
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(theme.GAP_SECTION)
         right.addWidget(self._build_priority_card(), 1)
+        right.addWidget(self._build_changes_card())
         right.addWidget(self._build_tonight_card())
         columns.addWidget(right_column)
         layout.addLayout(columns, 1)
@@ -558,6 +562,9 @@ class MainWindow(QMainWindow):
             self.tiles[key] = tile
         self.tiles["fullest"].bar.setVisible(True)
         self.tiles["scan"].bar.setVisible(True)
+        # 손볼 계정 - 등급마다 계정 수만큼의 칸 (긴급·경고·주의·정상·수집 실패).
+        # 예전에는 그 자리가 "정상 9개 · 사용률은 15분마다 df 로 잰 지금 값입니다" 한 줄이었다.
+        self.tiles["attention"].bar.setVisible(True)
         self.tiles["finish"].value.setStyleSheet(
             f"font-size: 22px; font-weight: {theme.WEIGHT_HEAVY};"
         )
@@ -578,17 +585,19 @@ class MainWindow(QMainWindow):
         priority_box = QVBoxLayout(self.priority_card)
         priority_box.setContentsMargins(16, 12, 16, 12)
         priority_box.setSpacing(4)
+        # 제목 줄 오른쪽에 건수를 붙이고 '줄을 누르면...' 은 목록 밑으로 - 오른쪽 칸에
+        # 카드가 셋이라 할 일 줄이 들어갈 세로를 글 두 줄이 먹지 않게.
+        head = QHBoxLayout()
         self.priority_title = QLabel()
         self.priority_title.setObjectName("sectionTitle")
-        priority_box.addWidget(self.priority_title)
+        head.addWidget(self.priority_title)
+        head.addStretch(1)
         self.priority_summary = QLabel()
-        self.priority_summary.setObjectName("muted")
-        self.priority_summary.setWordWrap(True)
-        priority_box.addWidget(self.priority_summary)
+        self.priority_summary.setObjectName("caption")
+        head.addWidget(self.priority_summary)
+        priority_box.addLayout(head)
         self.priority_hint = QLabel()
         self.priority_hint.setObjectName("caption")
-        self.priority_hint.setWordWrap(True)
-        priority_box.addWidget(self.priority_hint)
         self.priority_list = QListWidget()
         self.priority_list.setObjectName("findings")
         self.priority_list.setFrameShape(QListWidget.NoFrame)
@@ -603,8 +612,91 @@ class MainWindow(QMainWindow):
         # 있다는 것을 알린다 - 반응만 하고 아무 일이 없으면 고장으로 읽힌다.
         self.priority_list.viewport().setCursor(Qt.PointingHandCursor)
         self.priority_list.itemClicked.connect(self._on_priority_clicked)
+        # 한 줄을 알약(종류) + 계정 + 값 + 설명으로 그린다 (`visuals.ActionDelegate`).
+        self.priority_list.setMouseTracking(True)
+        self.priority_list.setItemDelegate(ActionDelegate(self.priority_list))
         priority_box.addWidget(self.priority_list, 1)
+        priority_box.addWidget(self.priority_hint)
         return self.priority_card
+
+    def _build_changes_card(self) -> QFrame:
+        """지난 스캔 대비 용량 변화 - 계정마다 가운데 0 선 양쪽 막대.
+
+        상세 스캔이 끝난 두 바퀴를 견준 것이다 (두 바퀴 모두 잰 곳끼리). 홈에는 '지금
+        몇 % 찼나' 만 있고 '어디가 늘었나' 는 상세 스캔 탭 안쪽에 있었다 - 둘은 같이
+        보여야 "왜 찼나" 가 이어진다. 줄을 누르면 그 계정의 용량 변화 탭으로 간다."""
+
+        self.changes_card = QFrame()
+        self.changes_card.setObjectName("card")
+        box = QVBoxLayout(self.changes_card)
+        box.setContentsMargins(16, 12, 16, 12)
+        box.setSpacing(8)
+        head = QHBoxLayout()
+        self.changes_title = QLabel()
+        self.changes_title.setObjectName("sectionTitle")
+        head.addWidget(self.changes_title)
+        head.addStretch(1)
+        self.changes_hint = QLabel()
+        self.changes_hint.setObjectName("caption")
+        head.addWidget(self.changes_hint)
+        box.addLayout(head)
+        self.changes_list = ChangeList()
+        self.changes_list.chosen.connect(self._open_growth)
+        box.addWidget(self.changes_list)
+        self.changes_empty = QLabel()
+        self.changes_empty.setObjectName("muted")
+        self.changes_empty.setWordWrap(True)
+        box.addWidget(self.changes_empty)
+        return self.changes_card
+
+    # 홈 카드에 싣는 계정 수 - 더 보려면 상세 스캔 탭으로 간다.
+    CHANGES_SHOWN = 4
+
+    def _show_changes(self, overview) -> None:
+        compared = [item for item in overview.accounts if item.change_kb is not None]
+        compared.sort(key=lambda item: (-abs(item.change_kb), item.name))
+        rows = []
+        for item in compared[:self.CHANGES_SHOWN]:
+            tip = i18n.t(
+                "home.changes.tip", name=item.name,
+                previous=formatting.format_kb(item.previous_kb),
+                current=formatting.format_kb(item.measured_kb),
+                delta=formatting.format_kb_delta(item.change_kb),
+            )
+            if item.change_excluded:
+                tip += "\n" + i18n.t("home.changes.excluded", count=item.change_excluded)
+            rows.append((item.account_id, item.name, item.change_kb, tip))
+        self.changes_list.set_rows(rows)
+        self.changes_list.setVisible(bool(rows))
+        self.changes_empty.setText(i18n.t("home.changes.empty"))
+        self.changes_empty.setVisible(not rows)
+        self._fit_right_column()
+
+    # '무엇부터 할까' 에 적어도 이만큼(할 일 세 줄과 제목·안내)은 남긴다.
+    PRIORITY_MIN_HEIGHT = 250
+
+    def _fit_right_column(self) -> None:
+        """오른쪽 칸 세로가 모자라면 '용량 변화' 카드를 접는다 - 할 일 줄이 먼저다.
+
+        1366x768 같은 낮은 창에서 카드 셋이 나눠 가지면 할 일이 한 줄 반만 보였다.
+        같은 내용은 상세 스캔 탭의 용량 변화에 있다."""
+
+        if not hasattr(self, "right_column"):
+            return
+        spacing = theme.GAP_SECTION
+        needed = (self.PRIORITY_MIN_HEIGHT + self.changes_card.sizeHint().height()
+                  + self.tonight_card.sizeHint().height() + 2 * spacing)
+        self.changes_card.setVisible(self.right_column.height() >= needed)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt 규약
+        # 창의 크기 바뀜은 칸 배치보다 먼저 온다 - 오른쪽 칸 자신의 크기 바뀜을 듣는다.
+        if watched is getattr(self, "right_column", None) and event.type() == QEvent.Resize:
+            self._fit_right_column()
+        return super().eventFilter(watched, event)
+
+    def _open_growth(self, account_id: str) -> None:
+        self._scan_tab.open_growth(account_id)
+        self.tabs.setCurrentIndex(self.tabs.indexOf(self._scan_page))
 
     def _build_tonight_card(self) -> QFrame:
         """오늘 밤 상세 스캔 - 22~06 막대 위에 도는 순서와 계정마다 끝날 어림."""
@@ -628,9 +720,12 @@ class MainWindow(QMainWindow):
         self.tonight_rows = QVBoxLayout()
         self.tonight_rows.setSpacing(6)
         box.addLayout(self.tonight_rows)
+        # 도는 순서와 시각을 어떻게 냈는지는 카드 툴팁으로 - 오른쪽 칸 세로를 두 줄
+        # 설명이 먹으면 할 일 줄이 그만큼 덜 보인다.
         self.tonight_note = QLabel()
         self.tonight_note.setObjectName("caption")
         self.tonight_note.setWordWrap(True)
+        self.tonight_note.setVisible(False)
         box.addWidget(self.tonight_note)
         return self.tonight_card
 
@@ -720,7 +815,7 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(COL_BYTE, 200)
         # '상세 스캔' 칸도 위젯(알약 + 옆 글)이라 내용 기준 폭이 머리글 폭으로 줄어든다.
         header.setSectionResizeMode(COL_SCAN, QHeaderView.Fixed)
-        self.table.setColumnWidth(COL_SCAN, 230)
+        self.table.setColumnWidth(COL_SCAN, 210)
         header.setSectionResizeMode(COL_FORECAST, QHeaderView.Stretch)
         header.setStretchLastSection(False)
         header.setHighlightSections(False)
@@ -787,6 +882,9 @@ class MainWindow(QMainWindow):
             self.tiles[key].caption.setText(i18n.t(caption_key))
         self.tiles["attention"].setToolTip(i18n.t("dashboard.df_caveat"))
         self.tonight_note.setText(i18n.t("home.tonight.note"))
+        self.tonight_card.setToolTip(i18n.t("home.tonight.note"))
+        self.changes_title.setText(i18n.t("home.changes.title"))
+        self.changes_hint.setText(i18n.t("home.changes.hint"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
         self._scan_tab.retranslate()
         if self._overview is not None:
@@ -849,20 +947,24 @@ class MainWindow(QMainWindow):
             return
 
         if plan.actions:
+            # 비울 양을 모르면 그 말을 뺀다 - "정리하면 - 빕니다" 는 고장으로 읽혔다.
             self.priority_summary.setText(
                 i18n.t(
                     "priority.summary",
                     count=len(plan.actions),
                     critical=plan.critical_count,
-                    freeable=formatting.format_kb(plan.reclaimable_kb)
-                    if plan.reclaimable_kb else i18n.t("common.none"),
+                    freeable=formatting.format_kb(plan.reclaimable_kb),
                 )
+                if plan.reclaimable_kb else
+                i18n.t("priority.summary_short", count=len(plan.actions),
+                       critical=plan.critical_count)
             )
         else:
             self.priority_summary.setText(i18n.t("priority.nothing"))
 
         for action in plan.actions:
             item = QListWidgetItem(self._priority_text(action))
+            item.setData(ActionDelegate.CARD_ROLE, action_guide.card(action))
             if action.critical:
                 item.setForeground(QColor(theme.tier_text(tiers.EMERGENCY)))
             elif action.level == priority.LEVEL_HIGH:
@@ -1131,7 +1233,9 @@ class MainWindow(QMainWindow):
                 else formatting.local_minute_text(sample.collected_at)
             )
             time_item.setToolTip(formatting.local_datetime_text(sample.collected_at))
-            if status_info is not None and status_info.needs_attention:
+            stale = status_info is not None and status_info.status in (
+                freshness.STATUS_STALE, freshness.STATUS_NEVER)
+            if stale:
                 time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
             # 수집 실패는 열을 따로 두지 않고 여기서 말한다. 실패하면 숫자가
             # 낡은 것이므로, 사람이 보는 곳은 결국 "언제 잰 값인가" 다.
@@ -1142,6 +1246,20 @@ class MainWindow(QMainWindow):
                     i18n.t("dashboard.collect_failed", message=sample.error_message)
                 )
             self.table.setItem(row, COL_TIME, time_item)
+            # 지난 24시간을 한 시간 한 칸으로 (`visuals.CollectStrip`). 예전에는 24시간 중
+            # 26% 만 모였을 때 '방금' 을 주황으로 칠했다 - 방금 모았다면서 경고 색이라
+            # 무슨 뜻인지 읽히지 않았다. 빈 시간은 빈 칸으로 보이고, 글자는 오래됐을
+            # 때만 경고 색이다. 실패한 표본은 글자 그대로 둔다 (그쪽이 할 말이 크다).
+            if sample.ok and status_info is not None and status_info.hourly:
+                strip = CollectStrip(
+                    status_info.hourly, time_item.text(), alert=stale,
+                    tooltip=i18n.t(
+                        "freshness.strip_tip", hours=self._config.settings.freshness_window_hours,
+                        coverage=int(status_info.coverage_pct or 0),
+                    ) + "\n" + time_item.toolTip(),
+                )
+                time_item.setText("")
+                self.table.setCellWidget(row, COL_TIME, strip)
 
             # 주의 이상인 행만 옅게 칠한다. 정상까지 칠하면 색이 배경 소음이
             # 되어 정작 문제 있는 행이 묻힌다.
@@ -1167,6 +1285,7 @@ class MainWindow(QMainWindow):
         self._worst_tier = tiers.UNKNOWN
         self._tier_counts: Dict[str, int] = {}
         self._ok_count = 0
+        self._failed_count = 0
 
         for account in accounts:
             sample = latest.get(account.account_id)
@@ -1180,6 +1299,7 @@ class MainWindow(QMainWindow):
                 self._worst_account_id = account.account_id
                 self._worst_tier = sample.overall_tier
             if not sample.ok:
+                self._failed_count += 1
                 continue
             self._ok_count += 1
             self._tier_counts[sample.overall_tier] = self._tier_counts.get(sample.overall_tier, 0) + 1
@@ -1281,9 +1401,27 @@ class MainWindow(QMainWindow):
                     widgets.UsageBar.PILL_TIERS[tier_code],
                 ))
         attention.set_chips(chips)
-        attention.detail.setText(i18n.t(
-            "home.tile.attention_detail", normal=self._tier_counts.get(tiers.NORMAL, 0),
-        ))
+        detail = i18n.t("home.tile.attention_detail", normal=self._tier_counts.get(tiers.NORMAL, 0))
+        if self._failed_count:
+            detail += i18n.t("home.tile.attention_failed", failed=self._failed_count)
+        attention.detail.setText(detail)
+        # 계정 하나에 한 몫 - 급한 등급부터 왼쪽에. 정상은 등급 색 그대로 두면 막대가
+        # 초록 일색이 되어 급한 칸이 묻히므로 옅은 색, 수집 실패는 빈 칸(점선 없는 회색).
+        segments = []
+        for tier_code in (tiers.FULL, tiers.EMERGENCY, tiers.ALERT, tiers.WARN):
+            count = self._tier_counts.get(tier_code, 0)
+            if count:
+                segments.append((count, 1.0, theme.tier_color(tier_code), theme.BORDER,
+                                 i18n.t("home.tile.attention_chip", tier=tiers.label(tier_code),
+                                        count=count)))
+        normal = self._tier_counts.get(tiers.NORMAL, 0)
+        if normal:
+            segments.append((normal, 1.0, theme.tier_chip(tiers.NORMAL)[0], theme.BORDER,
+                             i18n.t("home.tile.attention_detail", normal=normal)))
+        if self._failed_count:
+            segments.append((self._failed_count, 0.0, theme.BORDER, theme.BORDER,
+                             i18n.t("home.tile.attention_failed", failed=self._failed_count).strip(" ·-")))
+        attention.bar.set_segments(segments)
 
     def _update_collected_label(self) -> None:
         """머리줄의 '마지막 수집'. 수집이 멈췄으면 그 경고가 먼저다 - 멈춘 데이터를
@@ -1291,9 +1429,12 @@ class MainWindow(QMainWindow):
 
         warning = self._freshness_warning()
         if warning:
+            # 머리줄의 다른 글과 같은 회색 줄이면 묻힌다 - 경고 알약처럼 면을 깐다.
+            background, foreground = theme.CHIPS["tier_alert"]
             self.collected_label.setText(warning)
             self.collected_label.setStyleSheet(
-                f"color: {theme.tier_text(tiers.ALERT)}; font-weight: {theme.WEIGHT_BOLD};"
+                f"color: {foreground}; background: {background}; border-radius: 12px;"
+                f" padding: 5px 12px; font-weight: {theme.WEIGHT_BOLD};"
             )
             return
         stamps = [sample.collected_at for sample in self._latest_samples.values() if sample.collected_at]
@@ -1363,6 +1504,7 @@ class MainWindow(QMainWindow):
             finish.set_note("")
 
         self._show_tonight(overview)
+        self._show_changes(overview)
         for row in range(self.table.rowCount()):
             account_id = self._account_id_at_row(row)
             if account_id:

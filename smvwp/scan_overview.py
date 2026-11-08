@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Callable, Dict, List, Optional, Sequence
 
-from . import formatting, i18n, scan_window
+from . import formatting, i18n, scan_digest, scan_window
 
 DONE = "done"          # 이번 바퀴에 끝냈다
 DOING = "doing"        # 재다 말았다 (다음 밤에 이어서)
@@ -61,6 +61,11 @@ class AccountCoverage:
     period_end: Optional[datetime] = None          # ... 마지막으로 잰 때
     working_started_at: Optional[datetime] = None  # 하는 중이면 그 세대를 처음 잰 때
     measured_kb: Optional[int] = None  # 끝난 세대를 다 더한 양
+    # 지난 스캔 대비 증감 - 두 바퀴 모두 잰 곳끼리 (`scan_digest.account_change`).
+    # 견줄 바퀴가 없으면 None. `change_excluded` 는 한쪽에서 못 재 양쪽에서 뺀 자리 수.
+    change_kb: Optional[int] = None
+    previous_kb: Optional[int] = None
+    change_excluded: int = 0
     current_kb: Optional[int] = None   # 지금 쓰는 양 - 그 계정만의 값을 알 때만 (아래)
     work_seconds: float = 0.0          # 이번 바퀴에 남은 일 어림
     order: Optional[int] = None        # 남은 계정 가운데 몇 번째로 도나 (1부터)
@@ -256,6 +261,9 @@ def _coverage(entry, account, pass_start, sample) -> AccountCoverage:
             scan_window.local_time_of(entry.working_started_at) if entry.working_started_at else None
         ),
         measured_kb=entry.current_measured_kb,
+        change_kb=scan_digest.account_change(entry),
+        previous_kb=getattr(entry, "previous_measured_kb", None),
+        change_excluded=len(getattr(entry, "delta_excluded", None) or []),
         current_kb=_current_kb(sample, account),
         unavailable_reason=entry.unavailable_reason,
     )

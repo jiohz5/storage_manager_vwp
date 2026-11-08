@@ -1825,9 +1825,13 @@ class GrowthPageSortTests(_GuiCase):
             {"path": f"{root}/lib", "current_kb": 900 * self.GB, "previous_kb": 950 * self.GB,
              "previous_note": None, "focus": None},
         ]), self.account)
+        from smvwp.gui.widgets import CellDelegate
+
         sim = self.cell("sim", GROWTH_FOCUS)
         self.assertTrue(sim.text().startswith("regress_1107"), sim.text())
-        self.assertIn("새 폴더", sim.text())
+        # '새 폴더' 는 괄호 속 말이 아니라 알약이다 - 문장 전체는 툴팁에.
+        self.assertEqual(sim.data(CellDelegate.CHIP_ROLE), ("새 폴더", "done"))
+        self.assertIn("새 폴더", sim.toolTip())
         self.assertIn(f"{root}/sim/regress_1107", sim.toolTip())
         # 크게 변했는데 한 곳으로 모이지 않았으면 그렇다고 말한다.
         self.assertEqual(self.cell("users", GROWTH_FOCUS).text(), i18n.t("growth.focus.spread"))
@@ -1842,8 +1846,37 @@ class GrowthPageSortTests(_GuiCase):
         snap = self.growth()
         snap.accounts[0].current_measured_kb = 2000 * self.GB
         snap.accounts[0].previous_measured_kb = 1500 * self.GB
+        snap.accounts[0].measured_delta_kb = 500 * self.GB
         self.page.show_account(snap, self.account)
-        self.assertIn(formatting.format_kb_delta(500 * self.GB), self.page.caption.text())
+        # 설명 줄의 글이 아니라 요약 띠의 큰 값과 전후 막대로 세운다.
+        self.assertEqual(self.page.band.value.text(), formatting.format_kb_delta(500 * self.GB))
+        self.assertEqual(self.page.delta_bar.values(), (1500 * self.GB, 2000 * self.GB))
+
+    def test_places_unmeasured_in_one_pass_are_named_on_the_band(self):
+        """두 바퀴 모두 잰 곳끼리 견줬다는 것을 띠에서 말한다 - 뺀 자리는 알약 툴팁에."""
+
+        from smvwp import formatting, i18n
+
+        i18n.set_language("ko")
+        root = self.account.path
+        snap = self.growth()
+        entry = snap.accounts[0]
+        entry.current_measured_kb, entry.previous_measured_kb = 1310 * self.GB, 400 * self.GB
+        entry.measured_delta_kb = 10 * self.GB
+        entry.compared_kb = (400 * self.GB, 410 * self.GB)
+        entry.delta_excluded = [f"{root}/a"]
+        self.page.show_account(snap, self.account)
+        self.assertEqual(self.page.band.value.text(), formatting.format_kb_delta(10 * self.GB))
+        self.assertEqual(self.page.delta_bar.values(), (400 * self.GB, 410 * self.GB))
+        self.assertIn(i18n.t("scan.band.excluded", count=1), self.page.band.chip_texts())
+
+    def test_a_short_list_does_not_leave_a_white_field(self):
+        """줄이 셋이면 표도 세 줄 높이다 - 빈 흰 면이 화면 반을 차지하지 않는다."""
+
+        self.page.resize(1000, 700)
+        self.page.show_account(self.growth(), self.account)
+        table = self.page.table
+        self.assertLess(table.maximumHeight(), 400)
 
     def test_without_a_previous_scan_the_biggest_comes_first(self):
         root = self.account.path
@@ -2124,6 +2157,139 @@ class HomeOverviewTests(_GuiCase):
         self.addCleanup(i18n.set_language, "ko")
         self.assertEqual(self.window.tiles["scan"].caption.text(), i18n.t("home.tile.scan"))
         self.assertEqual(self.window.tiles["finish"].value.text() != "", True)
+
+
+class HomePicturesTests(_GuiCase):
+    """홈이 흰 바탕에 글자만 가득하지 않게 - 분포 막대, 24시간 칸, 할 일 카드, 용량
+    변화 막대가 실제 값으로 채워지는가."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+
+    def sample(self, account, pct, ok=True):
+        from datetime import datetime, timezone
+
+        from smvwp import store, tiers
+
+        return store.SampleRecord(
+            account_id=account.account_id, collected_at=datetime.now(timezone.utc).isoformat(),
+            ok=ok, total_kb=1000, used_kb=int(pct * 10), avail_kb=1000 - int(pct * 10),
+            byte_pct=pct if ok else None, overall_tier=tiers.classify(pct) if ok else tiers.UNKNOWN,
+        )
+
+    def test_the_attention_tile_shows_how_accounts_split_by_tier(self):
+        from smvwp import tiers
+
+        proj, bak = self.config.accounts
+        latest = {proj.account_id: self.sample(proj, 96.0), bak.account_id: self.sample(bak, 40.0)}
+        self.window._latest_samples = latest
+        self.window._render_table(latest)
+        segments = self.window.tiles["attention"].bar.segments()
+        self.assertEqual([segment[0] for segment in segments], [1, 1])
+        self.assertIn(tiers.label(tiers.classify(96.0)), segments[0][4])
+
+    def test_the_collection_cell_shows_the_gaps_instead_of_an_orange_just_now(self):
+        """24시간 중 26% 만 모였을 때 '방금' 을 주황으로 칠했다 - 이제는 빈 시간이 칸으로
+        보이고 글자는 보통 색이다. 멈췄을 때(오래됨)만 경고 색."""
+
+        from types import SimpleNamespace
+
+        from smvwp import freshness
+        from smvwp.gui.main_window import COL_TIME
+        from smvwp.gui.visuals import CollectStrip
+
+        proj, bak = self.config.accounts
+        self.window._freshness = {
+            proj.account_id: SimpleNamespace(
+                needs_attention=True, status=freshness.STATUS_GAPPY, age_seconds=10,
+                coverage_pct=26, hourly=[0.0] * 18 + [1.0] * 6,
+            ),
+            bak.account_id: SimpleNamespace(
+                needs_attention=True, status=freshness.STATUS_STALE, age_seconds=7200,
+                coverage_pct=0, hourly=[1.0] * 20 + [0.0] * 4,
+            ),
+        }
+        latest = {proj.account_id: self.sample(proj, 50.0), bak.account_id: self.sample(bak, 40.0)}
+        self.window._render_table(latest)
+        strips = {}
+        for row in range(self.window.table.rowCount()):
+            strip = self.window.table.cellWidget(row, COL_TIME)
+            self.assertIsInstance(strip, CollectStrip)
+            strips[self.window._account_id_at_row(row)] = strip
+        self.assertFalse(strips[proj.account_id].alert)
+        self.assertEqual(strips[proj.account_id].hours[:18], [0.0] * 18)
+        self.assertTrue(strips[bak.account_id].alert)
+
+    def test_each_thing_to_do_is_a_card_with_a_kind_and_a_number(self):
+        from smvwp import i18n, priority
+        from smvwp.gui.visuals import ActionDelegate
+
+        made = priority.Plan()
+        made.actions = [priority.Action(
+            kind=priority.ACT_FULL, level=priority.LEVEL_CRITICAL,
+            account="layout_proj", account_id="a1", pct=96.0,
+        )]
+        self.window._refresh_priority(made)
+        card = self.window.priority_list.item(0).data(ActionDelegate.CARD_ROLE)
+        self.assertEqual(card["metric"], "96%")
+        self.assertEqual(card["title"], "layout_proj")
+        self.assertEqual(card["detail"], i18n.t("priority.detail.full"))
+        # 비울 양을 모르면 그 말을 뺀다 - "정리하면 - 빕니다" 는 고장으로 읽혔다.
+        self.assertEqual(self.window.priority_summary.text(),
+                         i18n.t("priority.summary_short", count=1, critical=1))
+
+    def test_a_short_window_gives_the_room_to_the_things_to_do(self):
+        """1366x768 에서 카드 셋이 세로를 나누면 할 일이 한 줄 반만 보였다 - 낮은 창에서는
+        '용량 변화' 카드를 접는다 (같은 내용이 상세 스캔 탭에 있다)."""
+
+        from smvwp import nightly_scan, scan_store
+        from smvwp.gui.main_window import MINIMUM_SIZE
+        from tests import support
+
+        proj, bak = self.config.accounts
+        with scan_store.session(self.data_dir) as conn:
+            support.two_passes_and_one_running(conn, proj.account_id, proj.path)
+            support.unmeasured_then_measured(conn, bak.account_id, bak.path)
+        self.window._scan_tab._on_scan_status_ready(
+            nightly_scan.get_status_snapshot(self.data_dir, self.config)
+        )
+        self.window.show()
+        self.window.resize(*MINIMUM_SIZE)
+        _app().processEvents()
+        self.assertFalse(self.window.changes_card.isVisible())
+        self.window.resize(1600, 1000)
+        _app().processEvents()
+        self.assertTrue(self.window.changes_card.isVisible())
+
+    def test_size_changes_since_the_last_scan_are_bars_by_account(self):
+        """지난 스캔 대비 증감이 큰 계정부터 - 두 바퀴 모두 잰 곳끼리다 (못 잰 폴더가
+        나중에 재진 계정은 +910GB 가 아니라 +10GB). 줄을 누르면 그 계정의 용량 변화."""
+
+        from smvwp import nightly_scan, scan_store
+        from smvwp.gui.scan_pages import TAB_GROWTH
+        from tests import support
+
+        proj, bak = self.config.accounts
+        with scan_store.session(self.data_dir) as conn:
+            support.two_passes_and_one_running(conn, proj.account_id, proj.path)
+            support.unmeasured_then_measured(conn, bak.account_id, bak.path)
+        self.window._scan_tab._on_scan_status_ready(
+            nightly_scan.get_status_snapshot(self.data_dir, self.config)
+        )
+        _app().processEvents()
+        rows = self.window.changes_list.rows()
+        self.assertEqual([(row[0], row[2]) for row in rows],
+                         [(proj.account_id, 500 * self.GB), (bak.account_id, 10 * self.GB)])
+        self.window.changes_list.chosen.emit(bak.account_id)
+        self.assertEqual(self.window.tabs.currentIndex(), self.window.tabs.indexOf(self.window._scan_page))
+        self.assertEqual(self.window._scan_tab.detail_tabs.currentIndex(), TAB_GROWTH)
+        self.assertEqual(self.window._scan_tab.scan_account_combo.currentData(), bak.account_id)
 
 
 class HomeHeaderTests(_GuiCase):

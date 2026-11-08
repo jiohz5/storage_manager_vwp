@@ -228,6 +228,22 @@ class ScanTests(unittest.TestCase):
         surges = [a for a in plan.actions if a.kind == priority.ACT_SURGE]
         self.assertEqual([a.delta_kb for a in surges], [500 * GB])
 
+    def test_a_folder_unmeasured_last_time_is_not_a_surge(self):
+        """지난 바퀴에 못 잰 900GB 폴더가 이번에 재졌다 - 실제로 는 것은 10GB 다.
+        예전에는 합계끼리 빼서 "지난 스캔보다 910 GB 늘었습니다" 가 '무엇부터 할까'
+        에 떴다."""
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            data_dir = Path(tmp)
+            config = config_module.load_config(data_dir)
+            config.accounts = [config_module.Account(
+                name="layout_proj", path="/acct", account_id="a1")]
+            with scan_store.session(data_dir) as conn:
+                support.unmeasured_then_measured(conn, "a1", "/acct")
+            snap = nightly_scan.get_status_snapshot(data_dir, config)
+        plan = priority.build(scan_accounts=snap.accounts)
+        self.assertEqual([a for a in plan.actions if a.kind == priority.ACT_SURGE], [])
+
 
 class OrderTests(unittest.TestCase):
     def test_urgent_before_important(self):

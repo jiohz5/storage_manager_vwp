@@ -122,6 +122,16 @@ class AccountDetailTests(unittest.TestCase):
         self.assertEqual(detail.measured_delta_kb, 500 * GB)
         self.assertAlmostEqual(detail.large_files[0].share_pct, 20.0)
 
+    def test_a_folder_unmeasured_last_time_is_left_out_of_the_change(self):
+        """지난 바퀴에 못 잰 900GB 폴더가 이번에 재졌다 - '지난 스캔 대비' 는 두 바퀴
+        모두 잰 곳끼리의 +10GB 다 (예전에는 +910GB)."""
+
+        with scan_store.session(self.data_dir) as conn:
+            support.unmeasured_then_measured(conn, self.account.account_id, self.account.path)
+        detail = self.read()
+        self.assertEqual(detail.measured_kb, 1310 * GB)
+        self.assertEqual(detail.measured_delta_kb, 10 * GB)
+
     # -- 파생값 -----------------------------------------------------------
     def test_growth_falls_back_to_the_biggest_paths(self):
         """비교할 이전 스캔이 없으면 증감 대신 큰 경로를 보여 준다."""

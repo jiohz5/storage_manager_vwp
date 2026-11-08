@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import formatting, i18n, large_files, scan_digest, scan_store, tiers
-from . import theme, widgets
+from . import theme, visuals, widgets
 
 # 세부 탭. 순서가 곧 화면 순서다 - 현황(`overview_page`)이 먼저 열린다.
 TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.tab.growth", "scan.tab.large"]
@@ -199,6 +199,7 @@ def growth_delta_item(row) -> QTableWidgetItem:
         item = widgets.NumericItem(i18n.t("growth.unmeasured"), 0)
         item.setToolTip(i18n.t("growth.unmeasured_tip"))
         item.setForeground(QColor(theme.TEXT_MUTED))
+        item.setData(widgets.CellDelegate.CHIP_ROLE, (item.text(), "soft"))
     else:
         text = (
             i18n.t("scan.new_path") if row["previous_kb"] is None
@@ -236,6 +237,7 @@ def growth_focus_item(row) -> QTableWidgetItem:
     if note == scan_store.FOCUS_SPREAD:
         item.setText(i18n.t("growth.focus.spread"))
         item.setForeground(QColor(theme.TEXT_MUTED))
+        item.setData(widgets.CellDelegate.CHIP_ROLE, (item.text(), "soft"))
         return item
     where = formatting.relative_path(focus["path"], row["path"])
     if focus["path"].rstrip("/") == row["path"].rstrip("/"):
@@ -246,8 +248,20 @@ def growth_focus_item(row) -> QTableWidgetItem:
         scan_store.FOCUS_GONE: "growth.focus.gone",
         scan_store.FOCUS_FILES: "growth.focus.files_in" if where else "growth.focus.files",
     }.get(note, "growth.focus")
-    item.setText(i18n.t(key, where=where, delta=delta))
-    tip = [focus["path"]]
+    sentence = i18n.t(key, where=where, delta=delta)
+    # 새 폴더·없어짐·직접 있는 파일은 알약으로 세우고 칸의 글은 '어디 · 얼마' 만 둔다 -
+    # 괄호 속 말로 두면 줄마다 읽어야 무슨 일인지 안다. 문장 전체는 툴팁에 있다.
+    chip = {
+        scan_store.FOCUS_NEW: ("growth.chip.new", "done"),
+        scan_store.FOCUS_GONE: ("growth.chip.gone", "tier_normal"),
+        scan_store.FOCUS_FILES: ("growth.chip.files", "soft"),
+    }.get(note)
+    if chip is not None:
+        item.setData(widgets.CellDelegate.CHIP_ROLE, (i18n.t(chip[0]), chip[1]))
+        item.setText(i18n.t("growth.focus.short", where=where, delta=delta).strip() if where else delta)
+    else:
+        item.setText(sentence)
+    tip = [sentence, focus["path"]]
     if change:
         tip.append(i18n.t(
             "growth.focus.tip", total=formatting.format_kb_delta(change), delta=delta,
@@ -257,22 +271,17 @@ def growth_focus_item(row) -> QTableWidgetItem:
     return item
 
 
-def growth_total_text(entry) -> str:
-    """'계정 전체 +2.1 TB (30.6 TB -> 32.8 TB)' - 끝난 두 바퀴의 합계로.
+def growth_totals(entry):
+    """견준 두 합계 `(지난번, 이번)` - 한쪽에서 못 잰 곳을 뺀 것. 모르면 None."""
 
-    줄마다의 증감을 더하면 안 된다 - 목록은 위에서 자른 것이고, 깊이를 늘려 두면
-    부모와 자식을 겹쳐 센다."""
-
+    compared = getattr(entry, "compared_kb", None)
+    if compared:
+        return tuple(compared)
     current = getattr(entry, "current_measured_kb", None)
     previous = getattr(entry, "previous_measured_kb", None)
-    if current is None or previous is None:
-        return ""
-    return i18n.t(
-        "scan.growth_total",
-        delta=formatting.format_kb_delta(current - previous),
-        previous=formatting.format_kb(previous),
-        current=formatting.format_kb(current),
-    )
+    if current is None or previous is None or scan_digest.account_change(entry) is None:
+        return None
+    return previous, current
 
 
 def mark_large_file_row(table, row: int, item, path_column: int,
@@ -315,6 +324,53 @@ def large_files_legend() -> str:
         "large.legend",
         share=f"{large_files.SHARE_ALERT_PCT:g}", ratio=f"{large_files.GROWTH_ALERT_RATIO:g}",
     )
+
+
+def _size_item(size_kb, account_kb) -> QTableWidgetItem:
+    """크기 칸 - 계정에서의 몫만큼 가는 막대를 글자 왼쪽에 (`CellDelegate.BAR_ROLE`)."""
+
+    item = widgets.NumericItem(formatting.format_kb(size_kb), size_kb)
+    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    if account_kb and size_kb is not None:
+        share = size_kb / account_kb
+        item.setData(widgets.CellDelegate.BAR_ROLE, (share, "accent"))
+        item.setToolTip(i18n.t("scan.size_share", pct=f"{share * 100:.1f}"))
+    return item
+
+
+def fit_table(table, most: int = 0) -> None:
+    """줄이 몇 개뿐인 표가 칸을 다 차지해 빈 흰 면이 되지 않게 높이를 줄 수에 맞춘다.
+
+    줄이 많으면 부모 틀이 허락하는 만큼 서고 나머지는 스크롤이다. `most` 를 주면 그
+    줄 수까지만 세운다. 줄이 없으면 머리줄과 한 줄 자리만 남긴다."""
+
+    rows = table.rowCount() if not most else min(table.rowCount(), most)
+    height = table.horizontalHeader().sizeHint().height() + 2 * table.frameWidth() + 4
+    if rows:
+        height += sum(table.rowHeight(row) for row in range(rows))
+    else:
+        height += table.verticalHeader().defaultSectionSize()
+    height += table.horizontalScrollBar().sizeHint().height()
+    table.setMaximumHeight(height)
+
+
+def scan_warning_chips(entry, account) -> list:
+    """덜 센 경로·못 잰 경로를 알약으로 `[(글, 종류, 툴팁)]` - 경로와 사유는 툴팁에."""
+
+    chips = []
+    if entry.partial_paths:
+        chips.append((
+            i18n.t("scan.band.partial", count=len(entry.partial_paths)), "tier_warn",
+            i18n.t("scan.partial_warning", count=len(entry.partial_paths)) + "\n" + "\n".join(
+                formatting.relative_path(path, account.path) for path in entry.partial_paths[:10]
+            ),
+        ))
+    if entry.failed_count:
+        chips.append((
+            i18n.t("scan.band.failed", count=entry.failed_count), "tier_alert",
+            scan_failure_text(entry, account.name),
+        ))
+    return chips
 
 
 def _entry_for(snapshot, account_id):
@@ -711,19 +767,29 @@ class GrowthPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = _page_box(self)
+        # 계정 전체가 얼마나 변했나 - 큰 값과 전후 막대 (`visuals.SummaryBand`).
+        self.delta_bar = visuals.DeltaBar()
+        self.band = visuals.SummaryBand(self.delta_bar)
+        layout.addWidget(self.band)
         self.caption = _caption()
         layout.addWidget(self.caption)
+        self._warning_chips = []
 
         table = _table(len(GROWTH_COLUMN_KEYS))
         header = table.horizontalHeader()
         header.setSectionResizeMode(GROWTH_PATH, QHeaderView.Stretch)
-        header.setSectionResizeMode(GROWTH_SIZE, QHeaderView.ResizeToContents)
-        # 증감 칸은 막대가 들어갈 만큼 넉넉히 - 내용 폭에 맞추면 막대가 글자 밑에 숨는다.
+        # 크기 칸에는 계정에서의 몫만큼 가는 막대, 증감 칸에는 증감만큼의 옅은 막대가
+        # 들어간다 - 내용 폭에 맞추면 막대가 글자 밑에 숨는다.
+        header.setSectionResizeMode(GROWTH_SIZE, QHeaderView.Interactive)
+        table.setColumnWidth(GROWTH_SIZE, 170)
         header.setSectionResizeMode(GROWTH_DELTA, QHeaderView.Interactive)
         table.setColumnWidth(GROWTH_DELTA, 190)
         header.setSectionResizeMode(GROWTH_FOCUS, QHeaderView.Stretch)
         self.bars = widgets.ChangeBarDelegate(table)
         table.setItemDelegateForColumn(GROWTH_DELTA, self.bars)
+        self.cells = widgets.CellDelegate(table)
+        for column in (GROWTH_PATH, GROWTH_SIZE, GROWTH_FOCUS):
+            table.setItemDelegateForColumn(column, self.cells)
         # 이 표에는 칸 위젯이 없어 Qt 내장 정렬을 그대로 쓸 수 있다.
         # (계정 표는 막대·배지가 칸 위젯이라 Qt 정렬을 켜면 위젯이 행을 따라
         #  움직이지 않아 어긋난다 - 그쪽은 직접 정렬해 다시 그린다.)
@@ -735,6 +801,9 @@ class GrowthPage(QWidget):
         header.sectionClicked.connect(self._on_header_clicked)
         self.table = table
         layout.addWidget(table, 1)
+        # 줄이 몇 개뿐이면 표가 줄 수만큼만 서고 남는 자리는 바탕이다 - 빈 흰 면이
+        # 화면 반을 차지하지 않게 (`fit_table`).
+        layout.addStretch(0)
 
     def _on_header_clicked(self, _index: int) -> None:
         self._sort_touched = True
@@ -754,6 +823,8 @@ class GrowthPage(QWidget):
         entry = _entry_for(snapshot, account.account_id)
         if entry is None or entry.last_completed_generation is None:
             table.setRowCount(0)
+            fit_table(table)
+            self.band.setVisible(False)
             # 기준선이 없는 이유가 "아직 안 돌았다"가 아니라 "돌았는데 전부
             # 실패했다"일 수 있다. 그 경우 실패 사유를 보여 주지 않으면 스캔이
             # 즉시 끝나 버린 것처럼만 보인다.
@@ -765,14 +836,11 @@ class GrowthPage(QWidget):
 
         # 표의 경로는 계정 기준으로 줄여 보여 준다. 무엇을 기준으로 줄였는지는
         # 여기 한 번만 적는다. 권한 부족으로 축소 측정된 경로가 있으면 반드시
-        # 알린다 - 모르고 보면 "안 늘었네"로 잘못 읽는다.
+        # 알린다 - 모르고 보면 "안 늘었네"로 잘못 읽는다. 예전에는 설명 줄 밑에
+        # 문장으로 붙였다 - 이제 요약 띠의 알약으로 세우고 경로와 사유는 툴팁에 둔다.
         notice = _root_note(account.path)
-        if entry.partial_paths:
-            notice += "\n" + i18n.t(
-                "scan.partial_warning", count=len(entry.partial_paths)
-            )
-        if entry.failed_count:
-            notice += "\n" + scan_failure_text(entry, account.name)
+        self.band.setVisible(True)
+        self._warning_chips = scan_warning_chips(entry, account)
 
         # 채우는 동안은 정렬을 끈다 (행마다 다시 정렬하면 칸이 엉뚱한 행에 꽂힌다).
         table.setSortingEnabled(False)
@@ -790,23 +858,20 @@ class GrowthPage(QWidget):
         if not self._sort_touched:
             table.sortItems(default_column, Qt.DescendingOrder)
         table.setSortingEnabled(True)
+        fit_table(table)
 
     def _show_growth(self, entry, account, notice: str) -> int:
         previous = formatting.scan_label(
             entry.previous_scan_at, (entry.last_completed_generation or 1) - 1
         )
-        total = growth_total_text(entry)
+        current = formatting.scan_label(entry.current_scan_at, entry.last_completed_generation)
         self.caption.setText(
             i18n.t(
                 "scan.growth_caption",
-                account=account.name,
-                current=formatting.scan_label(
-                    entry.current_scan_at, entry.last_completed_generation
-                ),
-                previous=previous,
-                notice=("  ·  " + total if total else "") + notice,
+                account=account.name, current=current, previous=previous, notice=notice,
             )
         )
+        self._show_band(entry, account, previous, current)
         # 열 제목에 비교 대상 날짜를 박는다 - "이전 스캔 대비"보다
         # "260819 대비"가 무엇과 비교한 값인지 스스로 설명한다.
         self.table.setHorizontalHeaderItem(
@@ -820,36 +885,66 @@ class GrowthPage(QWidget):
         self.table.setRowCount(len(entry.growth))
         changes = [abs(growth_change(row) or 0) for row in entry.growth]
         self.bars.scale = max(changes, default=0)
+        account_kb = getattr(entry, "current_measured_kb", None)
         for index, row in enumerate(entry.growth):
             current_kb = row["current_kb"]
             self.table.setItem(index, GROWTH_PATH, _path_item(row["path"], account.path))
-            size = widgets.NumericItem(formatting.format_kb(current_kb), current_kb)
-            size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(index, GROWTH_SIZE, size)
+            self.table.setItem(index, GROWTH_SIZE, _size_item(current_kb, account_kb))
             # 새 경로는 통째로 늘어난 것으로 본다 (저장소가 고른 순서와 같다).
             self.table.setItem(index, GROWTH_DELTA, growth_delta_item(row))
             self.table.setItem(index, GROWTH_FOCUS, growth_focus_item(row))
         return GROWTH_DELTA
 
+    def _show_band(self, entry, account, previous: str, current: str) -> None:
+        """요약 띠 - 계정 전체 증감(두 바퀴 모두 잰 곳끼리), 전후 막대, 경고 알약."""
+
+        band = self.band
+        band.caption.setText(i18n.t("scan.band.total"))
+        change = scan_digest.account_change(entry)
+        totals = growth_totals(entry)
+        if change is None or totals is None:
+            band.set_value(formatting.format_kb(getattr(entry, "current_measured_kb", None)))
+            band.sub.setText(current)
+            self.delta_bar.set_values(None, None)
+        else:
+            band.set_value(
+                formatting.format_kb_delta(change),
+                theme.tier_text(tiers.WARN) if change > 0
+                else theme.GOOD_TEXT if change < 0 else theme.TEXT_MUTED,
+            )
+            # 어느 두 스캔인지는 바로 밑 설명 줄에 있다 - 띠에는 두 합계만.
+            band.sub.setText(i18n.t(
+                "scan.band.totals", previous=formatting.format_kb(totals[0]),
+                current=formatting.format_kb(totals[1]),
+            ))
+            self.delta_bar.set_values(*totals)
+        chips = list(self._warning_chips)
+        excluded = list(getattr(entry, "delta_excluded", None) or [])
+        if excluded and change is not None:
+            chips.insert(0, (
+                i18n.t("scan.band.excluded", count=len(excluded)), "stale",
+                i18n.t("scan.band.excluded_tip", paths="\n".join(
+                    formatting.relative_path(path, account.path) for path in excluded[:10]
+                )),
+            ))
+        band.set_chips(chips)
+
     def _show_biggest(self, entry, account, notice: str) -> int:
+        current = formatting.scan_label(entry.current_scan_at, entry.last_completed_generation)
         self.caption.setText(
             i18n.t(
                 "scan.baseline_only_caption",
-                account=account.name,
-                current=formatting.scan_label(
-                    entry.current_scan_at, entry.last_completed_generation
-                ),
-                notice=notice,
+                account=account.name, current=current, notice=notice,
             )
         )
+        self._show_band(entry, account, "", current)
         self.table.setRowCount(len(entry.top_paths))
         self.bars.scale = 0
         dash = i18n.t("common.none")
+        account_kb = getattr(entry, "current_measured_kb", None)
         for index, row in enumerate(entry.top_paths):
             self.table.setItem(index, GROWTH_PATH, _path_item(row["path"], account.path))
-            size = widgets.NumericItem(formatting.format_kb(row["size_kb"]), row["size_kb"])
-            size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(index, GROWTH_SIZE, size)
+            self.table.setItem(index, GROWTH_SIZE, _size_item(row["size_kb"], account_kb))
             self.table.setItem(index, GROWTH_DELTA, widgets.NumericItem(dash, None))
             self.table.setItem(index, GROWTH_FOCUS, QTableWidgetItem(""))
         return GROWTH_SIZE
@@ -866,6 +961,10 @@ class LargeFilesPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = _page_box(self)
+        # 큰 파일들이 계정에서 얼마를 차지하나 - 큰 값과 쌓은 막대, 까닭별 알약.
+        self.stack = visuals.ShareStack()
+        self.band = visuals.SummaryBand(self.stack)
+        layout.addWidget(self.band)
         self.caption = _caption()
         self.caption.setToolTip(i18n.t("large.tip"))
         layout.addWidget(self.caption)
@@ -873,10 +972,16 @@ class LargeFilesPage(QWidget):
         table = _table(len(LARGE_COLUMN_KEYS))
         header = table.horizontalHeader()
         header.setSectionResizeMode(LARGE_PATH, QHeaderView.Stretch)
-        for column in (LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE):
-            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        # 크기·비중 칸에는 막대가, 증감 칸에는 증감 막대나 알약이 들어간다 - 내용 폭에
+        # 맞추면 막대가 글자 밑에 숨는다.
+        for column, width in ((LARGE_SIZE, 170), (LARGE_SHARE, 150), (LARGE_CHANGE, 170)):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+            table.setColumnWidth(column, width)
+        self.cells = widgets.ChangeBarDelegate(table)
+        table.setItemDelegate(self.cells)
         self.table = table
         layout.addWidget(table, 1)
+        layout.addStretch(0)
 
     def retranslate(self) -> None:
         self.table.setHorizontalHeaderLabels(
@@ -886,6 +991,8 @@ class LargeFilesPage(QWidget):
     def show_account(self, snapshot, account: Optional[object]) -> None:
         table = self.table
         table.setRowCount(0)
+        fit_table(table)
+        self.band.setVisible(False)
         entry = _entry_for(snapshot, account.account_id if account else None)
         if entry is None:
             self.caption.setText(i18n.t("large.no_scan"))
@@ -904,11 +1011,16 @@ class LargeFilesPage(QWidget):
         heading = i18n.t("large.heading", account=entry.account_name, count=len(shown))
         if notable:
             heading += i18n.t("large.heading_notable", notable=notable)
-        self.caption.setText(
-            heading + _root_note(root) + ("\n" + large_files_legend() if notable else "")
-        )
+        # 범례 문장("주황 칸이 눈에 띈 까닭입니다 - ...")은 요약 띠의 알약 툴팁으로 갔다.
+        self.caption.setText(heading + _root_note(root))
+        self._show_band(entry, shown, root)
         table.setRowCount(len(shown))
         dash = i18n.t("common.none")
+        biggest = max((item.size_kb for item in shown), default=0) or 1
+        share_scale = max(
+            [large_files.SHARE_ALERT_PCT * 2] + [item.share_pct or 0 for item in shown]
+        )
+        self.cells.scale = max((abs(item.delta_kb or 0) for item in shown if item.compared), default=0)
         for row, item in enumerate(shown):
             path_item = QTableWidgetItem(formatting.relative_path(item.path, root))
             reasons = large_file_reasons(item)
@@ -916,25 +1028,37 @@ class LargeFilesPage(QWidget):
             tip = reasons + ([item.path] if path_item.text() != item.path else [])
             if tip:
                 path_item.setToolTip("\n".join(tip))
+            # 폴더는 흐리게, 파일 이름은 굵게 - 경로 전체가 같은 회색 글이면 어느
+            # 파일인지 끝까지 읽어야 안다.
+            path_item.setData(widgets.CellDelegate.PATH_ROLE, True)
             table.setItem(row, LARGE_PATH, path_item)
 
-            table.setItem(
-                row, LARGE_SIZE,
-                widgets.NumericItem(formatting.format_kb(item.size_kb), item.size_kb),
-            )
+            size_item = widgets.NumericItem(formatting.format_kb(item.size_kb), item.size_kb)
+            size_item.setData(widgets.CellDelegate.BAR_ROLE, (item.size_kb / biggest, "accent"))
+            table.setItem(row, LARGE_SIZE, size_item)
 
             share = item.share_pct
             share_item = widgets.NumericItem(
                 f"{share:.1f}%" if share is not None else dash, share or 0
             )
+            if share is not None:
+                # 기준(5%)의 두 배가 칸 끝이다 - 기준을 넘은 파일은 막대가 반을 넘는다.
+                share_item.setData(widgets.CellDelegate.BAR_ROLE, (
+                    share / share_scale, "attention" if item.dominates_account else "neutral",
+                ))
             table.setItem(row, LARGE_SHARE, share_item)
 
             if item.previous_kb is None:
                 change_item = QTableWidgetItem(formatting.format_large_file_change(item))
+                if item.is_new_to_the_list:
+                    change_item.setData(
+                        widgets.CellDelegate.CHIP_ROLE, (change_item.text(), "stale")
+                    )
             else:
                 change_item = widgets.NumericItem(
                     formatting.format_large_file_change(item), item.delta_kb
                 )
+                change_item.setData(widgets.CellDelegate.VALUE_ROLE, item.delta_kb)
             table.setItem(row, LARGE_CHANGE, change_item)
             for column in (LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE):
                 table.item(row, column).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -942,3 +1066,41 @@ class LargeFilesPage(QWidget):
             # 눈에 띄는 것만, 그 까닭이 된 칸에 색을 준다. 전부 칠하면 아무것도
             # 강조되지 않는다.
             mark_large_file_row(table, row, item, LARGE_PATH, LARGE_SHARE, LARGE_CHANGE)
+        fit_table(table)
+
+    def _show_band(self, entry, shown, root: str) -> None:
+        """요약 띠 - 큰 파일들이 계정에서 차지하는 몫과 까닭별 알약."""
+
+        band = self.band
+        total = entry.current_measured_kb
+        summed = sum(item.size_kb for item in shown)
+        band.setVisible(True)
+        band.caption.setText(i18n.t("large.band.title", count=len(shown)))
+        if total:
+            band.set_value(f"{summed / total * 100:.1f}%")
+            band.sub.setText(i18n.t(
+                "large.band.of", sum=formatting.format_kb(summed), total=formatting.format_kb(total),
+            ))
+        else:
+            band.set_value(formatting.format_kb(summed))
+            band.sub.setText("")
+        self.stack.set_parts([
+            (
+                item.size_kb, "attention" if item.is_notable else "accent",
+                i18n.t(
+                    "large.share_tip", path=formatting.relative_path(item.path, root),
+                    size=formatting.format_kb(item.size_kb),
+                    pct=f"{item.share_pct:.1f}" if item.share_pct is not None else "-",
+                ),
+            )
+            for item in shown
+        ], total)
+        legend = large_files_legend()
+        counts = (
+            ("large.chip.dominant", "tier_alert", sum(1 for item in shown if item.dominates_account)),
+            ("large.chip.grew", "tier_warn", sum(1 for item in shown if item.grew_sharply)),
+            ("large.chip.new", "stale", sum(1 for item in shown if item.is_new_to_the_list)),
+        )
+        band.set_chips([
+            (i18n.t(key, count=count), kind, legend) for key, kind, count in counts if count
+        ])

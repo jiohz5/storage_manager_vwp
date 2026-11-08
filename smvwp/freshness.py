@@ -28,7 +28,7 @@ cron은 몇 분씩 밀리고, 장비가 잠깐 꺼져 있을 수도 있다. 한�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Sequence
 
@@ -46,6 +46,10 @@ class FreshnessStatus:
     age_seconds: Optional[float] = None
     expected_samples: int = 0
     actual_samples: int = 0
+    # 창(기본 24시간)을 한 시간씩 나눈 칸마다 그 시간에 모인 표본의 비율 (0~1, 오래된
+    # 것부터). 홈 표의 '최근 수집' 칸이 그린다 - 빈 시간이 칸으로 보이면 '밤에는 안
+    # 모였다' 가 읽지 않고도 보인다.
+    hourly: List[float] = field(default_factory=list)
 
     @property
     def coverage_pct(self) -> Optional[float]:
@@ -120,7 +124,25 @@ def evaluate_account(
         age_seconds=age_seconds,
         expected_samples=expected,
         actual_samples=actual,
+        hourly=_hourly(times, window_start, window_hours, interval_seconds),
     )
+
+
+def _hourly(times, window_start: datetime, window_hours: int, interval_seconds: int) -> List[float]:
+    """창을 한 시간씩 나눈 칸마다 모인 표본의 비율 (오래된 것부터).
+
+    한 시간에 기대하는 수는 수집 간격으로 낸다 (15분이면 넷). 넘쳐도 1 이다 -
+    창을 열어 둔 채 '새로고침' 을 여러 번 누르면 한 시간에 다섯이 될 수 있다."""
+
+    slots = max(1, int(window_hours))
+    per_hour = max(1.0, 3600.0 / interval_seconds) if interval_seconds else 1.0
+    counts = [0] * slots
+    for moment in times:
+        if moment < window_start:
+            continue
+        index = int((moment - window_start).total_seconds() // 3600)
+        counts[min(slots - 1, max(0, index))] += 1
+    return [min(1.0, count / per_hour) for count in counts]
 
 
 def evaluate_all(

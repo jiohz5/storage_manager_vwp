@@ -36,6 +36,7 @@ from typing import List, Optional, Sequence
 
 from . import health as health_module
 from . import large_files as large_files_module
+from . import scan_digest
 from . import tiers
 
 # 급함의 단계. 숫자가 작을수록 먼저다.
@@ -393,9 +394,10 @@ def _scan_actions(scan_accounts) -> "tuple":
                 )
             )
 
-        previous = getattr(entry, "previous_measured_kb", None)
-        if current is not None and previous is not None:
-            delta = current - previous
+        # 두 바퀴 모두 잰 곳끼리의 증감이다 - 지난번에 못 잰 폴더가 이번에 재지면
+        # 합계끼리의 차이는 그 폴더 전체만큼 '급증' 한다 (`scan_digest.account_change`).
+        delta = scan_digest.account_change(entry)
+        if current is not None and delta is not None:
             if delta >= SURGE_KB:
                 actions.append(
                     Action(

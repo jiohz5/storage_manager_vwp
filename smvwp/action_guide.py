@@ -32,7 +32,7 @@ import shlex
 from dataclasses import dataclass, field
 from typing import List
 
-from . import formatting, health, i18n, priority
+from . import formatting, health, i18n, priority, tiers
 
 # 목록 줄에 붙지 않는 안내들 (Plan 의 곁말).
 KIND_UNSCANNED = "unscanned"
@@ -87,6 +87,63 @@ class Guide:
 
 
 # -- 목록 한 줄 -------------------------------------------------------------
+def card(action) -> dict:
+    """홈 '무엇부터 할까' 카드 한 줄의 재료 - 종류 알약, 제목, 오른쪽 값, 아래 설명.
+
+    `headline` 의 문장을 쪼갠 것이다. 문장 한 줄이면 무엇이 급한지(알약·색)와 얼마인지
+    (값)를 읽어야 알았다. `metric_tier` 는 값 글자색으로 쓸 등급 (없으면 None),
+    `metric_good` 이면 좋은 색 (비울 수 있는 양)."""
+
+    title = action.account
+    metric, metric_tier, metric_good = "", None, False
+    if action.kind == priority.ACT_FULL:
+        tier = tiers.classify(action.pct) if action.pct is not None else tiers.UNKNOWN
+        chip = (tiers.label(tier), _TIER_CHIP.get(tier, "soft"))
+        metric = f"{action.pct:.0f}%" if action.pct is not None else ""
+        metric_tier = tier
+        if action.shared_count > 1:
+            title = action.mount_point or action.account
+            key = ("priority.detail.full_shared_with_fix" if action.reclaimable_kb
+                   else "priority.detail.full_shared")
+        else:
+            key = ("priority.detail.full_with_fix" if action.reclaimable_kb
+                   else "priority.detail.full")
+        detail = i18n.t(key, accounts=action.shared_count, count=action.count,
+                        freeable=formatting.format_kb(action.reclaimable_kb))
+    elif action.kind == priority.ACT_NO_BACKUP:
+        chip = (i18n.t("priority.chip.no_backup"), "tier_alert")
+        metric = formatting.format_kb(action.size_kb)
+        detail = i18n.t("priority.detail.no_backup", count=action.count)
+    elif action.kind == priority.ACT_CLEANUP:
+        chip = (i18n.t("priority.chip.cleanup"), "done")
+        metric = formatting.format_kb(action.reclaimable_kb)
+        metric_good = True
+        detail = i18n.t("priority.detail.cleanup", count=action.count)
+    elif action.kind == priority.ACT_BIG_FILE:
+        chip = (i18n.t("priority.chip.big_file"), "stale")
+        metric = formatting.format_kb(action.size_kb)
+        detail = i18n.t(
+            "priority.detail.big_file", name=action.path.rsplit("/", 1)[-1],
+            pct=f"{action.pct:.0f}" if action.pct is not None else "-",
+        )
+    else:
+        chip = (i18n.t("priority.chip.surge"), "tier_warn")
+        metric = formatting.format_kb_delta(action.delta_kb)
+        metric_tier = tiers.WARN
+        detail = i18n.t("priority.detail.surge", total=formatting.format_kb(action.size_kb))
+    return {
+        "chip": chip, "title": title, "metric": metric, "metric_tier": metric_tier,
+        "metric_good": metric_good, "detail": detail, "level": action.level,
+    }
+
+
+# 등급 -> 알약 종류 (화면 쪽 `UsageBar.PILL_TIERS` 와 같은 이름들).
+_TIER_CHIP = {
+    tiers.NORMAL: "tier_normal", tiers.WARN: "tier_warn", tiers.ALERT: "tier_alert",
+    tiers.EMERGENCY: "tier_emergency", tiers.FULL: "tier_full",
+}
+
+
 def headline(action) -> str:
     """할 일 한 줄을 사람 문장으로. 목록과 안내 창이 같은 문장을 쓴다."""
 

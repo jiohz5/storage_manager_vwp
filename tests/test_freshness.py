@@ -81,6 +81,16 @@ class EvaluateAccountTests(unittest.TestCase):
         self.assertLess(result.age_seconds, 60)  # 최신 표본은 방금 것
         self.assertLess(result.coverage_pct, 10)
 
+    def test_each_hour_says_how_much_was_collected(self):
+        """홈 표의 '최근 수집' 칸이 그리는 24칸 - 빈 시간이 칸으로 보여야 한다.
+
+        지난 24시간 가운데 최근 6시간만 15분마다 모였다 (창을 켜 둔 낮)."""
+
+        result = self._evaluate([_sample(15 * i) for i in range(24)])
+        self.assertEqual(len(result.hourly), 24)
+        self.assertEqual(result.hourly[:18], [0.0] * 18)
+        self.assertEqual(result.hourly[-5:], [1.0] * 5)
+
     def test_freshly_registered_account_is_not_flagged(self):
         """막 등록해 표본이 몇 개뿐인 계정을 지연으로 몰면 안 된다."""
 

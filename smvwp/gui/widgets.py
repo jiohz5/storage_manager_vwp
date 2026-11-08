@@ -10,8 +10,9 @@ import re
 from typing import Optional
 
 from PyQt5.QtCore import QEasingCurve, QEvent, QRectF, QSize, Qt, QVariantAnimation
-from PyQt5.QtGui import QColor, QPainter
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PyQt5.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -19,6 +20,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -250,43 +252,187 @@ class TierRowDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
-class ChangeBarDelegate(QStyledItemDelegate):
-    """증감 칸 뒤에 그 크기만큼의 옅은 막대를 깐다.
+def bar_color(kind: str) -> str:
+    """칸 막대·알약 옆 막대의 색 이름 -> 지금 화면의 색. 그릴 때마다 묻는다 (어두운
+    화면으로 바꾸면 따라 바뀌어야 한다)."""
 
-    숫자만으로는 `+3.2 TB` 와 `+307.2 GB` 가 한 줄 차이로 보인다 - 열 배인데.
-    막대를 깔면 목록을 읽지 않고도 어디가 크게 변했는지 보인다. 늘어난 것은 주의
-    색, 줄어든 것은 좋은 색의 옅은 쪽이고 글자는 그 위에 그대로 읽힌다.
+    if kind == "accent":
+        return theme.ACCENT
+    if kind == "good":
+        return theme.GOOD_TEXT
+    if kind == "neutral":
+        return theme.TEXT_FAINT
+    if kind == "attention":
+        return theme.tier_color(tiers.ALERT)
+    return theme.tier_color(kind)
 
-    값은 칸의 `VALUE_ROLE` (부호 있는 KB). 가장 큰 변화가 칸을 다 채운다
-    (`scale` - 표를 채울 때 정한다). 막대를 칸 위젯으로 얹지 않는 것은 Qt 정렬을
-    켜 두기 위해서다 - 칸 위젯은 정렬해도 행을 따라가지 않는다."""
+
+def paint_chip(painter, left: float, middle: float, text: str, kind: str,
+               height: float = 20) -> float:
+    """`left` 에서 시작하는 알약 하나를 그리고 그 폭을 돌려준다 (`Chip` 과 같은 색).
+    줄이 낮은 표(폴더 펼쳐 보기)는 `height` 를 줄여 준다 - 알약이 줄 밖으로 넘친다."""
+
+    background, foreground = theme.CHIPS.get(kind, theme.CHIPS["soft"])
+    font = painter.font()
+    font.setPixelSize(theme.FONT_CAPTION if height >= 18 else theme.FONT_CAPTION - 1)
+    font.setBold(True)
+    painter.setFont(font)
+    width = painter.fontMetrics().horizontalAdvance(text) + (18 if height >= 18 else 12)
+    rect = QRectF(left, middle - height / 2, width, height)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(background))
+    painter.drawRoundedRect(rect, height / 2, height / 2)
+    painter.setPen(QColor(foreground))
+    painter.drawText(rect, Qt.AlignCenter, text)
+    return width
+
+
+class CellDelegate(QStyledItemDelegate):
+    """표 칸 하나를 글자와 그림으로 - 증감 막대, 비중 막대, 알약, 두 색 경로.
+
+    용량을 보는 표(용량 변화·큰 파일·폴더 펼쳐 보기)가 흰 바탕에 글자만 가득했다.
+    `+3.2 TB` 와 `+307.2 GB` 는 한 줄 차이로 보이지만 열 배이고, `5.7%` 와 `0.3%`
+    도 글자로는 비슷하다. 같은 뜻을 막대 길이·알약으로 보이면 읽지 않고도 보인다.
+    칸 위젯으로 얹지 않는 것은 Qt 정렬을 켜 두기 위해서다 - 칸 위젯은 정렬해도
+    행을 따라가지 않는다.
+
+    칸의 역할(role)로 무엇을 그릴지 정한다:
+
+    - `VALUE_ROLE` - 부호 있는 증감(KB). 칸 뒤에 옅은 막대를 깐다 - 늘면 주의 색,
+      줄면 좋은 색. 가장 큰 변화가 칸을 다 채운다 (`scale`, 표를 채울 때 정한다).
+    - `BAR_ROLE` - `(비율 0~1, 색 이름)`. 글자 왼쪽에 가는 막대 (비중·크기).
+    - `CHIP_ROLE` - `(글, 알약 종류)`. 글자 앞에 알약 (새 폴더, 없어짐). 알약 글이 칸의
+      글과 같으면 알약만 그린다 (`지난번 못 잼`, `목록에 없던 파일`).
+    - `PATH_ROLE` - 참이면 경로의 마지막 조각만 굵게, 앞의 폴더는 흐리게.
+
+    글자색은 칸의 전경색을 따른다 (`setForeground`) - 시험과 다른 화면이 그 값을 읽는다."""
 
     VALUE_ROLE = Qt.UserRole + 7
+    BAR_ROLE = Qt.UserRole + 8
+    CHIP_ROLE = Qt.UserRole + 9
+    PATH_ROLE = Qt.UserRole + 10
     INSET = 6
     ALPHA = 0.22
+    PAD = 8
+    BAR_HEIGHT = 6
+    BAR_MIN = 48
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scale = 0
 
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802 - Qt 규약
+        size = super().sizeHint(option, index)
+        extra = 0
+        chip = index.data(self.CHIP_ROLE)
+        if chip:
+            font = option.font
+            font.setPixelSize(theme.FONT_CAPTION)
+            font.setBold(True)
+            extra += QFontMetrics(font).horizontalAdvance(chip[0]) + 26
+        if index.data(self.BAR_ROLE):
+            extra += self.BAR_MIN + 10
+        return QSize(size.width() + extra, size.height())
+
     def paint(self, painter, option, index) -> None:
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text = opt.text
+        selected = bool(opt.state & QStyle.State_Selected)
+        # 바탕·선택·초점은 스타일이 그대로 그린다 (QSS 의 선택색). 글자만 비워 둔다.
+        opt.text = ""
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
         value = index.data(self.VALUE_ROLE)
-        if value and self.scale > 0 and not (option.state & QStyle.State_Selected):
-            rect = option.rect.adjusted(self.INSET, 7, -self.INSET, -7)
-            width = max(2.0, rect.width() * min(1.0, abs(value) / self.scale))
-            painter.save()
-            painter.setRenderHint(QPainter.Antialiasing)
-            painter.setPen(Qt.NoPen)
-            # 옅은 면 색(`WARN_SOFT`)은 어두운 화면에서 바탕과 거의 같아 막대가 안 보였다.
-            # 등급 색·좋은 색을 비쳐 보이게 깔면 두 화면 모두에서 읽힌다.
+        if value and self.scale > 0 and not selected:
+            back = opt.rect.adjusted(self.INSET, 7, -self.INSET, -7)
+            width = max(2.0, back.width() * min(1.0, abs(value) / self.scale))
+            # 옅은 면 색(`WARN_SOFT`)은 어두운 화면에서 바탕과 거의 같아 막대가 안
+            # 보였다. 등급 색·좋은 색을 비쳐 보이게 깔면 두 화면 모두에서 읽힌다.
             color = QColor(theme.tier_color(tiers.WARN) if value > 0 else theme.GOOD_TEXT)
             color.setAlphaF(self.ALPHA)
+            painter.setPen(Qt.NoPen)
             painter.setBrush(color)
             painter.drawRoundedRect(
-                QRectF(rect.right() - width, rect.top(), width, rect.height()), 3, 3
+                QRectF(back.right() - width, back.top(), width, back.height()), 3, 3
             )
-            painter.restore()
-        super().paint(painter, option, index)
+
+        rect = QRectF(opt.rect.adjusted(self.PAD, 0, -self.PAD, 0))
+        middle = rect.center().y()
+        alignment = index.data(Qt.TextAlignmentRole)
+        right = bool(int(alignment or 0) & Qt.AlignRight)
+        chip = index.data(self.CHIP_ROLE)
+        if chip and chip[0] == text:
+            # 알약이 칸의 말 전부면 알약만 그린다 (`지난번 못 잼`, `목록에 없던 파일`).
+            text = ""
+        if chip:
+            chip_text, kind = chip
+            height = max(14.0, min(20.0, opt.rect.height() - 4.0))
+            if right and not text:
+                font = painter.font()
+                font.setPixelSize(theme.FONT_CAPTION if height >= 18 else theme.FONT_CAPTION - 1)
+                font.setBold(True)
+                width = QFontMetrics(font).horizontalAdvance(chip_text) + (18 if height >= 18 else 12)
+                paint_chip(painter, rect.right() - width, middle, chip_text, kind, height)
+            else:
+                width = paint_chip(painter, rect.left(), middle, chip_text, kind, height)
+                rect.setLeft(rect.left() + width + 8)
+
+        painter.setFont(opt.font)
+        brush = index.data(Qt.ForegroundRole)
+        ink = brush.color() if hasattr(brush, "color") else QColor(theme.TEXT)
+        metrics = painter.fontMetrics()
+        bar = index.data(self.BAR_ROLE)
+        if bar and text:
+            fraction, kind = bar
+            text_width = metrics.horizontalAdvance(text)
+            track = QRectF(rect.left(), middle - self.BAR_HEIGHT / 2,
+                           max(0.0, rect.width() - text_width - 10), self.BAR_HEIGHT)
+            if track.width() >= 12:
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(theme.BORDER))
+                painter.drawRoundedRect(track, 3, 3)
+                filled = track.width() * max(0.0, min(1.0, fraction or 0.0))
+                if filled > 0:
+                    painter.setBrush(QColor(bar_color(kind)))
+                    painter.drawRoundedRect(
+                        QRectF(track.left(), track.top(), max(filled, self.BAR_HEIGHT),
+                               track.height()), 3, 3)
+            rect.setLeft(rect.right() - text_width)
+            right = True
+
+        if text and index.data(self.PATH_ROLE) and "/" in text:
+            folder, name = text.rsplit("/", 1)
+            folder += "/"
+            bold = QFont(opt.font)
+            bold.setBold(True)
+            name_width = QFontMetrics(bold).horizontalAdvance(name)
+            room = max(0.0, rect.width() - name_width)
+            shown = metrics.elidedText(folder, Qt.ElideMiddle, int(room))
+            painter.setPen(QColor(theme.TEXT_MUTED) if ink == QColor(theme.TEXT) else ink)
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, shown)
+            painter.setFont(bold)
+            painter.setPen(ink)
+            left = rect.left() + metrics.horizontalAdvance(shown)
+            painter.drawText(
+                QRectF(left, rect.top(), rect.right() - left, rect.height()),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                QFontMetrics(bold).elidedText(name, Qt.ElideMiddle, int(rect.right() - left)),
+            )
+        elif text:
+            painter.setPen(ink)
+            painter.drawText(
+                rect, (Qt.AlignRight if right else Qt.AlignLeft) | Qt.AlignVCenter,
+                metrics.elidedText(text, opt.textElideMode, int(rect.width())),
+            )
+        painter.restore()
+
+
+class ChangeBarDelegate(CellDelegate):
+    """증감 칸 - `CellDelegate` 의 증감 막대를 쓰는 칸 (예전 이름을 그대로 둔다)."""
 
 
 class UsageBar(QWidget):

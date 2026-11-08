@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
     QStackedWidget,
@@ -40,9 +41,10 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import account_detail, config as config_module
-from .. import formatting, i18n, quota, tiers
+from .. import formatting, i18n, large_files, quota, tiers
 from ..scheduler import ThreadWorker
 from . import scan_pages, theme, widgets
+from .overview_widgets import Chip
 from .trend_view import TrendChart
 
 logger = logging.getLogger(__name__)
@@ -202,7 +204,20 @@ class AccountDetailDialog(QDialog):
 
         card, box, self.scan_title = self._card(i18n.t("detail.scan_heading"))
         card.setFixedWidth(330)
+        # 잰 용량을 크게, 지난 스캔 대비를 알약으로 - 예전에는 "261109 스캔 · 잰 용량
+        # 32.8 TB · 지난 스캔 대비 +2.1 TB" 한 줄 글이었다.
+        value_row = QHBoxLayout()
+        value_row.setSpacing(8)
+        self.scan_value = QLabel("-")
+        self.scan_value.setObjectName("statValue")
+        value_row.addWidget(self.scan_value, 0, Qt.AlignBottom)
+        self.scan_delta = Chip("", "soft")
+        self.scan_delta.setVisible(False)
+        value_row.addWidget(self.scan_delta, 0, Qt.AlignVCenter)
+        value_row.addStretch(1)
+        box.addLayout(value_row)
         self.scan_label = QLabel("-")
+        self.scan_label.setObjectName("caption")
         self.scan_label.setWordWrap(True)
         box.addWidget(self.scan_label)
         self.scan_trouble = QLabel()
@@ -256,9 +271,16 @@ class AccountDetailDialog(QDialog):
 
         self.large_table = self._table(LARGE_COLUMN_KEYS, TAB_KEYS[TAB_LARGE])
         self.growth_table = self._table(GROWTH_COLUMN_KEYS, TAB_KEYS[TAB_GROWTH])
-        # 증감 칸 뒤의 막대 - 상세 스캔 탭의 용량 변화 표와 같다.
+        # 막대·알약·두 색 경로 - 상세 스캔 탭의 용량 변화·큰 파일 표와 같다.
         self.growth_bars = widgets.ChangeBarDelegate(self.growth_table)
-        self.growth_table.setItemDelegateForColumn(2, self.growth_bars)
+        self.growth_table.setItemDelegate(self.growth_bars)
+        self.large_cells = widgets.ChangeBarDelegate(self.large_table)
+        self.large_table.setItemDelegate(self.large_cells)
+        for table in (self.growth_table, self.large_table):
+            header = table.horizontalHeader()
+            for index, width in ((1, 150), (2, 150)):
+                header.setSectionResizeMode(index, QHeaderView.Interactive)
+                table.setColumnWidth(index, width)
         self.health_table = self._table(HEALTH_COLUMN_KEYS, TAB_KEYS[TAB_HEALTH])
         return column
 
@@ -389,23 +411,24 @@ class AccountDetailDialog(QDialog):
     def _show_scan(self, detail) -> None:
         scan = detail.scan
         if scan is None or scan.last_completed_generation is None:
+            self.scan_value.setText(i18n.t("common.none"))
+            self.scan_delta.setVisible(False)
             self.scan_label.setText(i18n.t("detail.scan_never"))
             self.scan_trouble.setVisible(False)
             return
-        parts = [
-            i18n.t(
-                "detail.scan_line",
-                when=formatting.scan_label(
-                    scan.current_scan_at, scan.last_completed_generation
-                ),
-                size=formatting.format_kb(detail.measured_kb),
-            )
-        ]
+        when = formatting.scan_label(scan.current_scan_at, scan.last_completed_generation)
+        self.scan_value.setText(formatting.format_kb(detail.measured_kb))
+        parts = [i18n.t("detail.scan_when", when=when)]
         delta = detail.measured_delta_kb
         if delta is not None:
-            parts.append(
+            self.scan_delta.setText(formatting.format_kb_delta(delta))
+            self.scan_delta.set_kind(
+                "tier_warn" if delta > 0 else "tier_normal" if delta < 0 else "soft"
+            )
+            self.scan_delta.setToolTip(
                 i18n.t("detail.scan_delta", delta=formatting.format_kb_delta(delta))
             )
+        self.scan_delta.setVisible(delta is not None)
         self.scan_label.setText("  ·  ".join(parts))
 
         # 못 잰 곳이 있으면 숫자를 그대로 믿으면 안 된다.
@@ -488,26 +511,39 @@ class AccountDetailDialog(QDialog):
             return
         table.setRowCount(len(rows))
         dash = i18n.t("common.none")
+        biggest = max((item.size_kb for item in rows), default=0) or 1
+        share_scale = max([large_files.SHARE_ALERT_PCT * 2] + [item.share_pct or 0 for item in rows])
+        self.large_cells.scale = max(
+            (abs(item.delta_kb or 0) for item in rows if item.compared), default=0
+        )
         for row, item in enumerate(rows):
-            table.setItem(row, 0, self._path_item(item.path))
-            table.setItem(
-                row, 1,
-                widgets.NumericItem(formatting.format_kb(item.size_kb), item.size_kb),
-            )
+            path_item = self._path_item(item.path)
+            path_item.setData(widgets.CellDelegate.PATH_ROLE, True)
+            table.setItem(row, 0, path_item)
+            size = widgets.NumericItem(formatting.format_kb(item.size_kb), item.size_kb)
+            size.setData(widgets.CellDelegate.BAR_ROLE, (item.size_kb / biggest, "accent"))
+            table.setItem(row, 1, size)
             share = item.share_pct
-            table.setItem(
-                row, 2,
-                widgets.NumericItem(
-                    f"{share:.1f}%" if share is not None else dash, share or 0
-                ),
+            share_item = widgets.NumericItem(
+                f"{share:.1f}%" if share is not None else dash, share or 0
             )
+            if share is not None:
+                share_item.setData(widgets.CellDelegate.BAR_ROLE, (
+                    share / share_scale, "attention" if item.dominates_account else "neutral",
+                ))
+            table.setItem(row, 2, share_item)
             if item.previous_kb is None:
                 change = QTableWidgetItem(formatting.format_large_file_change(item))
+                if item.is_new_to_the_list:
+                    change.setData(widgets.CellDelegate.CHIP_ROLE, (change.text(), "stale"))
             else:
                 change = widgets.NumericItem(
                     formatting.format_large_file_change(item), item.delta_kb
                 )
+                change.setData(widgets.CellDelegate.VALUE_ROLE, item.delta_kb)
             table.setItem(row, 3, change)
+            for column in (1, 2, 3):
+                table.item(row, column).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             reasons = scan_pages.large_file_reasons(item)
             if reasons:
                 path_cell = table.item(row, 0)
@@ -542,6 +578,8 @@ class AccountDetailDialog(QDialog):
             current = row["current_kb"] if "current_kb" in keys else row["size_kb"]
             size = widgets.NumericItem(formatting.format_kb(current), current)
             size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if detail.measured_kb:
+                size.setData(widgets.CellDelegate.BAR_ROLE, (current / detail.measured_kb, "accent"))
             table.setItem(index, 1, size)
             if "current_kb" not in keys:
                 table.setItem(index, 2, widgets.NumericItem(dash, None))

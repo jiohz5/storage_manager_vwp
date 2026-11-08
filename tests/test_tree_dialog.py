@@ -192,7 +192,33 @@ class TreeDialogTests(unittest.TestCase):
         names = [dialog.tree.topLevelItem(i).text(0)
                  for i in range(dialog.tree.topLevelItemCount())]
         self.assertEqual(names, ["layout", "sim"])
-        self.assertIn(formatting.scan_label(state.last_completed_at, 1), dialog.caption.text())
+        # 날짜는 요약 띠에 - 계정 합계 밑 한 줄.
+        self.assertIn(formatting.scan_label(state.last_completed_at, 1), dialog.band.sub.text())
+
+    def test_the_band_shows_the_total_and_how_the_top_folders_split_it(self):
+        """글 한 문단이던 설명 대신 합계와 맨 위 폴더들의 몫을 쌓은 막대로 보인다."""
+
+        from smvwp import formatting
+
+        root = self.account.path
+        seed(self.conn, self.account.account_id, 1, [
+            (f"{root}/layout", 500 * 1024, 0), (f"{root}/sim", 200 * 1024, 0),
+        ])
+        dialog = self.dialog()
+        self.assertEqual(dialog.band.value.text(), formatting.format_kb(700 * 1024))
+        self.assertEqual([part[0] for part in dialog.stack.parts()], [500 * 1024, 200 * 1024])
+
+    def test_share_and_change_cells_carry_bars(self):
+        from smvwp.gui.tree_dialog import COL_SHARE
+        from smvwp.gui.widgets import CellDelegate
+
+        root = self.account.path
+        seed(self.conn, self.account.account_id, 1, [
+            (f"{root}/layout", 500 * 1024, 0), (f"{root}/sim", 500 * 1024, 0),
+        ])
+        dialog = self.dialog()
+        fraction, _kind = dialog.tree.topLevelItem(0).data(COL_SHARE, CellDelegate.BAR_ROLE)
+        self.assertAlmostEqual(fraction, 0.5)
 
     # -- 펼치기 ---------------------------------------------------------
     def test_deeper_levels_are_not_built_until_expanded(self):

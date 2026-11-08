@@ -139,6 +139,23 @@ class InProgressPassTests(unittest.TestCase):
         self.assertEqual(digest.total_delta_kb, 500 * GB)
         self.assertEqual(digest.growth[0].total_kb, 1500 * GB)
 
+    def test_a_folder_unmeasured_last_time_is_not_growth(self):
+        """지난 바퀴에 못 잰 900GB 폴더가 이번에 재졌다 - 는 것은 10GB 다. 예전에는
+        +910GB 로 적고 '살펴볼 것' 에 크게 는 계정으로 올렸다."""
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            data_dir = Path(tmp)
+            config = config_module.load_config(data_dir)
+            config.accounts = [config_module.Account(
+                name="layout_proj", path="/acct", account_id="a1")]
+            with scan_store.session(data_dir) as conn:
+                support.unmeasured_then_measured(conn, "a1", "/acct")
+            digest = scan_digest.build(nightly_scan.get_status_snapshot(data_dir, config))
+        self.assertEqual(digest.total_delta_kb, 10 * GB)
+        self.assertEqual(
+            [f for f in digest.findings if f.kind == scan_digest.FINDING_GROWTH], []
+        )
+
 
 class RunTests(unittest.TestCase):
     def test_the_run_status_and_length_are_carried(self):

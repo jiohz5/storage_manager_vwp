@@ -169,6 +169,11 @@ class ScanTab(QFrame):
             return
         self._refresh_growth_table()
 
+    def open_growth(self, account_id) -> None:
+        """그 계정의 용량 변화 쪽을 연다 (홈의 '지난 스캔 대비 용량 변화' 카드)."""
+
+        self._on_account_opened(account_id)
+
     def shutdown(self) -> None:
         """창을 닫을 때. 타이머를 멈추고, 우리가 띄운 스캔을 정리한다."""
 

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import config as config_module
-from . import forecast_notify, health, large_files, nightly_scan, store, tiers, trend
+from . import forecast_notify, health, large_files, nightly_scan, scan_digest, store, tiers, trend
 
 logger = logging.getLogger(__name__)
 
@@ -94,14 +94,12 @@ class AccountDetail:
 
     @property
     def measured_delta_kb(self) -> Optional[int]:
-        """지난 스캔 대비 이 계정이 얼마나 늘었나 (끝난 두 바퀴). 견줄 것이 없으면 None."""
+        """지난 스캔 대비 이 계정이 얼마나 늘었나 (끝난 두 바퀴, 둘 다 잰 곳끼리).
+        견줄 것이 없으면 None."""
 
         if self.scan is None:
             return None
-        current, previous = self.measured_kb, self.scan.previous_measured_kb
-        if current is None or previous is None:
-            return None
-        return current - previous
+        return scan_digest.account_change(self.scan)
 
     @property
     def backed_up(self) -> List[health.RunHealth]:

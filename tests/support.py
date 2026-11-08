@@ -202,6 +202,21 @@ def two_passes_and_one_running(conn, account_id, root):
     }, stop_after=1)
 
 
+def unmeasured_then_measured(conn, account_id, root):
+    """지난 바퀴에 권한 오류로 못 잰 폴더가 이번 바퀴에 재진 계정.
+
+    `{root}/a` 는 못 잼 -> 900GB, `{root}/b` 는 400GB -> 410GB. 실제로 는 것은 10GB 다 -
+    합계끼리 빼면 910GB 가 '늘어난 양' 이 된다."""
+
+    tops = [f"{root}/a", f"{root}/b"]
+    scan_pass(conn, account_id, 1, tops, {
+        tops[0]: failed(), tops[1]: whole({tops[1]: 400 * GB}),
+    })
+    scan_pass(conn, account_id, 2, tops, {
+        tops[0]: whole({tops[0]: 900 * GB}), tops[1]: whole({tops[1]: 410 * GB}),
+    })
+
+
 def sample_processes(conn, sample_id: int):
     """서버 표본 하나에 딸린 프로세스 줄들 (CPU 많은 순)."""
 

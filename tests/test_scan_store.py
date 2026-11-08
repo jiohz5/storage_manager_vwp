@@ -429,6 +429,85 @@ class ChangeFocusTests(ScanStoreTestCase):
         self.assertEqual((focus["path"], focus["note"]), ("/acct/lib/std", None))
 
 
+class ComparableChangeTests(ScanStoreTestCase):
+    """계정 전체 증감은 **두 바퀴 모두 잰 곳끼리** 견준다.
+
+    지난 바퀴에 권한 오류로 못 잰 900GB 폴더가 이번에 재지면, 합계끼리 빼서는 그
+    900GB 가 통째로 '늘어난 양' 이 된다 - 실제로는 10GB 늘었는데 홈의 '무엇부터
+    할까' 에 "지난 스캔보다 910 GB 늘었습니다" 가 떴다. 반대로 이번에 못 재면 계정이
+    통째로 줄어든 것처럼 보인다."""
+
+    G = support.GB
+    TOPS = ["/acct/a", "/acct/b"]
+
+    def _pass(self, generation, a, b):
+        outcomes = {
+            "/acct/a": support.failed() if a is None else support.whole({"/acct/a": a}),
+            "/acct/b": support.whole({"/acct/b": b}),
+        }
+        support.scan_pass(self.conn, "acct-1", generation, self.TOPS, outcomes)
+
+    def test_folder_unmeasured_last_time_is_left_out_of_both_sides(self):
+        self._pass(1, None, 400 * self.G)
+        self._pass(2, 900 * self.G, 410 * self.G)
+
+        change = scan_store.comparable_change(self.conn, "acct-1", 2, 1)
+
+        self.assertEqual(change["delta_kb"], 10 * self.G)
+        self.assertEqual(change["excluded"], ["/acct/a"])
+
+    def test_folder_unmeasured_this_time_is_not_a_drop(self):
+        self._pass(1, 900 * self.G, 400 * self.G)
+        self._pass(2, None, 410 * self.G)
+
+        change = scan_store.comparable_change(self.conn, "acct-1", 2, 1)
+
+        self.assertEqual(change["delta_kb"], 10 * self.G)
+        self.assertEqual(change["excluded"], ["/acct/a"])
+
+    def test_without_failures_it_is_the_plain_difference(self):
+        self._pass(1, 900 * self.G, 400 * self.G)
+        self._pass(2, 950 * self.G, 410 * self.G)
+
+        change = scan_store.comparable_change(self.conn, "acct-1", 2, 1)
+
+        self.assertEqual(change["delta_kb"], 60 * self.G)
+        self.assertEqual(change["excluded"], [])
+
+    def test_failed_piece_of_a_split_folder_leaves_out_the_whole_folder(self):
+        """지난밤 `/acct/a` 를 나눠 재다 `y` 를 못 쟀고, 오늘은 `/acct/a` 를 한 번에
+        쟀다. 오늘 값에서 `y` 몫만 덜어 낼 수 없으므로 `/acct/a` 를 양쪽에서 뺀다."""
+
+        G = self.G
+        support.scan_pass(
+            self.conn, "acct-1", 1, self.TOPS,
+            {
+                "/acct/a": support.cut({"/acct/a/x": 300 * G}),
+                "/acct/a/y": support.failed(),
+                "/acct/b": support.whole({"/acct/b": 400 * G}),
+            },
+            subdirs={"/acct/a": ["/acct/a/x", "/acct/a/y"]},
+        )
+        support.scan_pass(
+            self.conn, "acct-1", 2, self.TOPS,
+            {
+                "/acct/a": support.whole({"/acct/a/x": 300 * G, "/acct/a/y": 600 * G,
+                                          "/acct/a": 900 * G}),
+                "/acct/b": support.whole({"/acct/b": 410 * G}),
+            },
+        )
+
+        change = scan_store.comparable_change(self.conn, "acct-1", 2, 1)
+
+        self.assertEqual(change["delta_kb"], 10 * G)
+        self.assertEqual(change["excluded"], ["/acct/a"])
+
+    def test_nothing_measured_on_one_side_means_no_comparison(self):
+        self._pass(1, 900 * self.G, 400 * self.G)
+
+        self.assertIsNone(scan_store.comparable_change(self.conn, "acct-1", 2, 1))
+
+
 class FailedPathsTests(ScanStoreTestCase):
     """재지 못한 경로를 사유와 함께 돌려주는지.
 

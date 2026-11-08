@@ -36,6 +36,23 @@ from typing import List, Optional
 
 from . import large_files as large_files_module
 
+
+def account_change(entry) -> Optional[int]:
+    """끝난 두 바퀴 사이의 계정 증감 (KB). 견줄 것이 없으면 None.
+
+    스냅숏의 `measured_delta_kb` 다 - 어느 바퀴에서든 못 잰 곳을 양쪽에서 뺀 값
+    (`scan_store.comparable_change`). 합계끼리 빼면 지난번에 못 잰 폴더가 통째로
+    '늘어난 양' 이 되어 홈의 '무엇부터 할까' 에 없던 급증이 떴다. 그 값이 없는
+    것(예전 모양의 가짜 스냅숏)만 두 합계의 차이로 본다."""
+
+    if hasattr(entry, "measured_delta_kb"):
+        return entry.measured_delta_kb
+    current = getattr(entry, "current_measured_kb", None)
+    previous = getattr(entry, "previous_measured_kb", None)
+    if current is None or previous is None:
+        return None
+    return current - previous
+
 # 살펴볼 것 목록에 실을 최대 줄 수.
 #
 # 다 실으면 목록이 표가 되고, 표가 되면 아까와 같은 문제로 돌아간다. 여기
@@ -184,10 +201,10 @@ def build(snapshot) -> Digest:
             name=entry.account_name,
             total_kb=current,
         )
-        previous = getattr(entry, "previous_measured_kb", None)
-        if current is not None and previous is not None:
-            growth.delta_kb = current - previous
-            total_delta += growth.delta_kb
+        change = account_change(entry)
+        if current is not None and change is not None:
+            growth.delta_kb = change
+            total_delta += change
             compared += 1
         digest.growth.append(growth)
 
@@ -258,9 +275,8 @@ def _findings(accounts) -> List[Finding]:
                 )
             )
 
-        previous = getattr(entry, "previous_measured_kb", None)
-        if current is not None and previous is not None:
-            delta = current - previous
+        delta = account_change(entry)
+        if current is not None and delta is not None:
             if delta >= GROWTH_NOTICE_KB:
                 normal.append(
                     Finding(

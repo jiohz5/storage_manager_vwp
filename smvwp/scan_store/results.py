@@ -665,3 +665,83 @@ def measured_total_kb(
         {"account": account_id, "generation": generation, "max_depth": 0},
     ).fetchone()
     return row["total"] if row and row["total"] is not None else None
+
+
+def comparable_change(
+    conn: sqlite3.Connection,
+    account_id: str,
+    current_generation: int,
+    previous_generation: int,
+    current_kb: Optional[int] = None,
+    previous_kb: Optional[int] = None,
+) -> Optional[dict]:
+    """끝난 두 바퀴 사이의 계정 증감 - **두 바퀴 모두 잰 곳끼리** 견준다.
+
+    합계끼리 빼면 한쪽 바퀴에서 못 잰(권한 오류 등) 폴더가 통째로 늘거나 준 양이
+    된다. 지난 바퀴에 못 잰 900GB 폴더가 이번에 재지면 실제로 10GB 늘었어도 홈의
+    '무엇부터 할까' 에 "910 GB 늘었습니다" 가 떴다. 그래서 어느 쪽에서든 못 잰
+    체크포인트가 있으면 그 자리를 **양쪽 합계에서** 뺀다.
+
+    뺄 자리는 못 잰 경로 그대로가 아니라, 다른 바퀴가 그 위 폴더를 한 단위로 쟀으면
+    그 폴더다 - 한 단위로 잰 값에서 못 잰 조각의 몫만 덜어 낼 수는 없다.
+
+    `{"delta_kb", "current_kb", "previous_kb", "excluded": [뺀 자리]}` - 합계는 뺀 뒤의
+    값이다. 어느 한쪽이라도 잰 것이 없으면 None. 합계(`measured_total_kb`)를 이미
+    읽었으면 넘겨 같은 합을 두 번 묻지 않는다. 못 잰 곳이 없는 보통 밤에는 오류
+    체크포인트를 찾는 질의 하나만 더 든다."""
+
+    if current_kb is None:
+        current_kb = measured_total_kb(conn, account_id, current_generation)
+    if previous_kb is None:
+        previous_kb = measured_total_kb(conn, account_id, previous_generation)
+    if current_kb is None or previous_kb is None:
+        return None
+    generations = (current_generation, previous_generation)
+    failed = sorted({
+        row["path"].rstrip("/")
+        for row in conn.execute(
+            "SELECT path FROM scan_checkpoints WHERE account_id = ? AND kind = 'baseline' "
+            "AND generation IN (?, ?) AND status = 'error'",
+            (account_id, *generations),
+        )
+    })
+    roots = set()
+    for path in failed:
+        parts = path.split("/")
+        ancestors = ["/".join(parts[:end]) for end in range(2, len(parts))]
+        units = set()
+        if ancestors:
+            marks = ", ".join("?" for _ in ancestors)
+            units = {
+                row["path"]
+                for row in conn.execute(
+                    "SELECT path FROM baseline_results WHERE account_id = ? "
+                    f"AND generation IN (?, ?) AND path IN ({marks}) "
+                    "AND (depth = 0 OR depth IS NULL)",
+                    (account_id, *generations, *ancestors),
+                )
+            }
+        # 가장 위의 단위 - 그 아래는 어느 바퀴에서도 따로 견줄 수 없다.
+        roots.add(next((ancestor for ancestor in ancestors if ancestor in units), path))
+    roots = sorted(
+        root for root in roots
+        if not any(root.startswith(other + "/") for other in roots)
+    )
+    left_out = {generation: 0 for generation in generations}
+    for root in roots:
+        for generation in generations:
+            row = conn.execute(
+                "SELECT SUM(size_kb) AS total FROM baseline_results WHERE account_id = ? "
+                "AND generation = ? AND (depth = 0 OR depth IS NULL) "
+                "AND (path = ? OR (path > ? AND path < ?))",
+                (account_id, generation, root, root + "/", root + "0"),
+            ).fetchone()
+            left_out[generation] += row["total"] or 0
+    current_kb -= left_out[current_generation]
+    previous_kb -= left_out[previous_generation]
+    return {
+        "delta_kb": current_kb - previous_kb,
+        "current_kb": current_kb,
+        "previous_kb": previous_kb,
+        "excluded": roots,
+    }

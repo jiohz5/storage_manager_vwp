@@ -47,7 +47,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from . import (
     config as config_module,
@@ -1234,7 +1234,9 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 # 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
 # 3: 증가 경로를 증감의 크기 순으로(줄어든 곳도), 지난번 나눠 쟀거나 못 잰 경로를 가림
 #    (`previous_note`), 변화가 몰린 곳(`focus`), 큰 파일의 '견줬나'.
-SUMMARY_FORMAT = 3   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
+SUMMARY_FORMAT = 4   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
+                     # 3: 용량 변화 줄의 '가장 많이 변한 곳'
+                     # 4: 계정 증감을 두 바퀴 모두 잰 곳끼리 (`comparable_change`)
 
 
 def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
@@ -1426,9 +1428,15 @@ class AccountScanSnapshot:
     # 계속 커진다 - "얼마나 찾았나"에 답하는 값이다. 아직 하나도 못 쟀으면
     # None (0과 '모름'은 다르다).
     measured_kb: Optional[int] = None
-    # 직전 세대의 같은 값. 계정이 밤새 얼마나 늘었는지는 이 둘의 차이라야
-    # 나온다 - 경로별 증감을 더하면 부모와 자식을 겹쳐 세게 된다.
+    # 직전 세대의 같은 값 (끝난 바퀴의 합계).
     previous_measured_kb: Optional[int] = None
+    # 끝난 두 바퀴 사이의 계정 증감 - 어느 바퀴에서든 못 잰 곳은 양쪽에서 뺀 것
+    # (`scan_store.comparable_change`). 두 합계를 그냥 빼면 지난번에 못 잰 폴더가
+    # 통째로 '늘어난 양' 이 된다. 견줄 것이 없으면 None. `delta_excluded` 는 뺀 자리,
+    # `compared_kb` 는 뺀 뒤의 두 합계 `(지난번, 이번)` - 화면의 전후 막대가 쓴다.
+    measured_delta_kb: Optional[int] = None
+    delta_excluded: List[str] = field(default_factory=list)
+    compared_kb: Optional[Tuple[int, int]] = None
     # 남은 체크포인트를 다 도는 데 걸릴 **대략의** 시간(초). 이 실행이 실제로
     # 낸 속도의 중앙값 x 남은 개수다. 표본이 모자라면 None
     # (`scan_store.estimate_remaining_seconds` 참고).
@@ -1490,15 +1498,28 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
                     conn, account_id, current_gen, previous_gen, row["path"]
                 )
 
+    facts = _generation_facts(conn, account_id, current_gen)
+    previous_total = (
+        scan_store.measured_total_kb(conn, account_id, previous_gen) if previous_gen else None
+    )
+    compared = (
+        scan_store.comparable_change(
+            conn, account_id, current_gen, previous_gen,
+            current_kb=facts["current_measured_kb"], previous_kb=previous_total,
+        )
+        if current_gen and previous_gen and facts["current_measured_kb"] is not None
+        and previous_total is not None else None
+    )
     return {
         "top_paths": (
             scan_store.top_paths(conn, account_id, current_gen, top_n, max_depth=max_depth)
             if current_gen else []
         ),
         "growth": growth,
-        "previous_measured_kb": (
-            scan_store.measured_total_kb(conn, account_id, previous_gen) if previous_gen else None
-        ),
+        "previous_measured_kb": previous_total,
+        "measured_delta_kb": compared["delta_kb"] if compared else None,
+        "delta_excluded": compared["excluded"] if compared else [],
+        "compared_kb": [compared["previous_kb"], compared["current_kb"]] if compared else None,
         "current_scan_at": (
             (state.last_completed_at
              or scan_store.generation_completed_at(conn, account_id, current_gen))
@@ -1519,7 +1540,7 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
         # 상세 스캔 현황(`scan_overview`)이 쓰는 것: 그 세대를 언제부터 언제까지
         # 쟀나(여러 밤에 걸치면 디렉터리마다 잰 날이 다르다), 디렉터리 몇 개였나,
         # 다 더하면 얼마였나, 디렉터리 하나에 얼마나 걸렸나(완료 일정 어림).
-        **_generation_facts(conn, account_id, current_gen),
+        **facts,
     }
 
 
@@ -1615,6 +1636,11 @@ def get_status_snapshot(
                     unavailable_detail=state.unavailable_detail,
                     unavailable_at=state.unavailable_at,
                     previous_measured_kb=settled["previous_measured_kb"],
+                    measured_delta_kb=settled.get("measured_delta_kb"),
+                    delta_excluded=list(settled.get("delta_excluded") or []),
+                    compared_kb=(
+                        tuple(settled["compared_kb"]) if settled.get("compared_kb") else None
+                    ),
                     current_scan_at=settled["current_scan_at"],
                     previous_scan_at=settled["previous_scan_at"],
                     top_paths=settled["top_paths"],
