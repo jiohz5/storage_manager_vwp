@@ -1173,13 +1173,20 @@ def _notify_growth(
                 if previous < 1:
                     continue  # 첫 기준선 - 비교 대상이 없다
 
+                # 화면의 증가 경로 목록과 같은 깊이로 본다. 예전에는 기본값(깊이 1)
+                # 이라 부모와 그 안의 자식이 같은 증가로 따로따로 알림을 냈다.
                 rows = scan_store.growth_delta(
-                    conn, account.account_id, current, previous, settings.detail_scan_top_n
+                    conn, account.account_id, current, previous, settings.detail_scan_top_n,
+                    max_depth=settings.growth_list_max_depth,
                 )
                 for row in rows:
+                    # 지난밤에 못 잰 곳은 얼마였는지 모른다 - 늘었다고 말할 수 없다.
+                    if row["previous_note"] == scan_store.PREVIOUS_UNMEASURED:
+                        continue
                     # previous_kb가 None이면 이전 세대에 없던 새 경로다. 새로 생긴
                     # 큰 디렉터리도 알릴 가치가 있으므로 현재 크기 전체를 증가분
-                    # 으로 본다 (maybe_notify_growth가 그렇게 처리한다).
+                    # 으로 본다 (maybe_notify_growth가 그렇게 처리한다). 지난밤 나눠
+                    # 잰 곳은 `growth_delta` 가 조각의 합을 지난 값으로 준다.
                     result = notifications.maybe_notify_growth(
                         data_dir,
                         account,
@@ -1225,7 +1232,9 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 
 # 남겨 둔 스캔 탭 요약의 형식. `_settled_parts` 가 내는 것이나 그 규칙이 바뀌면 올린다 -
 # 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
-SUMMARY_FORMAT = 2   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
+# 3: 증가 경로를 증감의 크기 순으로(줄어든 곳도), 지난번 나눠 쟀거나 못 잰 경로를 가림
+#    (`previous_note`), 변화가 몰린 곳(`focus`), 큰 파일의 '견줬나'.
+SUMMARY_FORMAT = 3   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
 
 
 def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
@@ -1266,7 +1275,8 @@ def save_summaries(data_dir: Path, config: config_module.AppConfig) -> int:
             key = _summary_key(account.account_id, current_gen, top_n, max_depth)
             if saved.get(account.account_id) == key:
                 continue
-            parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth)
+            parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth,
+                                   focus=True)
             rows.append((account.account_id, key, json.dumps(_plain(parts), ensure_ascii=False),
                          scan_store.utc_now_iso()))
         ids = [account.account_id for account in config.accounts]
@@ -1452,26 +1462,40 @@ class StatusSnapshot:
     recent_runs: List[dict] = field(default_factory=list)
 
 
-def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth) -> dict:
+def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
+                   focus: bool = False) -> dict:
     """완료된 세대에만 매인 값들. 세대가 바뀌기 전에는 달라지지 않는다.
 
     두 스캔의 날짜는 세대를 끝낼 때 남긴 시각을 먼저 쓴다. 결과 표에서 찾으면
     (`generation_completed_at`) 세대의 행을 전부 읽는다 - 계정마다 두 번, 창을
-    열 때마다. 남긴 시각이 없는 예전 DB 에서만 결과 표로 간다."""
+    열 때마다. 남긴 시각이 없는 예전 DB 에서만 결과 표로 간다.
+
+    증가 경로는 **증감의 크기 순**이다 - 증가 순으로 자르면 크게 정리한 곳이 목록에서
+    빠진다. `focus` 면 줄마다 변화가 그 안의 어디에 몰렸는지(`scan_store.change_focus`)
+    를 붙인다. 그 폴더 아래 기록을 두 세대 모두 읽으므로 야간 스캔이 요약을 남길 때만
+    한다 - 창이 스스로 읽을 때(요약이 없을 때)는 붙이지 않는다."""
 
     account_id = state.account_id
+    growth = (
+        scan_store.growth_delta(
+            conn, account_id, current_gen, previous_gen, top_n, max_depth=max_depth,
+            order=scan_store.ORDER_CHANGE,
+        )
+        if current_gen and previous_gen else []
+    )
+    if focus:
+        for row in growth:
+            if row["previous_kb"] is not None and row["previous_note"] != scan_store.PREVIOUS_UNMEASURED:
+                row["focus"] = scan_store.change_focus(
+                    conn, account_id, current_gen, previous_gen, row["path"]
+                )
 
     return {
         "top_paths": (
             scan_store.top_paths(conn, account_id, current_gen, top_n, max_depth=max_depth)
             if current_gen else []
         ),
-        "growth": (
-            scan_store.growth_delta(
-                conn, account_id, current_gen, previous_gen, top_n, max_depth=max_depth
-            )
-            if current_gen and previous_gen else []
-        ),
+        "growth": growth,
         "previous_measured_kb": (
             scan_store.measured_total_kb(conn, account_id, previous_gen) if previous_gen else None
         ),

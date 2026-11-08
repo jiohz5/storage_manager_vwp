@@ -75,6 +75,10 @@ class Finding:
     reason: str = ""
     detail: str = ""
     when: str = ""
+    # 큰 파일 줄: 지난 목록과 견줬나 (첫 스캔이면 False - '목록에 없던'을 말할 수 없다),
+    # 계정에서 차지하는 비중.
+    compared: bool = True
+    pct: Optional[float] = None
 
 
 @dataclass
@@ -171,14 +175,18 @@ def build(snapshot) -> Digest:
     total_delta = 0
     compared = 0
     for entry in accounts:
+        # 끝난 두 바퀴를 견준다. 스냅숏의 `measured_kb` 는 하는 중인 바퀴의 '지금까지
+        # 잰 양'이라, 그것을 쓰면 바퀴가 도는 며칠 동안 계정이 통째로 줄어든 것처럼
+        # 적혔다 (그리고 바퀴가 막 끝난 날에는 아예 비교가 없었다).
+        current = getattr(entry, "current_measured_kb", None)
         growth = AccountGrowth(
             account_id=entry.account_id,
             name=entry.account_name,
-            total_kb=entry.measured_kb,
+            total_kb=current,
         )
         previous = getattr(entry, "previous_measured_kb", None)
-        if entry.measured_kb is not None and previous is not None:
-            growth.delta_kb = entry.measured_kb - previous
+        if current is not None and previous is not None:
+            growth.delta_kb = current - previous
             total_delta += growth.delta_kb
             compared += 1
         digest.growth.append(growth)
@@ -237,7 +245,8 @@ def _findings(accounts) -> List[Finding]:
                 )
             )
 
-        for item in large_files_module.build(entry.large_files, entry.measured_kb):
+        current = getattr(entry, "current_measured_kb", None)
+        for item in large_files_module.build(entry.large_files, current):
             if not item.is_notable:
                 continue
             normal.append(
@@ -245,17 +254,18 @@ def _findings(accounts) -> List[Finding]:
                     kind=FINDING_LARGE_FILE, account=name, path=item.path,
                     account_id=entry.account_id,
                     size_kb=item.size_kb, delta_kb=item.delta_kb,
+                    compared=item.compared, pct=item.share_pct,
                 )
             )
 
         previous = getattr(entry, "previous_measured_kb", None)
-        if entry.measured_kb is not None and previous is not None:
-            delta = entry.measured_kb - previous
+        if current is not None and previous is not None:
+            delta = current - previous
             if delta >= GROWTH_NOTICE_KB:
                 normal.append(
                     Finding(
                         kind=FINDING_GROWTH, account=name, account_id=entry.account_id,
-                        size_kb=entry.measured_kb, delta_kb=delta,
+                        size_kb=current, delta_kb=delta,
                     )
                 )
 

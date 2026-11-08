@@ -18,7 +18,11 @@ import unittest
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from smvwp import health, priority, store
+import tempfile
+from pathlib import Path
+
+from smvwp import config as config_module, health, nightly_scan, priority, scan_store, store
+from tests import support
 
 GB = 1024 * 1024
 
@@ -41,7 +45,8 @@ class FakeScanAccount:
     account_id: str = "a1"
     account_name: str = "layout_proj"
     last_completed_generation: Optional[int] = 2
-    measured_kb: Optional[int] = None
+    # 끝난 바퀴의 합계. 하는 중인 바퀴의 '지금까지 잰 양'(`measured_kb`)과 다르다.
+    current_measured_kb: Optional[int] = None
     previous_measured_kb: Optional[int] = None
     large_files: List[tuple] = field(default_factory=list)
 
@@ -171,7 +176,7 @@ class BackupRiskTests(unittest.TestCase):
 class ScanTests(unittest.TestCase):
     def test_a_file_that_dominates_its_account_is_listed(self):
         plan = priority.build(scan_accounts=[FakeScanAccount(
-            measured_kb=1000 * GB,
+            current_measured_kb=1000 * GB,
             large_files=[("/a/huge.dat", 300 * GB, 100 * GB)],
         )])
         self.assertEqual(kinds(plan), [priority.ACT_BIG_FILE])
@@ -180,20 +185,20 @@ class ScanTests(unittest.TestCase):
         """여기까지 올리면 목록이 파일 목록이 된다 - 상세 스캔 탭에서 보면 된다."""
 
         plan = priority.build(scan_accounts=[FakeScanAccount(
-            measured_kb=100_000 * GB,
+            current_measured_kb=100_000 * GB,
             large_files=[("/a/big.dat", 300 * GB, 100 * GB)],
         )])
         self.assertEqual(plan.actions, [])
 
     def test_a_big_jump_is_listed(self):
         plan = priority.build(scan_accounts=[FakeScanAccount(
-            measured_kb=1000 * GB, previous_measured_kb=500 * GB
+            current_measured_kb=1000 * GB, previous_measured_kb=500 * GB
         )])
         self.assertEqual(kinds(plan), [priority.ACT_SURGE])
 
     def test_a_small_jump_is_not(self):
         plan = priority.build(scan_accounts=[FakeScanAccount(
-            measured_kb=520 * GB, previous_measured_kb=500 * GB
+            current_measured_kb=520 * GB, previous_measured_kb=500 * GB
         )])
         self.assertEqual(plan.actions, [])
 
@@ -205,6 +210,23 @@ class ScanTests(unittest.TestCase):
         ])
         self.assertEqual(plan.accounts_without_scan, ["fresh"])
         self.assertEqual(plan.actions, [])
+
+    def test_a_pass_in_progress_is_not_a_drop(self):
+        """하는 중인 바퀴의 '지금까지 잰 양'(900GB)은 계정 크기가 아니다. 예전에는
+        그것을 끝난 바퀴(1000GB)와 견줘, 1000GB -> 1500GB 로 500GB 는 계정의
+        급증을 놓쳤다. 진짜 스냅숏으로 본다 - 가짜는 이 둘을 가르지 않는다."""
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            data_dir = Path(tmp)
+            config = config_module.load_config(data_dir)
+            config.accounts = [config_module.Account(
+                name="layout_proj", path="/acct", account_id="a1")]
+            with scan_store.session(data_dir) as conn:
+                support.two_passes_and_one_running(conn, "a1", "/acct")
+            snap = nightly_scan.get_status_snapshot(data_dir, config)
+        plan = priority.build(scan_accounts=snap.accounts)
+        surges = [a for a in plan.actions if a.kind == priority.ACT_SURGE]
+        self.assertEqual([a.delta_kb for a in surges], [500 * GB])
 
 
 class OrderTests(unittest.TestCase):

@@ -19,10 +19,22 @@
 그리고 모르는 것은 모른다고 둔다 - 나머지 줄의 '지난 스캔 대비'는 계산하지
 않는다. 이전 세대의 자식 구성이 지금과 같다는 보장이 없어서, 그럴듯하지만
 틀릴 수 있는 수가 되기 때문이다.
+
+## 나눠 잰 폴더
+
+시간 초과로 쪼개진 폴더는 그 밤에 **자기 줄이 없다** - 먼저 끝난 자식과 다시 큐에
+넣은 자식들이 따로 있을 뿐이다. 그래서 두 가지를 맞춘다.
+
+- 그 밤의 트리에서는 쪼개진 폴더를 **자식들의 합으로 다시 세운다** (`pieced`).
+  안 그러면 자식들이 계정 바로 아래 폴더처럼 늘어서 "이 계정 안에 뭐가 있나"가
+  틀린다. 그 폴더에 직접 있는 파일은 그 밤에 아무도 안 셌으므로 합은 하한이다.
+- 다음 밤과 견줄 때, 지난 밤에 줄이 없던 폴더가 그 밤에 **나눠 재졌으면** 조각의
+  합과 견준다 (`previous_pieced`). 예전에는 '지난 스캔에 없던 것'으로 칠해졌다.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
@@ -84,6 +96,10 @@ class TreeNode:
     children: List["TreeNode"] = field(default_factory=list)
     hidden_count: int = 0            # MORE 줄이 접고 있는 개수
     account_total_kb: Optional[int] = None
+    # 이 스캔이 이 폴더를 나눠 쟀다 - 크기는 하위 폴더의 합이다 (직접 있는 파일 빠짐).
+    pieced: bool = False
+    # 지난 스캔이 이 폴더를 나눠 쟀다 - `previous_kb` 는 그때 조각들의 합이다.
+    previous_pieced: bool = False
 
     @property
     def delta_kb(self) -> Optional[int]:
@@ -140,35 +156,96 @@ def _size_map(source) -> Dict[str, int]:
     return out
 
 
+class _Pieces:
+    """한 세대의 기록에서 "이 폴더를 나눠 쟀으면 그 조각들의 합" 을 찾는다.
+
+    조각 = 그 폴더 아래에서 위로 기록된 조상이 없는 줄들. 바로 아래 자식만 더하면
+    쪼개진 자식의 손주를 놓치고, 다 더하면 부모와 자식을 겹쳐 센다."""
+
+    def __init__(self, sizes: Dict[str, int]):
+        self._sizes = sizes
+        self._paths = sorted(sizes)
+
+    def total(self, path: str) -> Optional[int]:
+        start = bisect_left(self._paths, path + "/")
+        end = bisect_left(self._paths, path + "0")    # "/" 다음 글자
+        if start >= end:
+            return None
+        total = 0
+        for piece in self._paths[start:end]:
+            parent = _parent(piece)
+            while parent is not None and len(parent) > len(path) and parent not in self._sizes:
+                parent = _parent(parent)
+            if parent is None or len(parent) <= len(path):
+                total += self._sizes[piece]
+        return total
+
+
+def _missing_folders(paths, root: str) -> List[str]:
+    """기록은 없는데 기록된 것들의 조상인 폴더들 (계정 안에서만).
+
+    쪼개진 폴더가 이렇다 - 그 밤에 자기 줄이 없고 아래 조각들만 있다."""
+
+    known = set(paths)
+    missing = set()
+    for path in known:
+        parent = _parent(path)
+        while parent is not None and len(parent) > len(root) and parent.startswith(root + "/"):
+            if parent in known or parent in missing:
+                break
+            missing.add(parent)
+            parent = _parent(parent)
+    return sorted(missing)
+
+
 def build_tree(
     entries,
     previous=None,
     large_files=(),
     account_total_kb: Optional[int] = None,
+    root_path: Optional[str] = None,
 ) -> List[TreeNode]:
     """`(경로, KB)` 목록을 트리로 세운다.
 
     - `entries` - 이번 세대 (`scan_store.tree_entries` 가 주는 행도 그대로 받는다).
     - `previous` - 이전 세대. **None 이면 견줄 것이 없다**는 뜻이고, 빈 목록이면
       "이전 스캔은 있었는데 이 경로들이 없었다"는 뜻이다. 둘은 다르다.
-    - `large_files` - `(경로, 지금 KB, 이전 KB)`. 자기 디렉터리 밑에 붙는다.
+    - `large_files` - `(경로, 지금 KB, 이전 KB[, 견줬나])`. 자기 디렉터리 밑에 붙는다.
     - `account_total_kb` - 비중 계산 기준. 없으면 뿌리 합계를 쓴다.
+    - `root_path` - 계정 경로. 주면 뿌리를 계정 안의 이름으로 부르고(`layout`,
+      `/proj/acct/layout` 이 아니라), 나눠 잰 폴더를 자식들의 합으로 다시 세운다.
     """
 
     sizes = _size_map(entries)
     if not sizes:
         return []
     previous_sizes = None if previous is None else _size_map(previous)
+    previous_pieces = None if previous_sizes is None else _Pieces(previous_sizes)
+    root = root_path.rstrip("/") if root_path else None
+
+    def compare(node: TreeNode) -> None:
+        if previous_sizes is None:
+            return
+        node.compared = True
+        node.previous_kb = previous_sizes.get(node.path)
+        if node.previous_kb is None:
+            pieces = previous_pieces.total(node.path)
+            if pieces is not None:
+                node.previous_kb, node.previous_pieced = pieces, True
 
     nodes: Dict[str, TreeNode] = {}
     for path, size_kb in sizes.items():
-        nodes[path] = TreeNode(
-            path=path,
-            label=path,
-            size_kb=size_kb,
-            previous_kb=None if previous_sizes is None else previous_sizes.get(path),
-            compared=previous_sizes is not None,
-        )
+        nodes[path] = TreeNode(path=path, label=path, size_kb=size_kb)
+        compare(nodes[path])
+
+    # 나눠 잰 폴더를 다시 세운다 (크기는 아래에서 조각을 걸고 나서 더한다).
+    rebuilt: List[TreeNode] = []
+    if root:
+        for path in _missing_folders(sizes, root):
+            node = TreeNode(path=path, label=path, size_kb=0, pieced=True)
+            compare(node)
+            nodes[path] = node
+            rebuilt.append(node)
 
     # -- 부모 밑에 건다 --------------------------------------------------
     #
@@ -182,10 +259,17 @@ def build_tree(
         while ancestor is not None and ancestor not in nodes:
             ancestor = _parent(ancestor)
         if ancestor is None:
+            if root and path.startswith(root + "/"):
+                node.label = path[len(root):].lstrip("/")
             roots.append(node)
         else:
             node.label = path[len(ancestor):].lstrip("/") or path
             nodes[ancestor].children.append(node)
+
+    # 다시 세운 폴더의 크기 = 바로 아래 줄들의 합. 깊은 것부터 더해야 다시 세운
+    # 폴더 안의 다시 세운 폴더가 먼저 채워진다.
+    for node in sorted(rebuilt, key=lambda item: -item.path.count("/")):
+        node.size_kb = sum(child.size_kb for child in node.children)
 
     if account_total_kb is None:
         account_total_kb = sum(node.size_kb for node in roots) or None
@@ -195,6 +279,9 @@ def build_tree(
     for row in large_files:
         raw_path, size_kb = str(row[0]), int(row[1])
         prev_kb = row[2] if len(row) > 2 else None
+        # 파일은 지난 **큰 파일 목록**과 견준다. 그 목록이 없었으면(첫 스캔) 견주지
+        # 않은 것이다 - 폴더 기록이 있었는지와는 다른 이야기다.
+        listed = bool(row[3]) if len(row) > 3 else previous_sizes is not None
         owner = _parent(raw_path)
         while owner is not None and owner not in nodes:
             owner = _parent(owner)
@@ -207,7 +294,7 @@ def build_tree(
                 size_kb=size_kb,
                 kind=FILE,
                 previous_kb=prev_kb,
-                compared=previous_sizes is not None,
+                compared=listed,
             )
         )
 
@@ -234,7 +321,7 @@ def build_tree(
             )
 
         bucket = node
-        if dir_children:
+        if dir_children and not node.pieced:
             remainder = node.size_kb - dir_total
             if remainder >= REST_MIN_KB:
                 rest_node = TreeNode(
@@ -261,6 +348,17 @@ def build_tree(
 
     roots.sort(key=lambda item: (-item.size_kb, item.path))
     return roots
+
+
+def notes(node: TreeNode) -> List[str]:
+    """이 줄의 숫자를 읽을 때 알아야 할 것 - i18n 키로. 없으면 빈 목록."""
+
+    out = []
+    if node.pieced:
+        out.append("tree.note.pieced")
+    if node.previous_pieced:
+        out.append("tree.note.previous_pieced")
+    return out
 
 
 def count_directories(roots: List[TreeNode]) -> int:

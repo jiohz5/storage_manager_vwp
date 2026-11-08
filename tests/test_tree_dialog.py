@@ -177,6 +177,23 @@ class TreeDialogTests(unittest.TestCase):
         dialog = self.dialog()
         self.assertIn("다시 재지 않습니다", dialog.caption.text())
 
+    def test_folders_are_named_inside_the_account_and_the_scan_is_dated(self):
+        """뿌리마다 계정 경로 전체를 쓰면 글자가 경로로 다 차고 그림의 머리글은 잘린다.
+        그리고 이 트리는 지금이 아니라 끝난 스캔의 기록이다 - 언제 것인지 말한다."""
+
+        from smvwp import formatting
+
+        root = self.account.path
+        seed(self.conn, self.account.account_id, 1, [
+            (f"{root}/layout", 500 * 1024, 0), (f"{root}/sim", 200 * 1024, 0),
+        ])
+        state = scan_store.get_account_state(self.conn, self.account.account_id)
+        dialog = self.dialog()
+        names = [dialog.tree.topLevelItem(i).text(0)
+                 for i in range(dialog.tree.topLevelItemCount())]
+        self.assertEqual(names, ["layout", "sim"])
+        self.assertIn(formatting.scan_label(state.last_completed_at, 1), dialog.caption.text())
+
     # -- 펼치기 ---------------------------------------------------------
     def test_deeper_levels_are_not_built_until_expanded(self):
         """미리 다 만들면 디렉터리 수만큼 위젯이 생겨 큰 계정에서 창이 굳는다."""

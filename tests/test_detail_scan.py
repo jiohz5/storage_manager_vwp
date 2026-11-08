@@ -450,3 +450,23 @@ class CheckpointTreeTests(unittest.TestCase):
         self.assertEqual([r["path"] for r in pending], ["/a/y", "/a/z"])
         # 그리고 /a/x 결과는 살아 있다
         self.assertIn("/a/x", {r["path"] for r in scan_store.tree_entries(self.conn, "acct-1", 1)})
+
+    def test_children_finished_before_a_timeout_become_measured_units(self):
+        """먼저 끝난 자식은 다시 큐에 넣은 형제들과 같은 **측정 단위**(깊이 0)다.
+
+        루트 줄이 없으니 이 체크포인트의 합계는 아무도 모른다. 예전에는 끝난 자식이
+        루트 기준 깊이 1 로 남아, 깊이 0 만 더하는 계정 합계와 증가 경로 목록에서
+        통째로 빠졌다 - 다시 큐에 넣은 형제들은 자기 루트에서 깊이 0 인데."""
+
+        timeout = subprocess.TimeoutExpired(cmd="du", timeout=1)
+        timeout.stdout = b"40\t/a/x/p\n100\t/a/x\n7\t/a/y/q\n"
+        timeout.stderr = b""
+        checkpoint = self._checkpoint()
+
+        with patch("smvwp.detail_scan.subprocess.run", side_effect=timeout):
+            with patch("smvwp.detail_scan.list_immediate_subdirs",
+                       return_value=["/a/x", "/a/y"]):
+                detail_scan.process_one_checkpoint(self.conn, checkpoint, 1)
+
+        depths = {r["path"]: r["depth"] for r in scan_store.tree_entries(self.conn, "acct-1", 1)}
+        self.assertEqual(depths, {"/a/x": 0, "/a/x/p": 1, "/a/y/q": 1})

@@ -443,8 +443,8 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             again = nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             self.assertEqual(growth.call_count, 1)
             self.assertEqual(
-                [tuple(row) for row in first.accounts[0].growth],
-                [tuple(row) for row in again.accounts[0].growth],
+                [dict(row) for row in first.accounts[0].growth],
+                [dict(row) for row in again.accounts[0].growth],
             )
             self.run_at(datetime(2026, 8, 2, 23, 0))   # 세대가 바뀌면 다시 읽는다
             growth.reset_mock()   # 스캔 자신(급증 알림)이 부른 것은 세지 않는다
@@ -476,6 +476,11 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             computed = self.snapshot_parts()
         with patch("smvwp.nightly_scan._settled_parts", side_effect=AssertionError("결과 표를 읽었다")):
             stored = self.snapshot_parts()
+        # 변화가 몰린 곳(`focus`)은 야간 스캔이 남긴 요약에만 있다 - 그 폴더 아래 기록을
+        # 두 세대 모두 읽어야 해서 창이 스스로 읽을 때는 붙이지 않는다. 나머지는 같다.
+        for row in stored["growth"]:
+            self.assertIn("focus", row)
+            row.pop("focus")
         self.assertEqual(stored, computed)
         self.assertTrue(stored["growth"] and stored["top_paths"])
 

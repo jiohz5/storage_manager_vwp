@@ -370,8 +370,11 @@ def _scan_actions(scan_accounts) -> "tuple":
             unscanned.append(name)
             continue
 
+        # 끝난 바퀴의 합계다. 스냅숏의 `measured_kb` 는 하는 중인 바퀴의 '지금까지 잰
+        # 양'이라, 그것으로 나누면 비중이 부풀고 그것과 견주면 계정이 줄어든다.
+        current = getattr(entry, "current_measured_kb", None)
         for item in large_files_module.build(
-            getattr(entry, "large_files", []) or [], entry.measured_kb
+            getattr(entry, "large_files", []) or [], current
         ):
             if not item.dominates_account:
                 # 계정을 혼자 차지하는 것만 올린다. 그냥 큰 파일은 상세 스캔
@@ -391,8 +394,8 @@ def _scan_actions(scan_accounts) -> "tuple":
             )
 
         previous = getattr(entry, "previous_measured_kb", None)
-        if entry.measured_kb is not None and previous is not None:
-            delta = entry.measured_kb - previous
+        if current is not None and previous is not None:
+            delta = current - previous
             if delta >= SURGE_KB:
                 actions.append(
                     Action(
@@ -401,7 +404,7 @@ def _scan_actions(scan_accounts) -> "tuple":
                         account=name,
                         account_id=entry.account_id,
                         delta_kb=delta,
-                        size_kb=entry.measured_kb,
+                        size_kb=current,
                     )
                 )
     return actions, unscanned

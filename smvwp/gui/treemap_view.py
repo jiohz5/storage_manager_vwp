@@ -303,11 +303,9 @@ class TreemapView(QWidget):
         share = node.share_pct
         if share is not None:
             lines.append(i18n.t("treemap.share", pct=f"{share:.1f}"))
-        if node.compared:
-            if node.previous_kb is None:
-                lines.append(i18n.t("tree.new"))
-            else:
-                lines.append(formatting.format_kb_delta(node.delta_kb))
+        if node.compared and node.kind not in (tree_view.REST, tree_view.MORE):
+            lines.append(formatting.format_tree_change(node))
+        lines.extend(i18n.t(key) for key in tree_view.notes(node))
         return "\n".join(lines)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt 규약

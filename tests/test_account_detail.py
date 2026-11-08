@@ -11,7 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from smvwp import account_detail, config as config_module, health, store
+from smvwp import account_detail, config as config_module, health, scan_store, store
+from tests import support
 
 GB = 1024 * 1024
 
@@ -108,6 +109,19 @@ class AccountDetailTests(unittest.TestCase):
         self.assertIn(account_detail.PART_SCAN, detail.failures)
         self.assertIsNotNone(detail.sample)
 
+    # -- 하는 중인 바퀴 ---------------------------------------------------
+    def test_a_pass_in_progress_is_not_the_last_scan(self):
+        """'지난 스캔 대비'는 끝난 두 바퀴를 견준다. 예전에는 하는 중인 바퀴의 '지금까지
+        잰 양'(900GB)을 끝난 스캔의 크기로 써서 1000GB -> 1500GB 인 계정이 -100GB
+        로 보였고, 큰 파일의 계정 비중도 그 반쪽 합계로 나눠 부풀었다."""
+
+        with scan_store.session(self.data_dir) as conn:
+            support.two_passes_and_one_running(conn, self.account.account_id, self.account.path)
+        detail = self.read()
+        self.assertEqual(detail.measured_kb, 1500 * GB)
+        self.assertEqual(detail.measured_delta_kb, 500 * GB)
+        self.assertAlmostEqual(detail.large_files[0].share_pct, 20.0)
+
     # -- 파생값 -----------------------------------------------------------
     def test_growth_falls_back_to_the_biggest_paths(self):
         """비교할 이전 스캔이 없으면 증감 대신 큰 경로를 보여 준다."""
@@ -115,7 +129,7 @@ class AccountDetailTests(unittest.TestCase):
         class Scan:
             growth = []
             top_paths = [{"path": "/a", "size_kb": 10}]
-            measured_kb = None
+            current_measured_kb = None
             previous_measured_kb = None
 
         detail = account_detail.AccountDetail("id", "name", "/acct")

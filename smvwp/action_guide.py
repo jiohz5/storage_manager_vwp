@@ -448,8 +448,7 @@ def _big_file(guide: Guide, action, detail) -> None:
                 formatting.format_kb(item.size_kb),
                 f"{item.share_pct:.1f}%" if item.share_pct is not None
                 else i18n.t("common.none"),
-                formatting.format_kb_delta(item.delta_kb)
-                if item.previous_kb is not None else i18n.t("large.new"),
+                formatting.format_large_file_change(item),
             ],
             path=item.path,
             # 이 줄이 가리키는 그 파일.

@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from .. import formatting, i18n, large_files, scan_digest, tiers
+from .. import formatting, i18n, large_files, scan_digest, scan_store, tiers
 from . import theme, widgets
 
 # 세부 탭. 순서가 곧 화면 순서다 - 현황(`overview_page`)이 먼저 열린다.
@@ -53,8 +53,9 @@ FINDING_TABS = {
 FINDING_ACCOUNT_ROLE = Qt.UserRole
 FINDING_TAB_ROLE = Qt.UserRole + 1
 
-GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta"]
-(GROWTH_PATH, GROWTH_SIZE, GROWTH_DELTA) = range(3)
+GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta",
+                      "scan.col.focus"]
+(GROWTH_PATH, GROWTH_SIZE, GROWTH_DELTA, GROWTH_FOCUS) = range(4)
 
 # 가장 큰 파일 표. 디렉터리 합계만 보면 "파일 하나가 유난히 크다"를 놓친다 -
 # 300GB 짜리 디렉터리가 고른 파일 3천 개인지 한 파일이 280GB 인지 구분되지
@@ -170,6 +171,150 @@ def _path_item(path, root) -> QTableWidgetItem:
     if item.text() != path:
         item.setToolTip(path)
     return item
+
+
+# -- 용량 변화 한 줄 (상세 스캔 탭과 계정 상세 창이 같이 쓴다) -------------------
+def growth_change(row) -> Optional[int]:
+    """그 줄의 증감 (KB). 새 경로는 크기 전체, 지난번에 못 잰 곳은 None (모른다)."""
+
+    row = dict(row)
+    if row.get("previous_note") == scan_store.PREVIOUS_UNMEASURED:
+        return None
+    previous = row["previous_kb"]
+    return row["current_kb"] - (previous if previous is not None else 0)
+
+
+def growth_delta_item(row) -> QTableWidgetItem:
+    """증감 칸 - 글자, 정렬 값, 막대 값, 색, 툴팁.
+
+    늘어난 것은 주의 색, 줄어든 것은 좋은 색 (정리한 곳이 보이게). 지난번에 못 잰
+    곳은 '지난번 못 잼' - 크기 전체를 증가로 치면 없던 급증이 생긴다. 지난번에
+    나눠 잰 곳은 조각의 합과 견준 것이라 그렇다고 툴팁에 적는다."""
+
+    row = dict(row)
+    note = row.get("previous_note")
+    change = growth_change(row)
+    if note == scan_store.PREVIOUS_UNMEASURED:
+        # 정렬은 '변화 0' 으로 - 값 없음(None)으로 두면 내림차순에서 맨 위로 뜬다.
+        item = widgets.NumericItem(i18n.t("growth.unmeasured"), 0)
+        item.setToolTip(i18n.t("growth.unmeasured_tip"))
+        item.setForeground(QColor(theme.TEXT_MUTED))
+    else:
+        text = (
+            i18n.t("scan.new_path") if row["previous_kb"] is None
+            else formatting.format_kb_delta(change)
+        )
+        item = widgets.NumericItem(text, change)
+        item.setData(widgets.ChangeBarDelegate.VALUE_ROLE, change)
+        if note == scan_store.PREVIOUS_PIECED:
+            item.setToolTip(i18n.t("tree.note.previous_pieced"))
+        if change > 0:
+            item.setForeground(QColor(theme.tier_text(tiers.WARN)))
+        elif change < 0:
+            item.setForeground(QColor(theme.GOOD_TEXT))
+        else:
+            item.setForeground(QColor(theme.TEXT_MUTED))
+    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    return item
+
+
+def growth_focus_item(row) -> QTableWidgetItem:
+    """'가장 많이 변한 곳' 칸 - 그 줄의 변화가 안쪽 어디에 몰렸나.
+
+    야간 스캔이 요약을 남길 때 따라 내려가 둔 것이다 (`scan_store.change_focus`).
+    요약 없이 창이 스스로 읽었으면 비어 있다. 변화가 한 곳으로 모이지 않았으면
+    '여러 곳에 고르게' - 아무 데나 지목하면 틀린 안내가 된다. 하위 폴더가 아니라
+    폴더에 직접 있는 파일이 변했으면 그렇다고 쓴다."""
+
+    row = dict(row)
+    item = QTableWidgetItem("")
+    focus = row.get("focus")
+    if not focus:
+        return item
+    change = growth_change(row)
+    note = focus.get("note")
+    if note == scan_store.FOCUS_SPREAD:
+        item.setText(i18n.t("growth.focus.spread"))
+        item.setForeground(QColor(theme.TEXT_MUTED))
+        return item
+    where = formatting.relative_path(focus["path"], row["path"])
+    if focus["path"].rstrip("/") == row["path"].rstrip("/"):
+        where = ""
+    delta = formatting.format_kb_delta(focus["delta_kb"])
+    key = {
+        scan_store.FOCUS_NEW: "growth.focus.new",
+        scan_store.FOCUS_GONE: "growth.focus.gone",
+        scan_store.FOCUS_FILES: "growth.focus.files_in" if where else "growth.focus.files",
+    }.get(note, "growth.focus")
+    item.setText(i18n.t(key, where=where, delta=delta))
+    tip = [focus["path"]]
+    if change:
+        tip.append(i18n.t(
+            "growth.focus.tip", total=formatting.format_kb_delta(change), delta=delta,
+            pct=f"{focus['delta_kb'] / change * 100:.0f}",
+        ))
+    item.setToolTip("\n".join(tip))
+    return item
+
+
+def growth_total_text(entry) -> str:
+    """'계정 전체 +2.1 TB (30.6 TB -> 32.8 TB)' - 끝난 두 바퀴의 합계로.
+
+    줄마다의 증감을 더하면 안 된다 - 목록은 위에서 자른 것이고, 깊이를 늘려 두면
+    부모와 자식을 겹쳐 센다."""
+
+    current = getattr(entry, "current_measured_kb", None)
+    previous = getattr(entry, "previous_measured_kb", None)
+    if current is None or previous is None:
+        return ""
+    return i18n.t(
+        "scan.growth_total",
+        delta=formatting.format_kb_delta(current - previous),
+        previous=formatting.format_kb(previous),
+        current=formatting.format_kb(current),
+    )
+
+
+def mark_large_file_row(table, row: int, item, path_column: int,
+                        share_column: int, change_column: int) -> None:
+    """눈에 띄는 큰 파일은 **까닭이 된 칸**을 칠한다 (경로 칸은 눈이 가게 함께).
+
+    예전에는 줄 전체를 칠하고 설명에 "주황색은 계정 안에서 혼자 두드러지는 파일" 이라고
+    썼는데, 실제로는 지난 스캔보다 크게 늘었거나 목록에 없던 파일도 같은 색이었다.
+    칸을 칠하면 무엇 때문인지가 색만으로 보인다."""
+
+    if not item.is_notable:
+        return
+    color = QColor(theme.tier_text(tiers.WARN))
+    cells = [path_column]
+    if item.dominates_account:
+        cells.append(share_column)
+    if item.grew_sharply or item.is_new_to_the_list:
+        cells.append(change_column)
+    for column in cells:
+        cell = table.item(row, column)
+        if cell is not None:
+            cell.setForeground(color)
+
+
+def large_file_reasons(item) -> list:
+    """왜 눈에 띄는지 - 사람 말로 (툴팁)."""
+
+    return [
+        i18n.t(
+            key,
+            pct=f"{item.share_pct:.0f}" if item.share_pct else "-",
+            ratio=f"{item.size_kb / item.previous_kb:.1f}" if item.previous_kb else "-",
+        )
+        for key in item.reasons()
+    ]
+
+
+def large_files_legend() -> str:
+    return i18n.t(
+        "large.legend",
+        share=f"{large_files.SHARE_ALERT_PCT:g}", ratio=f"{large_files.GROWTH_ALERT_RATIO:g}",
+    )
 
 
 def _entry_for(snapshot, account_id):
@@ -367,11 +512,13 @@ class SummaryPage(QWidget):
                 "digest.item.partial", account=finding.account, count=finding.count
             )
         if finding.kind == scan_digest.FINDING_LARGE_FILE:
-            change = (
-                formatting.format_kb_delta(finding.delta_kb)
-                if finding.delta_kb is not None
-                else i18n.t("large.new")
-            )
+            if finding.delta_kb is not None:
+                change = formatting.format_kb_delta(finding.delta_kb)
+            elif finding.compared:
+                change = i18n.t("large.new")
+            else:
+                # 첫 스캔 - 견줄 목록이 없다. 눈에 띈 까닭은 비중뿐이다.
+                change = i18n.t("large.reason.share", pct=f"{finding.pct or 0:.0f}")
             return i18n.t(
                 "digest.item.large_file",
                 account=finding.account,
@@ -571,7 +718,12 @@ class GrowthPage(QWidget):
         header = table.horizontalHeader()
         header.setSectionResizeMode(GROWTH_PATH, QHeaderView.Stretch)
         header.setSectionResizeMode(GROWTH_SIZE, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(GROWTH_DELTA, QHeaderView.ResizeToContents)
+        # 증감 칸은 막대가 들어갈 만큼 넉넉히 - 내용 폭에 맞추면 막대가 글자 밑에 숨는다.
+        header.setSectionResizeMode(GROWTH_DELTA, QHeaderView.Interactive)
+        table.setColumnWidth(GROWTH_DELTA, 190)
+        header.setSectionResizeMode(GROWTH_FOCUS, QHeaderView.Stretch)
+        self.bars = widgets.ChangeBarDelegate(table)
+        table.setItemDelegateForColumn(GROWTH_DELTA, self.bars)
         # 이 표에는 칸 위젯이 없어 Qt 내장 정렬을 그대로 쓸 수 있다.
         # (계정 표는 막대·배지가 칸 위젯이라 Qt 정렬을 켜면 위젯이 행을 따라
         #  움직이지 않아 어긋난다 - 그쪽은 직접 정렬해 다시 그린다.)
@@ -643,6 +795,7 @@ class GrowthPage(QWidget):
         previous = formatting.scan_label(
             entry.previous_scan_at, (entry.last_completed_generation or 1) - 1
         )
+        total = growth_total_text(entry)
         self.caption.setText(
             i18n.t(
                 "scan.growth_caption",
@@ -651,7 +804,7 @@ class GrowthPage(QWidget):
                     entry.current_scan_at, entry.last_completed_generation
                 ),
                 previous=previous,
-                notice=notice,
+                notice=("  ·  " + total if total else "") + notice,
             )
         )
         # 열 제목에 비교 대상 날짜를 박는다 - "이전 스캔 대비"보다
@@ -665,25 +818,17 @@ class GrowthPage(QWidget):
             ),
         )
         self.table.setRowCount(len(entry.growth))
+        changes = [abs(growth_change(row) or 0) for row in entry.growth]
+        self.bars.scale = max(changes, default=0)
         for index, row in enumerate(entry.growth):
             current_kb = row["current_kb"]
-            previous_kb = row["previous_kb"]
             self.table.setItem(index, GROWTH_PATH, _path_item(row["path"], account.path))
-            self.table.setItem(
-                index, GROWTH_SIZE,
-                widgets.NumericItem(formatting.format_kb(current_kb), current_kb),
-            )
-            if previous_kb is None:
-                delta_text = i18n.t("scan.new_path")
-            else:
-                delta_text = formatting.format_kb_delta(current_kb - previous_kb)
+            size = widgets.NumericItem(formatting.format_kb(current_kb), current_kb)
+            size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.table.setItem(index, GROWTH_SIZE, size)
             # 새 경로는 통째로 늘어난 것으로 본다 (저장소가 고른 순서와 같다).
-            delta_value = (
-                current_kb - previous_kb if previous_kb is not None else current_kb
-            )
-            self.table.setItem(
-                index, GROWTH_DELTA, widgets.NumericItem(delta_text, delta_value)
-            )
+            self.table.setItem(index, GROWTH_DELTA, growth_delta_item(row))
+            self.table.setItem(index, GROWTH_FOCUS, growth_focus_item(row))
         return GROWTH_DELTA
 
     def _show_biggest(self, entry, account, notice: str) -> int:
@@ -698,14 +843,15 @@ class GrowthPage(QWidget):
             )
         )
         self.table.setRowCount(len(entry.top_paths))
+        self.bars.scale = 0
         dash = i18n.t("common.none")
         for index, row in enumerate(entry.top_paths):
             self.table.setItem(index, GROWTH_PATH, _path_item(row["path"], account.path))
-            self.table.setItem(
-                index, GROWTH_SIZE,
-                widgets.NumericItem(formatting.format_kb(row["size_kb"]), row["size_kb"]),
-            )
+            size = widgets.NumericItem(formatting.format_kb(row["size_kb"]), row["size_kb"])
+            size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.table.setItem(index, GROWTH_SIZE, size)
             self.table.setItem(index, GROWTH_DELTA, widgets.NumericItem(dash, None))
+            self.table.setItem(index, GROWTH_FOCUS, QTableWidgetItem(""))
         return GROWTH_SIZE
 
 
@@ -745,32 +891,27 @@ class LargeFilesPage(QWidget):
             self.caption.setText(i18n.t("large.no_scan"))
             return
 
-        files = large_files.build(entry.large_files, entry.measured_kb)
+        # 비중은 그 파일들을 잰 바퀴(끝난 것)의 합계로 나눈다. `measured_kb` 는
+        # 하는 중인 바퀴의 '지금까지 잰 양'이라 그것으로 나누면 비중이 부푼다.
+        files = large_files.build(entry.large_files, entry.current_measured_kb)
         if not files:
             self.caption.setText(i18n.t("large.none", account=entry.account_name))
             return
 
         root = account.path if account else ""
         shown = files[:LARGE_ROWS_SHOWN]
+        notable = sum(1 for item in shown if item.is_notable)
+        heading = i18n.t("large.heading", account=entry.account_name, count=len(shown))
+        if notable:
+            heading += i18n.t("large.heading_notable", notable=notable)
         self.caption.setText(
-            i18n.t("large.heading", account=entry.account_name, count=len(shown))
-            + _root_note(root)
+            heading + _root_note(root) + ("\n" + large_files_legend() if notable else "")
         )
         table.setRowCount(len(shown))
         dash = i18n.t("common.none")
         for row, item in enumerate(shown):
             path_item = QTableWidgetItem(formatting.relative_path(item.path, root))
-            reasons = [
-                i18n.t(
-                    key,
-                    pct=f"{item.share_pct:.0f}" if item.share_pct else "-",
-                    ratio=(
-                        f"{item.size_kb / item.previous_kb:.1f}"
-                        if item.previous_kb else "-"
-                    ),
-                )
-                for key in item.reasons()
-            ]
+            reasons = large_file_reasons(item)
             # 줄여 보여 준 경로는 전체를 툴팁에 둔다 - 사람이 그 경로로 가야 한다.
             tip = reasons + ([item.path] if path_item.text() != item.path else [])
             if tip:
@@ -789,16 +930,15 @@ class LargeFilesPage(QWidget):
             table.setItem(row, LARGE_SHARE, share_item)
 
             if item.previous_kb is None:
-                change_item = QTableWidgetItem(i18n.t("large.new"))
+                change_item = QTableWidgetItem(formatting.format_large_file_change(item))
             else:
                 change_item = widgets.NumericItem(
-                    formatting.format_kb_delta(item.delta_kb), item.delta_kb
+                    formatting.format_large_file_change(item), item.delta_kb
                 )
             table.setItem(row, LARGE_CHANGE, change_item)
+            for column in (LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE):
+                table.item(row, column).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-            # 눈에 띄는 것만 색을 준다. 전부 칠하면 아무것도 강조되지 않는다.
-            if item.is_notable:
-                for column in range(len(LARGE_COLUMN_KEYS)):
-                    cell = table.item(row, column)
-                    if cell is not None:
-                        cell.setForeground(QColor(theme.tier_text(tiers.WARN)))
+            # 눈에 띄는 것만, 그 까닭이 된 칸에 색을 준다. 전부 칠하면 아무것도
+            # 강조되지 않는다.
+            mark_large_file_row(table, row, item, LARGE_PATH, LARGE_SHARE, LARGE_CHANGE)

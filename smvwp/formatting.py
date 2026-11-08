@@ -319,9 +319,40 @@ def format_kb_delta(delta_kb: Optional[int]) -> str:
     if delta_kb is None:
         return "-"
     if delta_kb == 0:
-        return "변화 없음"
+        return i18n.t("scan.no_change")
     sign = "+" if delta_kb > 0 else "-"
     return f"{sign}{format_kb(abs(delta_kb))}"
+
+
+def format_tree_change(node) -> str:
+    """트리 한 줄(`tree_view.TreeNode`)의 '지난 스캔 대비' 칸.
+
+    - 계산으로 만든 줄(나머지·접은 줄)은 말하지 않는다 - 이전 세대의 자식 구성이
+      같다는 보장이 없어 그럴듯하지만 틀린 수가 된다.
+    - 견줄 스캔이 없으면 말하지 않는다.
+    - 지난번에 없던 폴더는 '지난 스캔에 없던 것', 큰 파일은 '목록에 없던 파일' -
+      파일은 지난 **상위 목록**에 없었다는 것까지만 안다 (그때는 작았을 수 있다)."""
+
+    from . import tree_view
+
+    if node.kind in (tree_view.REST, tree_view.MORE) or not node.compared:
+        return i18n.t("common.none")
+    if node.previous_kb is None:
+        return i18n.t("large.new" if node.kind == tree_view.FILE else "tree.new")
+    return format_kb_delta(node.delta_kb)
+
+
+def format_large_file_change(item) -> str:
+    """큰 파일(`large_files.LargeFile`)의 '지난 스캔 대비' 한 칸.
+
+    지난 목록에 없었으면 '목록에 없던 파일' - "새로 생겼다"가 아니다 (그때는 작았을
+    수 있다). 견줄 목록이 아예 없었으면(첫 스캔) 아무 말도 하지 않는다."""
+
+    if item.previous_kb is not None:
+        return format_kb_delta(item.size_kb - item.previous_kb)
+    if getattr(item, "compared", True):
+        return i18n.t("large.new")
+    return i18n.t("common.none")
 
 
 def path_tooltip(account, sample) -> str:

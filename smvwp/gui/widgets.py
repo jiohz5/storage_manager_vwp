@@ -250,6 +250,45 @@ class TierRowDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
+class ChangeBarDelegate(QStyledItemDelegate):
+    """증감 칸 뒤에 그 크기만큼의 옅은 막대를 깐다.
+
+    숫자만으로는 `+3.2 TB` 와 `+307.2 GB` 가 한 줄 차이로 보인다 - 열 배인데.
+    막대를 깔면 목록을 읽지 않고도 어디가 크게 변했는지 보인다. 늘어난 것은 주의
+    색, 줄어든 것은 좋은 색의 옅은 쪽이고 글자는 그 위에 그대로 읽힌다.
+
+    값은 칸의 `VALUE_ROLE` (부호 있는 KB). 가장 큰 변화가 칸을 다 채운다
+    (`scale` - 표를 채울 때 정한다). 막대를 칸 위젯으로 얹지 않는 것은 Qt 정렬을
+    켜 두기 위해서다 - 칸 위젯은 정렬해도 행을 따라가지 않는다."""
+
+    VALUE_ROLE = Qt.UserRole + 7
+    INSET = 6
+    ALPHA = 0.22
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.scale = 0
+
+    def paint(self, painter, option, index) -> None:
+        value = index.data(self.VALUE_ROLE)
+        if value and self.scale > 0 and not (option.state & QStyle.State_Selected):
+            rect = option.rect.adjusted(self.INSET, 7, -self.INSET, -7)
+            width = max(2.0, rect.width() * min(1.0, abs(value) / self.scale))
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(Qt.NoPen)
+            # 옅은 면 색(`WARN_SOFT`)은 어두운 화면에서 바탕과 거의 같아 막대가 안 보였다.
+            # 등급 색·좋은 색을 비쳐 보이게 깔면 두 화면 모두에서 읽힌다.
+            color = QColor(theme.tier_color(tiers.WARN) if value > 0 else theme.GOOD_TEXT)
+            color.setAlphaF(self.ALPHA)
+            painter.setBrush(color)
+            painter.drawRoundedRect(
+                QRectF(rect.right() - width, rect.top(), width, rect.height()), 3, 3
+            )
+            painter.restore()
+        super().paint(painter, option, index)
+
+
 class UsageBar(QWidget):
     """사용률을 숫자 + 막대로 함께 보여준다.
 

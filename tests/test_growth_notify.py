@@ -291,6 +291,71 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
         self.assertEqual(summary.accounts[0].search_status, "error")
 
 
+class GrowthAgainstHowLastNightWasMeasuredTests(unittest.TestCase):
+    """지난밤에 그 경로의 줄이 없었다고 다 새로 생긴 것이 아니다.
+
+    예전에는 지난밤 시간 초과로 나눠 잰 폴더, 또는 권한 오류로 못 잰 폴더가 오늘
+    통째로 '새 경로'가 되어, 크기 전체(수 TB)가 증가로 잡혀 경로 급증 알림이 갔다.
+    실제로는 아무것도 안 늘었다."""
+
+    BIG = 500 * GB_KB
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.tmp.name)
+        self.config = config_module.load_config(self.data_dir)
+        self.config.settings.growth_alert_min_kb = 100 * GB_KB
+        # 경로는 결과 표의 것과 맞으면 된다 - 디스크에 없어도 된다 (`add_account` 는
+        # 경로가 있어야 받는다).
+        self.account = Account(name="project_a", path="/acct", account_id="acct-1")
+        self.config.accounts = [self.account]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _notify(self):
+        outcome = nightly_scan.AccountOutcome(
+            account_id=self.account.account_id, account_name="project_a",
+            baseline_status="done", baseline_generation=2,
+        )
+        return nightly_scan._notify_growth(
+            self.data_dir, self.config, [outcome], datetime.now(timezone.utc)
+        )
+
+    def _whole_tonight(self, conn):
+        support.scan_pass(conn, self.account.account_id, 2, ["/acct/a"], {
+            "/acct/a": support.whole({
+                "/acct/a/x": self.BIG, "/acct/a/y": self.BIG, "/acct/a": 2 * self.BIG + 10,
+            }),
+        })
+
+    def test_a_folder_measured_in_pieces_last_night_does_not_alert(self):
+        with scan_store.session(self.data_dir) as conn:
+            support.scan_pass(conn, self.account.account_id, 1, ["/acct/a"], {
+                "/acct/a": support.cut({"/acct/a/x": self.BIG}),
+                "/acct/a/y": support.whole({"/acct/a/y": self.BIG}),
+            }, subdirs={"/acct/a": ["/acct/a/x", "/acct/a/y"]})
+            self._whole_tonight(conn)
+        self.assertEqual(self._notify(), 0)
+
+    def test_a_folder_that_could_not_be_measured_last_night_does_not_alert(self):
+        with scan_store.session(self.data_dir) as conn:
+            support.scan_pass(conn, self.account.account_id, 1, ["/acct/a"],
+                              {"/acct/a": support.failed()})
+            self._whole_tonight(conn)
+        self.assertEqual(self._notify(), 0)
+
+    def test_a_really_new_big_folder_alerts_once(self):
+        """부모와 그 안의 자식을 따로 알리면 같은 증가가 세 번 간다 - 화면의 증가 경로
+        목록과 같은 깊이(측정 단위)로 알린다."""
+
+        with scan_store.session(self.data_dir) as conn:
+            support.scan_pass(conn, self.account.account_id, 1, ["/acct/b"],
+                              {"/acct/b": support.whole({"/acct/b": 10})})
+            self._whole_tonight(conn)
+        self.assertEqual(self._notify(), 1)
+
+
 class AdminPinChangeTests(unittest.TestCase):
     def test_default_detection(self):
         self.assertTrue(admin_auth.is_using_default(""))

@@ -25,7 +25,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
@@ -62,17 +64,34 @@ NODE_ROLE = Qt.UserRole
 LOADED_ROLE = Qt.UserRole + 1
 
 
+@dataclass
+class TreeResult:
+    """불러온 것 - 트리와, 그것이 **언제 잰 것이고 무엇과 견줬는지**.
+
+    트리는 지금 재는 것이 아니라 끝난 스캔의 기록이다. 그 스캔이 며칠 전일 수
+    있으므로 날짜를 함께 말해야 숫자를 제대로 읽는다."""
+
+    roots: List[object]
+    total_kb: Optional[int]
+    current_at: Optional[str] = None
+    previous_at: Optional[str] = None
+    generation: Optional[int] = None
+
+
 class _TreeLoader(ThreadWorker):
     """DB 읽기를 작업 스레드로 뺀다.
 
-    결과는 `(roots, 계정 총량 KB)`. 아직 끝난 스캔이 없으면 **None** - 빈
-    트리와 "아직 안 쟀다" 는 다른 이야기라 화면이 갈라 말한다."""
+    결과는 `TreeResult`. 아직 끝난 스캔이 없으면 **None** - 빈 트리와 "아직 안
+    쟀다" 는 다른 이야기라 화면이 갈라 말한다."""
 
     THREAD_NAME = "smvwp-tree"
 
     def __init__(self, data_dir: Path, parent=None):
         super().__init__(parent)
         self._data_dir = data_dir
+        # 계정 id -> 계정 경로. 뿌리를 계정 안의 이름으로 부르고 나눠 잰 폴더를
+        # 다시 세우는 데 쓴다 (`tree_view.build_tree` 의 `root_path`).
+        self.account_paths = {}
 
     def run_async(self, account_id: str) -> bool:
         return self.start(account_id)
@@ -103,15 +122,23 @@ class _TreeLoader(ThreadWorker):
             large = scan_store.large_file_changes(
                 conn, account_id, generation, previous
             )
-            total = scan_store.measured_total_kb(conn, account_id, generation)
 
+        # 계정 합계는 뿌리(계정 바로 아래 폴더들)의 합이다. 나눠 잰 폴더를 다시
+        # 세우므로 그 밤에 잰 것을 겹치지도 빠뜨리지도 않고 한 번씩 센다 - 비중을 다
+        # 더하면 100% 가 된다.
         roots = tree_view.build_tree(
             entries,
             previous=previous_entries,
             large_files=large,
-            account_total_kb=total,
+            root_path=self.account_paths.get(account_id),
         )
-        return roots, total
+        return TreeResult(
+            roots=roots,
+            total_kb=sum(node.size_kb for node in roots) if roots else None,
+            current_at=state.last_completed_at,
+            previous_at=state.previous_completed_at if previous else None,
+            generation=generation,
+        )
 
 
 class TreeDialog(QDialog):
@@ -126,6 +153,9 @@ class TreeDialog(QDialog):
         self.resize(940, 620)
 
         self._loader = _TreeLoader(data_dir, self)
+        self._loader.account_paths = {
+            account.account_id: account.path for account in config.accounts
+        }
         self._loader.finished.connect(self._on_result)
         self._loader.failed.connect(self._on_failed)
 
@@ -217,10 +247,12 @@ class TreeDialog(QDialog):
         map_box.addWidget(self.map_hint)
         self.tabs.addTab(map_page, i18n.t("tree.tab.map"))
 
+        # 목록의 회색 줄·나머지 줄을 설명하는 말이라 목록 쪽에 둔다. 창 아래에 두면
+        # 그림 탭에서도 보여, 그림의 안내와 두 덩어리가 겹쳐 읽혔다.
         self.legend = QLabel(i18n.t("tree.legend"))
         self.legend.setObjectName("caption")
         self.legend.setWordWrap(True)
-        root.addWidget(self.legend)
+        list_box.addWidget(self.legend)
 
         bottom = QHBoxLayout()
         bottom.addStretch(1)
@@ -247,7 +279,7 @@ class TreeDialog(QDialog):
         if result is None:
             self._on_empty()
         else:
-            self._on_loaded(*result)
+            self._on_loaded(result)
 
     def _on_empty(self) -> None:
         """완료된 스캔이 없다.
@@ -259,24 +291,38 @@ class TreeDialog(QDialog):
         self.treemap.set_roots([])
         self.caption.setText(i18n.t("tree.no_scan"))
 
-    def _on_loaded(self, roots, total_kb) -> None:
+    def _on_loaded(self, result: TreeResult) -> None:
+        roots = result.roots
         self.tree.clear()
         self.treemap.set_roots(roots)
         self._on_map_zoomed()
         if not roots:
             self._on_empty()
             return
+        # '지난 스캔 대비' 대신 견준 스캔의 날짜를 열 제목에 - 증가 경로 표와 같다.
+        previous = (
+            formatting.scan_label(result.previous_at, (result.generation or 1) - 1)
+            if result.previous_at else None
+        )
+        self.tree.headerItem().setText(
+            COL_CHANGE,
+            i18n.t("scan.col.delta_dated", previous=previous) if previous
+            else i18n.t("tree.col.change"),
+        )
         for node in roots:
             item = self._make_item(node)
             self.tree.addTopLevelItem(item)
         self._fill_children(self.tree.invisibleRootItem(), depth=AUTO_EXPAND_DEPTH)
         for index in range(self.tree.topLevelItemCount()):
             self.tree.topLevelItem(index).setExpanded(True)
+        when = formatting.scan_label(result.current_at, result.generation)
         self.caption.setText(
             i18n.t(
                 "tree.caption",
+                when=when,
+                compared=i18n.t("tree.caption_compared", previous=previous) if previous else "",
                 count=f"{tree_view.count_directories(roots):,}",
-                total=formatting.format_kb(total_kb),
+                total=formatting.format_kb(result.total_kb),
             )
         )
 
@@ -284,16 +330,24 @@ class TreeDialog(QDialog):
     def _make_item(self, node) -> QTreeWidgetItem:
         item = QTreeWidgetItem()
         item.setText(COL_PATH, self._label_for(node))
-        item.setToolTip(COL_PATH, node.path)
+        notes = tree_view.notes(node)
+        item.setToolTip(COL_PATH, "\n".join([node.path] + [i18n.t(key) for key in notes]))
         item.setText(COL_SIZE, formatting.format_kb(node.size_kb))
         item.setTextAlignment(COL_SIZE, Qt.AlignRight | Qt.AlignVCenter)
+        if node.pieced:
+            item.setToolTip(COL_SIZE, i18n.t("tree.note.pieced"))
 
         share = node.share_pct
         item.setText(COL_SHARE, f"{share:.1f}%" if share is not None else "-")
         item.setTextAlignment(COL_SHARE, Qt.AlignRight | Qt.AlignVCenter)
 
-        item.setText(COL_CHANGE, self._change_text(node))
+        item.setText(COL_CHANGE, formatting.format_tree_change(node))
         item.setTextAlignment(COL_CHANGE, Qt.AlignRight | Qt.AlignVCenter)
+        if node.compared and node.previous_kb is not None and node.delta_kb == 0:
+            # '변화 없음' 이 줄마다 같은 색이면 변한 줄이 묻힌다.
+            item.setForeground(COL_CHANGE, QColor(theme.TEXT_MUTED))
+        if node.previous_pieced:
+            item.setToolTip(COL_CHANGE, i18n.t("tree.note.previous_pieced"))
 
         if node.is_notable:
             for column in range(len(COLUMN_KEYS)):
@@ -320,17 +374,6 @@ class TreeDialog(QDialog):
         if node.kind == tree_view.FILE:
             return i18n.t("tree.file", name=node.label)
         return node.label
-
-    def _change_text(self, node) -> str:
-        if node.kind in (tree_view.REST, tree_view.MORE):
-            # 나머지 줄의 증감은 계산하지 않는다 - 이전 세대의 자식 구성이
-            # 같다는 보장이 없어 그럴듯하지만 틀린 수가 된다.
-            return "-"
-        if not node.compared:
-            return "-"
-        if node.previous_kb is None:
-            return i18n.t("tree.new")
-        return formatting.format_kb_delta(node.delta_kb)
 
     def _on_expanded(self, item: QTreeWidgetItem) -> None:
         self._fill_children(item, depth=1)

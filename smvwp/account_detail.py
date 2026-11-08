@@ -81,12 +81,24 @@ class AccountDetail:
         return list(self.scan.growth or self.scan.top_paths or [])
 
     @property
-    def measured_delta_kb(self) -> Optional[int]:
-        """지난 스캔 대비 이 계정이 얼마나 늘었나. 견줄 것이 없으면 None."""
+    def measured_kb(self) -> Optional[int]:
+        """마지막으로 **끝난** 스캔이 잰 이 계정의 크기. 없으면 None.
+
+        스냅숏의 `measured_kb` 는 하는 중인 바퀴의 '지금까지 잰 양'이다 - 진행
+        정도일 뿐 계정의 크기가 아니다. 큰 계정은 한 바퀴에 며칠이 걸려, 그것을
+        크기로 쓰면 그 며칠 내내 반쪽 숫자가 '잰 용량'으로 떴다."""
 
         if self.scan is None:
             return None
-        current, previous = self.scan.measured_kb, self.scan.previous_measured_kb
+        return getattr(self.scan, "current_measured_kb", None)
+
+    @property
+    def measured_delta_kb(self) -> Optional[int]:
+        """지난 스캔 대비 이 계정이 얼마나 늘었나 (끝난 두 바퀴). 견줄 것이 없으면 None."""
+
+        if self.scan is None:
+            return None
+        current, previous = self.measured_kb, self.scan.previous_measured_kb
         if current is None or previous is None:
             return None
         return current - previous
@@ -184,8 +196,9 @@ def _read_scan(detail, data_dir, config, account) -> None:
         snapshot = nightly_scan.get_status_snapshot(data_dir, config)
         detail.scan = next(iter(snapshot.accounts), None)
         if detail.scan is not None:
+            # 비중은 그 파일들을 잰 바퀴(끝난 것)의 합계로 나눈다.
             detail.large_files = large_files.build(
-                detail.scan.large_files, detail.scan.measured_kb
+                detail.scan.large_files, detail.measured_kb
             )
     except Exception:
         logger.exception("스캔 상태 읽기 실패 (%s)", account.account_id)

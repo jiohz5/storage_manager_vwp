@@ -225,6 +225,210 @@ class BaselineResultsAndGrowthDeltaTests(ScanStoreTestCase):
         self.assertEqual(remaining_generations, {2, 3})
 
 
+class SplitNightTests(ScanStoreTestCase):
+    """시간 초과로 나눠 잰 밤.
+
+    `/acct/a` 가 시간 초과로 끊겨 먼저 끝난 `x` 만 남고 `y`, `z` 는 다시 큐에 들어가
+    따로 재진다. 그 밤에는 `/acct/a` 자체의 줄이 없다. 실제 크기는 두 밤 모두 같다
+    (아무것도 안 늘었다) - 그런데 예전에는 나눠 잰 밤의 합계에서 `x` 가 빠졌고,
+    다음 밤에는 `/acct/a` 가 통째로 '새 경로'가 되어 급증 알림까지 갔다."""
+
+    X, Y, Z, B, A_OWN = 3000, 2000, 1000, 500, 50
+    TOPS = ["/acct/a", "/acct/b"]
+
+    def _split_night(self, generation):
+        X, Y, Z, B = self.X, self.Y, self.Z, self.B
+        support.scan_pass(
+            self.conn, "acct-1", generation, self.TOPS,
+            {
+                "/acct/a": support.cut({"/acct/a/x/p": X, "/acct/a/x": X}),
+                "/acct/a/y": support.whole({"/acct/a/y": Y}),
+                "/acct/a/z": support.whole({"/acct/a/z": Z}),
+                "/acct/b": support.whole({"/acct/b": B}),
+            },
+            subdirs={"/acct/a": ["/acct/a/x", "/acct/a/y", "/acct/a/z"]},
+        )
+
+    def _whole_night(self, generation, b=None):
+        X, Y, Z = self.X, self.Y, self.Z
+        support.scan_pass(
+            self.conn, "acct-1", generation, self.TOPS,
+            {
+                "/acct/a": support.whole({
+                    "/acct/a/x/p": X, "/acct/a/x": X, "/acct/a/y": Y, "/acct/a/z": Z,
+                    "/acct/a": X + Y + Z + self.A_OWN,
+                }),
+                "/acct/b": support.whole({"/acct/b": b if b is not None else self.B}),
+            },
+        )
+
+    def _rows(self, generation):
+        return {
+            row["path"]: row
+            for row in scan_store.growth_delta(self.conn, "acct-1", generation, generation - 1, 15, max_depth=0)
+        }
+
+    def test_a_split_night_still_adds_up_to_the_whole_account(self):
+        """먼저 끝난 `x` 도 다시 큐에 넣은 형제들처럼 잰 단위다."""
+
+        self._split_night(1)
+        self.assertEqual(
+            scan_store.measured_total_kb(self.conn, "acct-1", 1),
+            # 쪼개진 `/acct/a` 에 직접 있는 파일은 그 밤에 아무도 안 셌다 - 모른다.
+            self.X + self.Y + self.Z + self.B,
+        )
+
+    def test_the_units_of_a_split_night_are_all_in_the_list(self):
+        self._whole_night(1)
+        self._split_night(2)
+        self.assertEqual(
+            set(self._rows(2)), {"/acct/a/x", "/acct/a/y", "/acct/a/z", "/acct/b"}
+        )
+
+    def test_a_folder_measured_in_pieces_last_time_is_not_new(self):
+        """지난번에 나눠 쟀을 뿐이다. 통째로 '새 경로'로 보면 알림까지 간다."""
+
+        self._split_night(1)
+        self._whole_night(2)
+        row = self._rows(2)["/acct/a"]
+        self.assertEqual(row["previous_kb"], self.X + self.Y + self.Z)
+        self.assertEqual(row["previous_note"], scan_store.PREVIOUS_PIECED)
+
+    def test_a_folder_that_could_not_be_measured_last_time_is_not_new(self):
+        """지난번에 못 잰 것이다 - 얼마였는지 모르지, 새로 생긴 것이 아니다."""
+
+        support.scan_pass(
+            self.conn, "acct-1", 1, self.TOPS,
+            {"/acct/a": support.failed(), "/acct/b": support.whole({"/acct/b": self.B})},
+        )
+        self._whole_night(2)
+        row = self._rows(2)["/acct/a"]
+        self.assertIsNone(row["previous_kb"])
+        self.assertEqual(row["previous_note"], scan_store.PREVIOUS_UNMEASURED)
+
+    def test_a_really_new_folder_is_still_new(self):
+        support.scan_pass(
+            self.conn, "acct-1", 1, ["/acct/b"], {"/acct/b": support.whole({"/acct/b": self.B})},
+        )
+        self._whole_night(2)
+        row = self._rows(2)["/acct/a"]
+        self.assertIsNone(row["previous_kb"])
+        self.assertIsNone(row["previous_note"])
+
+    def test_the_change_order_keeps_a_big_drop(self):
+        """증가 순으로 자르면 크게 줄어든 곳(정리한 곳)이 목록에서 빠진다."""
+
+        self._whole_night(1, b=900_000)
+        self._whole_night(2, b=100)
+        rows = scan_store.growth_delta(self.conn, "acct-1", 2, 1, 1, max_depth=0,
+                                       order=scan_store.ORDER_CHANGE)
+        self.assertEqual([row["path"] for row in rows], ["/acct/b"])
+        rows = scan_store.growth_delta(self.conn, "acct-1", 2, 1, 1, max_depth=0)
+        self.assertEqual([row["path"] for row in rows], ["/acct/a"])
+
+
+class ChangeFocusTests(ScanStoreTestCase):
+    """증가 경로 한 줄의 변화가 그 안의 어디에 몰렸나.
+
+    목록은 측정 단위(계정 바로 아래 폴더)까지만 말한다 - "sim 이 3.2TB 늘었다".
+    사람이 하려는 일은 그다음, **그 안의 어디인지** 찾아 담당자에게 묻는 것이다.
+    그 답이 한 곳으로 모이면 그곳을, 고르게 퍼졌으면 아무 데도 지목하지 않는다."""
+
+    GB = 1024 * 1024
+
+    def _night(self, generation, sizes):
+        """`{경로: KB}` 를 측정 단위 `/acct/<이름>` 별로 나눠 한 바퀴를 돈다."""
+
+        units = sorted({"/".join(path.split("/")[:3]) for path in sizes})
+        outcomes = {}
+        for unit in units:
+            rows = {path: kb for path, kb in sizes.items() if path == unit or path.startswith(unit + "/")}
+            ordered = dict(sorted(rows.items(), key=lambda item: -item[0].count("/")))
+            outcomes[unit] = support.whole(ordered)
+        support.scan_pass(self.conn, "acct-1", generation, units, outcomes)
+
+    def _focus(self, path):
+        return scan_store.change_focus(self.conn, "acct-1", 2, 1, path)
+
+    def test_the_change_is_followed_down_to_where_it_happened(self):
+        G = self.GB
+        before = {"/acct/layout": 1000 * G, "/acct/layout/cpu": 600 * G,
+                  "/acct/layout/cpu/gds": 500 * G, "/acct/layout/cpu/lvs": 100 * G,
+                  "/acct/layout/gpu": 400 * G}
+        after = dict(before)
+        after.update({"/acct/layout": 1300 * G, "/acct/layout/cpu": 900 * G,
+                      "/acct/layout/cpu/gds": 800 * G})
+        self._night(1, before)
+        self._night(2, after)
+        focus = self._focus("/acct/layout")
+        self.assertEqual(focus["path"], "/acct/layout/cpu/gds")
+        self.assertEqual(focus["delta_kb"], 300 * G)
+        self.assertIsNone(focus["note"])
+
+    def test_a_new_folder_is_named_as_new(self):
+        G = self.GB
+        before = {"/acct/sim": 4700 * G, "/acct/sim/r1031": 2500 * G, "/acct/sim/waves": 2200 * G}
+        after = dict(before, **{"/acct/sim": 7900 * G, "/acct/sim/r1107": 3200 * G})
+        self._night(1, before)
+        self._night(2, after)
+        focus = self._focus("/acct/sim")
+        self.assertEqual((focus["path"], focus["note"]), ("/acct/sim/r1107", scan_store.FOCUS_NEW))
+
+    def test_a_drop_is_followed_too(self):
+        """정리한 곳도 찾는다 - 지운 폴더는 '없어짐'."""
+
+        G = self.GB
+        before = {"/acct/scratch": 3000 * G, "/acct/scratch/a": 1600 * G, "/acct/scratch/b": 1400 * G}
+        after = {"/acct/scratch": 1500 * G, "/acct/scratch/a": 1500 * G}
+        self._night(1, before)
+        self._night(2, after)
+        focus = self._focus("/acct/scratch")
+        self.assertEqual((focus["path"], focus["note"]), ("/acct/scratch/b", scan_store.FOCUS_GONE))
+        self.assertEqual(focus["delta_kb"], -1400 * G)
+
+    def test_a_spread_change_is_not_pinned_on_one_folder(self):
+        """고르게 퍼진 변화를 한 곳으로 지목하면 틀린 안내가 된다."""
+
+        G = self.GB
+        before = {"/acct/users": 400 * G, "/acct/users/kim": 100 * G, "/acct/users/lee": 100 * G,
+                  "/acct/users/park": 100 * G, "/acct/users/choi": 100 * G}
+        after = {"/acct/users": 800 * G, "/acct/users/kim": 200 * G, "/acct/users/lee": 200 * G,
+                 "/acct/users/park": 200 * G, "/acct/users/choi": 200 * G}
+        self._night(1, before)
+        self._night(2, after)
+        self.assertEqual(self._focus("/acct/users")["note"], scan_store.FOCUS_SPREAD)
+
+    def test_a_change_in_the_folders_own_files_is_named_so(self):
+        """하위 폴더는 그대로인데 폴더에 직접 있는 파일이 늘었으면 하위 폴더를 지목하면
+        안 된다 - 그 폴더 자신의 파일이다."""
+
+        G = self.GB
+        self._night(1, {"/acct/proj": 300 * G, "/acct/proj/a": 100 * G, "/acct/proj/b": 100 * G})
+        self._night(2, {"/acct/proj": 800 * G, "/acct/proj/a": 110 * G, "/acct/proj/b": 100 * G})
+        focus = self._focus("/acct/proj")
+        self.assertEqual((focus["path"], focus["note"]), ("/acct/proj", scan_store.FOCUS_FILES))
+        self.assertEqual(focus["delta_kb"], 490 * G)
+
+    def test_a_folder_with_no_subfolders_has_nothing_more_to_say(self):
+        """하위 폴더 기록이 없으면 '여러 곳에 고르게'도 아니다 - 그 폴더 자체다."""
+
+        G = self.GB
+        self._night(1, {"/acct/lib": 2000 * G})
+        self._night(2, {"/acct/lib": 1950 * G})
+        self.assertIsNone(self._focus("/acct/lib"))
+
+    def test_it_does_not_go_where_last_night_did_not_look(self):
+        """지난밤 기록이 그 폴더 안까지 내려가지 않았으면, 안쪽 폴더가 '새로' 생긴 것인지
+        알 수 없다 - 그 폴더에서 멈춘다."""
+
+        G = self.GB
+        self._night(1, {"/acct/lib": 100 * G, "/acct/lib/std": 100 * G})
+        self._night(2, {"/acct/lib": 900 * G, "/acct/lib/std": 900 * G,
+                        "/acct/lib/std/v2": 800 * G})
+        focus = self._focus("/acct/lib")
+        self.assertEqual((focus["path"], focus["note"]), ("/acct/lib/std", None))
+
+
 class FailedPathsTests(ScanStoreTestCase):
     """재지 못한 경로를 사유와 함께 돌려주는지.
 
@@ -428,7 +632,8 @@ class ShallowRowsTests(ScanStoreTestCase):
             ["/acct/a", "/acct/a/kid"],
         )
         self.assertEqual(
-            [tuple(row) for row in scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=0)],
+            [(row["path"], row["current_kb"], row["previous_kb"])
+             for row in scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=0)],
             [("/acct/a", 1500, 1000)],
         )
         self.assertEqual(scan_store.measured_total_kb(self.conn, "acct-1", 2), 1500)
@@ -453,7 +658,8 @@ class ShallowRowsTests(ScanStoreTestCase):
         )
         self.assertEqual(scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=0), [])
         self.assertEqual(
-            [tuple(row) for row in scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=1)],
+            [(row["path"], row["current_kb"], row["previous_kb"])
+             for row in scan_store.growth_delta(self.conn, "acct-1", 2, 1, 15, max_depth=1)],
             [("/old", 300, 100)],
         )
         self.assertEqual(scan_store.measured_total_kb(self.conn, "acct-1", 2), 300)

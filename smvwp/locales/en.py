@@ -48,7 +48,7 @@ STRINGS = {
     "detail.health_no_link": "No linked backup account, so nothing was judged.",
     "detail.reclaimable": "{size} would be freed (confirmed backups only)",
     "detail.tab.large": "Large files",
-    "detail.tab.growth": "Growth paths",
+    "detail.tab.growth": "Size changes",
     "detail.tab.health": "Backups by task",
     "detail.health.col.task": "Task / run",
     "detail.health.col.status": "Backup",
@@ -64,7 +64,7 @@ STRINGS = {
     "health.status.no_link": "no link",
     "scan.tab.summary": "Summary",
     "scan.tab.accounts": "By account",
-    "scan.tab.growth": "Growth paths",
+    "scan.tab.growth": "Size changes",
     "scan.tab.large": "Large files",
     "trend.title": "Capacity trend",
     "trend.btn.open": "Trend",
@@ -148,7 +148,7 @@ STRINGS = {
     "guide.full.fix.step3": "After the cleanup, press Refresh on the home screen to see the new usage.",
     "guide.full.nofix.step1": (
         "Look at the paths that grew most below and ask their owners what can go. "
-        "Account detail has the large files and growth paths."
+        "Account detail has the large files and size changes."
     ),
     "guide.full.nofix.step2": (
         "The usual reason for no candidates is a missing backup link. Link a backup "
@@ -339,7 +339,16 @@ STRINGS = {
     "tree.col.size": "Size",
     "tree.col.share": "Share of account",
     "tree.col.change": "vs last scan",
-    "tree.caption": "{count} directories - {total} total - read from what the nightly scan already recorded, nothing is measured again now",
+    "tree.caption": (
+        "Scan of {when}{compared} - {count} directories - {total} total - read from what "
+        "the nightly scan already recorded, nothing is measured again now"
+    ),
+    "tree.caption_compared": " (compared with {previous})",
+    "tree.note.pieced": (
+        "This folder was measured in pieces after a timeout. Its size adds up its "
+        "subfolders, so files directly inside it are not counted."
+    ),
+    "tree.note.previous_pieced": "The last scan measured this folder in pieces - compared with what they added up to.",
     "tree.loading": "Loading...",
     "tree.busy": "Already loading.",
     "tree.failed": "Could not load: {error}",
@@ -498,8 +507,22 @@ STRINGS = {
     "scan.col.current_size": "Current size",
     "scan.col.delta": "vs previous scan",
     "scan.col.delta_dated": "vs {previous}",
+    "scan.col.focus": "Mostly in",
+    "scan.growth_total": "whole account {delta} ({previous} → {current})",
+    "growth.unmeasured": "not measured last time",
+    "growth.unmeasured_tip": (
+        "The last scan could not measure this folder (permission or timeout), so its "
+        "size then is unknown. It is not called growth."
+    ),
+    "growth.focus": "{where} ({delta})",
+    "growth.focus.new": "{where} (new folder, {delta})",
+    "growth.focus.gone": "{where} (gone, {delta})",
+    "growth.focus.spread": "spread evenly",
+    "growth.focus.files": "files directly in this folder ({delta})",
+    "growth.focus.files_in": "files directly in {where} ({delta})",
+    "growth.focus.tip": "{delta} of this folder's {total} change happened here ({pct}%)",
     "scan.nth": "scan #{n}",
-    "scan.select_account": "Select an account to see its growth paths.",
+    "scan.select_account": "Select an account to see its size changes.",
     "scan.no_baseline": "{account}: no completed baseline yet (one full detail scan is required).",
     "scan.growth_caption": "{account}: {current} scan, compared path-by-path with the {previous} scan{notice}",
     "scan.baseline_only_caption": (
@@ -523,7 +546,7 @@ STRINGS = {
     "reports.scan_progress_heading": "[Detail scan progress]",
     # -- Detail scan tab: per-account status --------------------
     "scan.acct.heading": (
-        "Select a row to pick that account (top right); double-click to open its growth paths."
+        "Select a row to pick that account (top right); double-click to open its size changes."
     ),
     "scan.acct.name": "Account",
     "scan.acct.kind": "Kind",
@@ -562,7 +585,12 @@ STRINGS = {
         "previous scan's top list. Absent does not mean new - it may have "
         "been smaller then."
     ),
-    "large.heading": "{account}: {count} largest files  ·  orange ones stand out within the account",
+    "large.heading": "{account}: {count} largest files",
+    "large.heading_notable": " · {notable} stand out",
+    "large.legend": (
+        "Orange cells are why a file stands out - {share}% or more of the account, "
+        "{ratio}x the last scan or more, not in the last list"
+    ),
     "large.col.path": "File",
     "large.col.size": "Size",
     "large.col.share": "Share of account",

@@ -117,6 +117,91 @@ def save_checkpoint_results(conn, account_id: str, generation: int) -> None:
     conn.commit()
 
 
+def whole(sizes, large=()):
+    """끝까지 잰 체크포인트 하나의 결과 (`du` 처럼 자식이 먼저, 루트가 마지막).
+
+    `sizes` 는 `{경로: KB}` - **마지막 항목이 루트**다. `large` 는 `(KB, 경로)`."""
+
+    from smvwp import detail_scan
+
+    entries = list(sizes.items())
+    return detail_scan.DuTreeOutcome(
+        entries=entries, largest_files=list(large),
+        root_size_kb=entries[-1][1], completed=True,
+    )
+
+
+def cut(sizes, large=()):
+    """시간 초과로 끊긴 체크포인트 - 루트 줄이 안 나왔다."""
+
+    from smvwp import detail_scan
+
+    return detail_scan.DuTreeOutcome(
+        entries=list(sizes.items()), largest_files=list(large), timed_out=True,
+    )
+
+
+def failed(message="Permission denied"):
+    from smvwp import detail_scan
+
+    return detail_scan.DuTreeOutcome(error_message=message)
+
+
+def scan_pass(conn, account_id, generation, tops, outcomes, subdirs=None,
+              stop_after=None):
+    """한 세대를 **실제 처리 경로**(`process_one_checkpoint`)로 돈다.
+
+    결과 표에 행을 직접 넣으면 쪼개진 밤에 무엇이 어떤 깊이로 남는지를 시험이
+    지어내게 된다 - 그 지어낸 모양과 운영의 모양이 다르면 시험은 통과하고
+    화면은 틀린다. `outcomes` 는 `{체크포인트 경로: whole(...)/cut(...)/failed()}`,
+    `subdirs` 는 끊긴 체크포인트의 바로 아래 폴더들. `stop_after` 를 주면 그만큼만
+    재고 세대를 끝내지 않는다 (하는 중인 바퀴)."""
+
+    from unittest.mock import patch
+
+    from smvwp import detail_scan, scan_store
+
+    subdirs = subdirs or {}
+    scan_store.seed_checkpoints(conn, account_id, scan_store.BASELINE, generation, list(tops))
+    done = 0
+    while stop_after is None or done < stop_after:
+        checkpoint = scan_store.next_pending(conn, account_id, scan_store.BASELINE, generation)
+        if checkpoint is None:
+            break
+        path = checkpoint["path"]
+        with patch("smvwp.detail_scan.measure_tree", return_value=outcomes[path]),                 patch("smvwp.detail_scan.list_immediate_subdirs",
+                      return_value=list(subdirs.get(path, []))),                 patch("smvwp.detail_scan.os.path.lexists", return_value=True):
+            detail_scan.process_one_checkpoint(conn, checkpoint, 60, generation=generation)
+        done += 1
+    if stop_after is None:
+        scan_store.mark_generation_completed(conn, account_id, generation)
+
+
+GB = 1024 * 1024
+
+
+def two_passes_and_one_running(conn, account_id, root):
+    """끝난 바퀴 둘(1000GB -> 1500GB)과 하는 중인 셋째 바퀴(900GB 까지 잼).
+
+    셋째 바퀴의 '지금까지 잰 양'은 진행 정도일 뿐이다 - 계정의 크기나 증감으로
+    쓰면 바퀴가 도는 동안(큰 계정은 며칠) 숫자가 통째로 틀린다.
+    큰 파일 `{root}/a/big` 은 200GB -> 300GB."""
+
+    tops = [f"{root}/a", f"{root}/b"]
+    big = f"{root}/a/big"
+    scan_pass(conn, account_id, 1, tops, {
+        tops[0]: whole({tops[0]: 600 * GB}, large=[(200 * GB, big)]),
+        tops[1]: whole({tops[1]: 400 * GB}),
+    })
+    scan_pass(conn, account_id, 2, tops, {
+        tops[0]: whole({tops[0]: 900 * GB}, large=[(300 * GB, big)]),
+        tops[1]: whole({tops[1]: 600 * GB}),
+    })
+    scan_pass(conn, account_id, 3, tops, {
+        tops[0]: whole({tops[0]: 900 * GB}, large=[(300 * GB, big)]),
+    }, stop_after=1)
+
+
 def sample_processes(conn, sample_id: int):
     """서버 표본 하나에 딸린 프로세스 줄들 (CPU 많은 순)."""
 

@@ -48,7 +48,7 @@ STRINGS = {
     "detail.health_no_link": "연결된 백업 계정이 없어 판정하지 않았습니다.",
     "detail.reclaimable": "정리하면 {size} 빕니다 (백업이 확인된 것만 셉니다)",
     "detail.tab.large": "큰 파일",
-    "detail.tab.growth": "증가 경로",
+    "detail.tab.growth": "용량 변화",
     "detail.tab.health": "과제별 백업",
     "detail.health.col.task": "과제 / 실행",
     "detail.health.col.status": "백업",
@@ -64,7 +64,7 @@ STRINGS = {
     "health.status.no_link": "연결 없음",
     "scan.tab.summary": "요약",
     "scan.tab.accounts": "계정별",
-    "scan.tab.growth": "증가 경로",
+    "scan.tab.growth": "용량 변화",
     "scan.tab.large": "큰 파일",
     "trend.title": "용량 추세",
     "trend.btn.open": "추세 보기",
@@ -149,7 +149,7 @@ STRINGS = {
     "guide.full.fix.step3": "정리가 끝나면 홈의 `새로고침`을 누르면 사용률이 바로 바뀝니다.",
     "guide.full.nofix.step1": (
         "아래 목록에서 많이 늘어난 곳을 보고, 그 경로의 담당자에게 정리할 수 있는지 "
-        "물어보세요. 더 자세히는 `계정 상세`의 큰 파일·증가 경로에 있습니다."
+        "물어보세요. 더 자세히는 `계정 상세`의 큰 파일·용량 변화에 있습니다."
     ),
     "guide.full.nofix.step2": (
         "정리 후보가 안 나오는 흔한 이유는 백업 계정이 연결되지 않은 것입니다. "
@@ -359,7 +359,16 @@ STRINGS = {
     "tree.col.size": "크기",
     "tree.col.share": "계정 비중",
     "tree.col.change": "지난 스캔 대비",
-    "tree.caption": "디렉터리 {count}개 · 계정 합계 {total} · 야간 스캔이 남긴 기록을 읽은 것이라 지금 다시 재지 않습니다",
+    "tree.caption": (
+        "{when} 스캔 기준{compared} · 디렉터리 {count}개 · 계정 합계 {total} · "
+        "야간 스캔이 남긴 기록을 읽은 것이라 지금 다시 재지 않습니다"
+    ),
+    "tree.caption_compared": " ({previous} 스캔과 견줌)",
+    "tree.note.pieced": (
+        "시간 초과로 나눠 잰 폴더입니다. 크기는 하위 폴더를 더한 값이라 "
+        "이 폴더에 직접 있는 파일은 빠져 있습니다."
+    ),
+    "tree.note.previous_pieced": "지난 스캔은 이 폴더를 나눠 쟀습니다 - 그때 하위 폴더를 더한 값과 견줬습니다.",
     "tree.loading": "불러오는 중...",
     "tree.busy": "이미 불러오는 중입니다.",
     "tree.failed": "불러오지 못했습니다: {error}",
@@ -519,8 +528,22 @@ STRINGS = {
     "scan.col.current_size": "현재 크기",
     "scan.col.delta": "이전 스캔 대비",
     "scan.col.delta_dated": "{previous} 대비",
+    "scan.col.focus": "가장 많이 변한 곳",
+    "scan.growth_total": "계정 전체 {delta} ({previous} → {current})",
+    "growth.unmeasured": "지난번 못 잼",
+    "growth.unmeasured_tip": (
+        "지난 스캔에서 이 폴더를 재지 못해(권한·시간 초과) 그때 얼마였는지 모릅니다. "
+        "늘었다고 말하지 않습니다."
+    ),
+    "growth.focus": "{where} ({delta})",
+    "growth.focus.new": "{where} (새 폴더, {delta})",
+    "growth.focus.gone": "{where} (없어짐, {delta})",
+    "growth.focus.spread": "여러 곳에 고르게",
+    "growth.focus.files": "이 폴더에 직접 있는 파일 ({delta})",
+    "growth.focus.files_in": "{where}에 직접 있는 파일 ({delta})",
+    "growth.focus.tip": "이 폴더의 변화 {total} 가운데 {delta}가 여기서 ({pct}%)",
     "scan.nth": "{n}번째 스캔",
-    "scan.select_account": "계정을 선택하면 증가 경로가 표시됩니다.",
+    "scan.select_account": "계정을 선택하면 용량 변화가 표시됩니다.",
     "scan.no_baseline": "{account}: 아직 완료된 기준선이 없습니다 (상세 스캔이 한 바퀴 끝나야 표시됩니다).",
     "scan.growth_caption": "{account}: {current} 스캔 기준, {previous} 스캔과 같은 경로끼리 비교{notice}",
     "scan.baseline_only_caption": (
@@ -544,7 +567,7 @@ STRINGS = {
     "reports.scan_progress_heading": "[상세 스캔 진행 상황]",
     # -- 상세 스캔 탭: 계정별 현황 표 --------------------------
     "scan.acct.heading": (
-        "행을 고르면 오른쪽 위 계정 선택이 따라오고, 두 번 누르면 그 계정의 증가 경로로 갑니다."
+        "행을 고르면 오른쪽 위 계정 선택이 따라오고, 두 번 누르면 그 계정의 용량 변화로 갑니다."
     ),
     "scan.acct.name": "계정",
     "scan.acct.kind": "성격",
@@ -581,7 +604,12 @@ STRINGS = {
         "'목록에 없던 파일'은 새로 생겼다는 뜻이 아닙니다 - 그때는 작았을 "
         "수도 있습니다."
     ),
-    "large.heading": "{account}: 큰 순서로 {count}개  ·  주황색은 계정 안에서 혼자 두드러지는 파일",
+    "large.heading": "{account}: 큰 순서로 {count}개",
+    "large.heading_notable": " · 눈에 띄는 것 {notable}개",
+    "large.legend": (
+        "주황 칸이 눈에 띈 까닭입니다 - 계정 비중 {share}% 이상 · 지난 스캔의 {ratio}배 이상 · "
+        "지난 목록에 없던 파일"
+    ),
     "large.col.path": "파일",
     "large.col.size": "크기",
     "large.col.share": "계정 비중",

@@ -99,6 +99,16 @@ class HonestyTests(unittest.TestCase):
         self.assertEqual(item.reasons(), [])
         self.assertFalse(item.is_notable)
 
+    def test_with_no_list_to_compare_nothing_is_new_to_it(self):
+        """첫 스캔에는 지난 목록이 아예 없다. 예전에는 그래도 모든 파일이 '목록에
+        없던 파일'로 주황색이 되어, 첫 화면이 온통 눈에 띄는 것이 되었다."""
+
+        item = large_files.LargeFile("/a/x", size_kb=300, previous_kb=None,
+                                     account_total_kb=100000, compared=False)
+        self.assertFalse(item.is_new_to_the_list)
+        self.assertEqual(item.reasons(), [])
+        self.assertFalse(item.is_notable)
+
     def test_all_three_reasons_can_stack(self):
         item = large_files.LargeFile(
             "/a/x", size_kb=900, previous_kb=None, account_total_kb=1000
@@ -117,6 +127,11 @@ class BuildTests(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertEqual(large_files.build([], 1000), [])
+
+    def test_the_store_says_when_there_was_nothing_to_compare(self):
+        built = large_files.build([("/a/x", 300, None, False)], 1000)
+        self.assertFalse(built[0].compared)
+        self.assertFalse(built[0].is_new_to_the_list)
 
 
 class StoreTests(unittest.TestCase):
@@ -151,18 +166,26 @@ class StoreTests(unittest.TestCase):
             self.conn, "acct", 2, [(400, "/a/x"), (300, "/a/y")]
         )
         changes = dict(
-            (path, (now, before))
-            for path, now, before in scan_store.large_file_changes(
+            (path, (now, before, compared))
+            for path, now, before, compared in scan_store.large_file_changes(
                 self.conn, "acct", 2, 1
             )
         )
-        self.assertEqual(changes["/a/x"], (400, 100))
-        self.assertEqual(changes["/a/y"], (300, None))
+        self.assertEqual(changes["/a/x"], (400, 100, True))
+        self.assertEqual(changes["/a/y"], (300, None, True))
 
     def test_the_first_generation_has_nothing_to_compare(self):
         scan_store.save_large_files(self.conn, "acct", 1, [(400, "/a/x")])
         changes = scan_store.large_file_changes(self.conn, "acct", 1, None)
-        self.assertEqual(changes, [("/a/x", 400, None)])
+        self.assertEqual(changes, [("/a/x", 400, None, False)])
+
+    def test_generation_zero_is_no_previous_scan_either(self):
+        """스캔 상태는 첫 세대의 '이전'을 0 으로 넘긴다 (`세대 - 1`). 0 세대의 빈 목록과
+        견주면 모든 파일이 '목록에 없던 파일'이 된다."""
+
+        scan_store.save_large_files(self.conn, "acct", 1, [(400, "/a/x")])
+        changes = scan_store.large_file_changes(self.conn, "acct", 1, 0)
+        self.assertEqual(changes, [("/a/x", 400, None, False)])
 
     def test_old_generations_are_pruned(self):
         """빠뜨리면 계정마다 세대마다 수십 행씩 영원히 쌓인다."""

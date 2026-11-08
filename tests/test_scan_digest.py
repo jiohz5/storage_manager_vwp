@@ -19,7 +19,11 @@ import unittest
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from smvwp import scan_digest
+import tempfile
+from pathlib import Path
+
+from smvwp import config as config_module, nightly_scan, scan_digest, scan_store
+from tests import support
 
 GB = 1024 * 1024
 
@@ -28,7 +32,8 @@ GB = 1024 * 1024
 class FakeAccount:
     account_id: str = "a1"
     account_name: str = "layout_proj"
-    measured_kb: Optional[int] = None
+    # 끝난 바퀴의 합계. 하는 중인 바퀴의 '지금까지 잰 양'(`measured_kb`)과 다르다.
+    current_measured_kb: Optional[int] = None
     previous_measured_kb: Optional[int] = None
     current_scan_at: Optional[str] = "2026-09-10T00:00:00+00:00"
     large_files: List[tuple] = field(default_factory=list)
@@ -55,7 +60,7 @@ class GrowthTests(unittest.TestCase):
         """경로별 증감을 더하면 부모와 자식을 겹쳐 센다."""
 
         digest = scan_digest.build(snapshot(
-            FakeAccount(measured_kb=900 * GB, previous_measured_kb=700 * GB)
+            FakeAccount(current_measured_kb=900 * GB, previous_measured_kb=700 * GB)
         ))
         self.assertEqual(digest.total_delta_kb, 200 * GB)
         self.assertEqual(digest.accounts_compared, 1)
@@ -70,14 +75,14 @@ class GrowthTests(unittest.TestCase):
 
     def test_shrinking_counts_too(self):
         digest = scan_digest.build(snapshot(
-            FakeAccount(measured_kb=500 * GB, previous_measured_kb=700 * GB)
+            FakeAccount(current_measured_kb=500 * GB, previous_measured_kb=700 * GB)
         ))
         self.assertEqual(digest.total_delta_kb, -200 * GB)
 
     def test_nothing_to_compare_is_not_zero(self):
         """0 으로 두면 '안 늘었다'가 되는데 사실은 '견줄 것이 없다'이다."""
 
-        digest = scan_digest.build(snapshot(FakeAccount(measured_kb=900 * GB)))
+        digest = scan_digest.build(snapshot(FakeAccount(current_measured_kb=900 * GB)))
         self.assertIsNone(digest.total_delta_kb)
         self.assertEqual(digest.accounts_compared, 0)
         self.assertEqual(digest.accounts_total, 1)
@@ -107,7 +112,7 @@ class GrowthTests(unittest.TestCase):
         self.assertEqual(digest.biggest.delta_kb, 700 * GB)
 
     def test_with_nothing_measured_there_is_no_biggest(self):
-        digest = scan_digest.build(snapshot(FakeAccount(measured_kb=900 * GB)))
+        digest = scan_digest.build(snapshot(FakeAccount(current_measured_kb=900 * GB)))
         self.assertIsNone(digest.biggest)
 
     def test_an_empty_snapshot_does_not_raise(self):
@@ -115,6 +120,24 @@ class GrowthTests(unittest.TestCase):
         self.assertEqual(digest.accounts_total, 0)
         self.assertIsNone(digest.total_delta_kb)
         self.assertEqual(digest.findings, [])
+
+
+class InProgressPassTests(unittest.TestCase):
+    def test_growth_compares_the_last_two_finished_passes(self):
+        """하는 중인 바퀴의 '지금까지 잰 양'(900GB)은 계정 크기가 아니다. 예전에는
+        그것을 끝난 바퀴와 견줘 1000GB -> 1500GB 인 계정을 -100GB 로 적었다.
+        진짜 스냅숏으로 본다 - 가짜는 이 둘을 가르지 않아 시험이 통과했다."""
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            data_dir = Path(tmp)
+            config = config_module.load_config(data_dir)
+            config.accounts = [config_module.Account(
+                name="layout_proj", path="/acct", account_id="a1")]
+            with scan_store.session(data_dir) as conn:
+                support.two_passes_and_one_running(conn, "a1", "/acct")
+            digest = scan_digest.build(nightly_scan.get_status_snapshot(data_dir, config))
+        self.assertEqual(digest.total_delta_kb, 500 * GB)
+        self.assertEqual(digest.growth[0].total_kb, 1500 * GB)
 
 
 class RunTests(unittest.TestCase):
@@ -189,7 +212,7 @@ class FindingTests(unittest.TestCase):
         """실패가 목록 아래로 밀리면 표 밑으로 사라진다."""
 
         digest = scan_digest.build(snapshot(FakeAccount(
-            measured_kb=900 * GB, previous_measured_kb=100 * GB, failed_count=1,
+            current_measured_kb=900 * GB, previous_measured_kb=100 * GB, failed_count=1,
         )))
         self.assertEqual(digest.findings[0].kind, scan_digest.FINDING_FAILED)
 
@@ -207,7 +230,7 @@ class FindingTests(unittest.TestCase):
 
     def test_a_notable_large_file_shows_up(self):
         digest = scan_digest.build(snapshot(FakeAccount(
-            measured_kb=1000 * GB,
+            current_measured_kb=1000 * GB,
             large_files=[("/a/movie.iso", 300 * GB, 50 * GB)],
         )))
         kinds = [item.kind for item in digest.findings]
@@ -219,7 +242,7 @@ class FindingTests(unittest.TestCase):
 
         digest = scan_digest.build(snapshot(FakeAccount(
             account_id="acct-9",
-            measured_kb=1000 * GB, previous_measured_kb=100 * GB,
+            current_measured_kb=1000 * GB, previous_measured_kb=100 * GB,
             large_files=[("/a/movie.iso", 300 * GB, 50 * GB)],
             failed_count=1, partial_paths=["/a/x"],
         )))
@@ -230,14 +253,14 @@ class FindingTests(unittest.TestCase):
         """전부 올리면 목록이 표가 되고, 표가 되면 원래 문제로 돌아간다."""
 
         digest = scan_digest.build(snapshot(FakeAccount(
-            measured_kb=100_000 * GB,
+            current_measured_kb=100_000 * GB,
             large_files=[("/a/steady.dat", 100 * GB, 100 * GB)],
         )))
         self.assertEqual(digest.findings, [])
 
     def test_a_big_account_jump_is_worth_a_line(self):
         digest = scan_digest.build(snapshot(FakeAccount(
-            measured_kb=900 * GB, previous_measured_kb=100 * GB
+            current_measured_kb=900 * GB, previous_measured_kb=100 * GB
         )))
         kinds = [item.kind for item in digest.findings]
         self.assertIn(scan_digest.FINDING_GROWTH, kinds)
@@ -246,7 +269,7 @@ class FindingTests(unittest.TestCase):
         """작은 계정이 조금 는 것까지 올리면 목록이 잡음으로 찬다."""
 
         digest = scan_digest.build(snapshot(FakeAccount(
-            measured_kb=101 * GB, previous_measured_kb=100 * GB
+            current_measured_kb=101 * GB, previous_measured_kb=100 * GB
         )))
         self.assertEqual(digest.findings, [])
 

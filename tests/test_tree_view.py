@@ -235,11 +235,70 @@ class LargeFileTests(unittest.TestCase):
         self.assertEqual(labels(rest.children), ["movie.iso"])
         self.assertNotIn(tree_view.FILE, kinds(roots[0].children))
 
+    def test_a_file_with_no_list_to_compare_is_not_new_to_it(self):
+        """첫 스캔에는 지난 목록이 없다 - '목록에 없던 파일'은 지어낸 말이 된다."""
+
+        roots = tree_view.build_tree(
+            [("/a", 900 * 1024), ("/a/b", 800 * 1024)],
+            previous=[("/a", 900 * 1024), ("/a/b", 800 * 1024)],
+            large_files=[("/a/b/movie.iso", 700 * 1024, None, False)],
+        )
+        movie = find(roots, "/a/b").children[0]
+        self.assertFalse(movie.is_new)
+        self.assertFalse(movie.is_notable)
+
     def test_a_file_outside_every_known_directory_is_dropped(self):
         roots = tree_view.build_tree(
             [("/a", 900 * 1024)], large_files=[("/elsewhere/big", 700 * 1024, None)]
         )
         self.assertEqual(roots[0].children, [])
+
+
+class SplitNightTests(unittest.TestCase):
+    """시간 초과로 나눠 잰 밤의 기록.
+
+    그 밤에는 쪼개진 폴더(`/acct/a`) 자신의 줄이 없고, 먼저 끝난 자식과 다시 큐에
+    넣은 자식들이 따로 있다. 예전에는 (1) 다음 밤 `/acct/a` 가 '지난 스캔에 없던
+    것'으로 칠해졌고 (2) 나눠 잰 밤의 트리에는 `a` 가 없이 `x`, `y`, `z` 가 계정
+    바로 아래 폴더처럼 전체 경로로 늘어섰다."""
+
+    WHOLE = [("/acct/a", 6050), ("/acct/a/x", 3000), ("/acct/a/x/p", 3000),
+             ("/acct/a/y", 2000), ("/acct/a/z", 1000), ("/acct/b", 500)]
+    SPLIT = [("/acct/a/x", 3000), ("/acct/a/x/p", 3000), ("/acct/a/y", 2000),
+             ("/acct/a/z", 1000), ("/acct/b", 500)]
+
+    def test_a_folder_measured_in_pieces_last_time_is_compared_with_the_pieces(self):
+        roots = tree_view.build_tree(self.WHOLE, previous=self.SPLIT)
+        node = find(roots, "/acct/a")
+        self.assertFalse(node.is_new)
+        self.assertEqual(node.previous_kb, 6000)
+        self.assertTrue(node.previous_pieced)
+        self.assertFalse(node.is_notable)
+
+    def test_a_split_folder_is_put_back_together(self):
+        roots = tree_view.build_tree(self.SPLIT, previous=self.WHOLE, root_path="/acct")
+        self.assertEqual(labels(roots), ["a", "b"])
+        folder = roots[0]
+        self.assertTrue(folder.pieced)
+        self.assertEqual(folder.size_kb, 6000)
+        self.assertEqual(
+            [n.label for n in folder.children if n.kind == tree_view.DIRECTORY],
+            ["x", "y", "z"],
+        )
+        # 하위 폴더를 더한 값이라 '직접 있는 파일' 나머지 줄은 만들지 않는다.
+        self.assertNotIn(tree_view.REST, kinds(folder.children))
+        # 지난 밤에는 통째로 쟀다 - 견줄 수 있다.
+        self.assertEqual(folder.previous_kb, 6050)
+
+    def test_folders_are_named_inside_the_account(self):
+        """뿌리마다 계정 경로 전체를 쓰면 그림의 머리글이 계정 경로로 다 찬다."""
+
+        roots = tree_view.build_tree(self.WHOLE, root_path="/acct/")
+        self.assertEqual(labels(roots), ["a", "b"])
+
+    def test_the_shares_of_the_folders_add_up(self):
+        roots = tree_view.build_tree(self.SPLIT, root_path="/acct")
+        self.assertAlmostEqual(sum(node.share_pct for node in roots), 100.0)
 
 
 class CountTests(unittest.TestCase):

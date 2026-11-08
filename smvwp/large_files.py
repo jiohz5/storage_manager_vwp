@@ -34,6 +34,9 @@ class LargeFile:
     size_kb: int
     previous_kb: Optional[int] = None
     account_total_kb: Optional[int] = None
+    # 지난 목록과 견줬는가. False 면 견줄 목록이 아예 없었다 (첫 스캔) - 그때
+    # `previous_kb` 가 None 인 것은 "목록에 없었다"가 아니라 "모른다"다.
+    compared: bool = True
 
     @property
     def share_pct(self) -> Optional[float]:
@@ -53,9 +56,10 @@ class LargeFile:
     def is_new_to_the_list(self) -> bool:
         """지난 밤 상위 목록에 없었다.
 
-        '새로 생겼다'가 아니다 - 그때는 작았을 수도 있다."""
+        '새로 생겼다'가 아니다 - 그때는 작았을 수도 있다. 견줄 목록이 없었으면
+        아니다 (모르는 것이다)."""
 
-        return self.previous_kb is None
+        return self.compared and self.previous_kb is None
 
     @property
     def grew_sharply(self) -> bool:
@@ -88,17 +92,19 @@ class LargeFile:
 
 
 def build(rows, account_total_kb: Optional[int] = None) -> List[LargeFile]:
-    """`(경로, 지금 KB, 이전 KB)` 목록을 `LargeFile` 로.
+    """`(경로, 지금 KB, 이전 KB, 견줬나)` 목록을 `LargeFile` 로.
 
-    `scan_store.large_file_changes` 가 주는 모양을 그대로 받는다.
+    `scan_store.large_file_changes` 가 주는 모양을 그대로 받는다. 견줬나가 없는
+    세 칸짜리(예전에 남긴 요약)는 견준 것으로 친다 - 예전 뜻 그대로다.
     """
 
     return [
         LargeFile(
-            path=path,
-            size_kb=size_kb,
-            previous_kb=previous_kb,
+            path=row[0],
+            size_kb=row[1],
+            previous_kb=row[2],
             account_total_kb=account_total_kb,
+            compared=bool(row[3]) if len(row) > 3 else True,
         )
-        for path, size_kb, previous_kb in rows
+        for row in rows
     ]

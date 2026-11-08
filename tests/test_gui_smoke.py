@@ -450,12 +450,13 @@ class LargeFilesTableTests(_GuiCase):
             account_id = account.account_id
             account_name = account.name
             large_files = rows
-            measured_kb = None
+            # 끝난 바퀴의 합계 - 비중의 분모다 (하는 중인 바퀴의 `measured_kb` 가 아니라).
+            current_measured_kb = None
 
         class FakeSnapshot:
             accounts = [FakeEntry()]
 
-        FakeEntry.measured_kb = measured_kb
+        FakeEntry.current_measured_kb = measured_kb
         self.tab._scan_snapshot = FakeSnapshot()
         index = self.tab.scan_account_combo.findData(account.account_id)
         if index >= 0:
@@ -501,6 +502,22 @@ class LargeFilesTableTests(_GuiCase):
         self.assertNotEqual(
             item.foreground().color().name(), QColor(tiers.color(tiers.WARN)).name()
         )
+
+    def test_only_the_cells_that_explain_why_are_colored(self):
+        """줄 전체를 칠하면 무엇 때문인지 모른다. 계정을 혼자 먹지만 지난번과 같은 파일은
+        비중 칸이 칠해지고 증감 칸은 그대로다."""
+
+        from PyQt5.QtGui import QColor
+
+        from smvwp import tiers
+        from smvwp.gui import theme
+        from smvwp.gui.scan_pages import LARGE_CHANGE, LARGE_SHARE
+
+        self._snapshot_with([("/a/huge", 500_000, 500_000)], measured_kb=1_000_000)
+        table = self.tab.large_page.table
+        warn = QColor(theme.tier_text(tiers.WARN)).name()
+        self.assertEqual(table.item(0, LARGE_SHARE).foreground().color().name(), warn)
+        self.assertNotEqual(table.item(0, LARGE_CHANGE).foreground().color().name(), warn)
 
     def test_a_file_missing_from_the_previous_list_says_so(self):
         from smvwp import i18n
@@ -572,7 +589,7 @@ class ScanDigestSmokeTests(_GuiCase):
         class Acct:
             account_id: str = "a1"
             account_name: str = "proj"
-            measured_kb: Optional[int] = None
+            current_measured_kb: Optional[int] = None
             previous_measured_kb: Optional[int] = None
             current_scan_at: Optional[str] = "2026-09-10T00:00:00+00:00"
             large_files: List[tuple] = field(default_factory=list)
@@ -580,7 +597,7 @@ class ScanDigestSmokeTests(_GuiCase):
             partial_paths: List[str] = field(default_factory=list)
 
         return Acct(
-            account_name=name, measured_kb=measured, previous_measured_kb=previous,
+            account_name=name, current_measured_kb=measured, previous_measured_kb=previous,
             **kwargs
         )
 
@@ -859,7 +876,7 @@ class ScanTabLayoutTests(_GuiCase):
             pending_baseline_count=120, baseline_done=900, baseline_total=1000,
             current_scan_at="2026-09-15T15:10:00+00:00",
             previous_scan_at="2026-09-14T15:05:00+00:00",
-            large_files=large, measured_kb=1000 * self.GB,
+            large_files=large, measured_kb=1000 * self.GB, current_measured_kb=1000 * self.GB,
             previous_measured_kb=900 * self.GB, eta_seconds=5400,
         )
 
@@ -1744,6 +1761,89 @@ class GrowthPageSortTests(_GuiCase):
 
         self.page.show_account(self.growth(), self.account)
         self.assertEqual(self.first_column(), ["small", "new", "big"])
+
+    # -- 용량 변화 표의 칸들 ----------------------------------------------
+    def cell(self, label, column):
+        table = self.page.table
+        for row in range(table.rowCount()):
+            if table.item(row, 0).text() == label:
+                return table.item(row, column)
+        raise AssertionError(f"{label} 줄 없음")
+
+    def test_a_folder_not_measured_last_time_is_not_counted_as_growth(self):
+        """지난번에 못 잰 곳의 크기 전체를 증가로 치면 없던 급증이 맨 위에 선다."""
+
+        from smvwp import i18n, scan_store
+        from smvwp.gui.scan_pages import GROWTH_DELTA
+
+        root = self.account.path
+        self.page.show_account(self.snapshot(growth=[
+            {"path": f"{root}/big", "current_kb": 500 * self.GB, "previous_kb": 100 * self.GB},
+            {"path": f"{root}/hidden", "current_kb": 900 * self.GB, "previous_kb": None,
+             "previous_note": scan_store.PREVIOUS_UNMEASURED},
+        ]), self.account)
+        self.assertEqual(self.cell("hidden", GROWTH_DELTA).text(), i18n.t("growth.unmeasured"))
+        self.assertEqual(self.first_column(), ["big", "hidden"])
+        # 막대의 기준은 아는 변화 중 가장 큰 것이다.
+        self.assertEqual(self.page.bars.scale, 400 * self.GB)
+
+    def test_a_drop_reads_as_a_drop(self):
+        """정리한 곳도 보여야 한다 - 늘어난 것과 다른 색으로."""
+
+        from PyQt5.QtGui import QColor
+
+        from smvwp import tiers
+        from smvwp.gui import theme
+        from smvwp.gui.scan_pages import GROWTH_DELTA
+
+        root = self.account.path
+        self.page.show_account(self.snapshot(growth=[
+            {"path": f"{root}/up", "current_kb": 300 * self.GB, "previous_kb": 100 * self.GB},
+            {"path": f"{root}/down", "current_kb": 100 * self.GB, "previous_kb": 900 * self.GB},
+        ]), self.account)
+        self.assertEqual(self.cell("down", GROWTH_DELTA).foreground().color().name(),
+                         QColor(theme.GOOD_TEXT).name())
+        self.assertEqual(self.cell("up", GROWTH_DELTA).foreground().color().name(),
+                         QColor(theme.tier_text(tiers.WARN)).name())
+        self.assertEqual(self.page.bars.scale, 800 * self.GB)
+
+    def test_the_focus_column_says_where_inside(self):
+        from smvwp import i18n, scan_store
+        from smvwp.gui.scan_pages import GROWTH_FOCUS
+
+        i18n.set_language("ko")
+        root = self.account.path
+        self.page.show_account(self.snapshot(growth=[
+            {"path": f"{root}/sim", "current_kb": 7900 * self.GB, "previous_kb": 4700 * self.GB,
+             "previous_note": None,
+             "focus": {"path": f"{root}/sim/regress_1107", "delta_kb": 3200 * self.GB,
+                       "note": scan_store.FOCUS_NEW}},
+            {"path": f"{root}/users", "current_kb": 800 * self.GB, "previous_kb": 400 * self.GB,
+             "previous_note": None,
+             "focus": {"path": f"{root}/users", "delta_kb": 400 * self.GB,
+                       "note": scan_store.FOCUS_SPREAD}},
+            {"path": f"{root}/lib", "current_kb": 900 * self.GB, "previous_kb": 950 * self.GB,
+             "previous_note": None, "focus": None},
+        ]), self.account)
+        sim = self.cell("sim", GROWTH_FOCUS)
+        self.assertTrue(sim.text().startswith("regress_1107"), sim.text())
+        self.assertIn("새 폴더", sim.text())
+        self.assertIn(f"{root}/sim/regress_1107", sim.toolTip())
+        # 크게 변했는데 한 곳으로 모이지 않았으면 그렇다고 말한다.
+        self.assertEqual(self.cell("users", GROWTH_FOCUS).text(), i18n.t("growth.focus.spread"))
+        # 하위 폴더 기록이 없는 폴더는 더 말할 것이 없다 ('고르게'가 아니다).
+        self.assertEqual(self.cell("lib", GROWTH_FOCUS).text(), "")
+
+    def test_the_caption_gives_the_whole_account_change(self):
+        """줄마다의 증감은 위에서 자른 목록이다 - 계정 전체는 따로 말한다."""
+
+        from smvwp import formatting
+
+        snap = self.growth()
+        snap.accounts[0].current_measured_kb = 2000 * self.GB
+        snap.accounts[0].previous_measured_kb = 1500 * self.GB
+        self.page.show_account(snap, self.account)
+        self.assertIn(formatting.format_kb_delta(500 * self.GB), self.page.caption.text())
 
     def test_without_a_previous_scan_the_biggest_comes_first(self):
         root = self.account.path

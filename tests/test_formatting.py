@@ -13,7 +13,7 @@
 
 import unittest
 
-from smvwp import formatting, i18n
+from smvwp import formatting, i18n, large_files
 
 
 class FormatKbTests(unittest.TestCase):
@@ -72,6 +72,37 @@ class FormatKbDeltaTests(unittest.TestCase):
 
     def test_none_is_handled(self):
         self.assertIsInstance(formatting.format_kb_delta(None), str)
+
+    def test_no_change_follows_the_language(self):
+        """영어 화면의 큰 파일 표에 '변화 없음' 이 한글로 떴다."""
+
+        try:
+            i18n.set_language("en")
+            self.assertEqual(formatting.format_kb_delta(0), i18n.t("scan.no_change"))
+            self.assertNotIn("변화", formatting.format_kb_delta(0))
+        finally:
+            i18n.set_language("ko")
+
+
+class LargeFileChangeTests(unittest.TestCase):
+    """큰 파일의 '지난 스캔 대비' 칸. 화면 셋과 보고서·안내가 같은 말을 쓰게 한곳에서."""
+
+    def setUp(self):
+        i18n.set_language("ko")
+
+    def test_a_file_missing_from_the_last_list(self):
+        item = large_files.LargeFile("/a/x", 300, previous_kb=None, compared=True)
+        self.assertEqual(formatting.format_large_file_change(item), i18n.t("large.new"))
+
+    def test_with_no_list_to_compare_it_says_nothing(self):
+        """첫 스캔에는 견줄 목록이 없다 - '목록에 없던 파일'은 지어낸 말이 된다."""
+
+        item = large_files.LargeFile("/a/x", 300, previous_kb=None, compared=False)
+        self.assertEqual(formatting.format_large_file_change(item), i18n.t("common.none"))
+
+    def test_a_change(self):
+        item = large_files.LargeFile("/a/x", 3 * 1024, previous_kb=1024)
+        self.assertEqual(formatting.format_large_file_change(item), formatting.format_kb_delta(2048))
 
 
 class FormatSizePairTests(unittest.TestCase):

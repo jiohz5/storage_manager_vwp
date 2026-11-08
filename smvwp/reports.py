@@ -375,7 +375,10 @@ def build_weekly_report(
                 if "current_kb" in keys:
                     current_kb = row["current_kb"]
                     previous_kb = row["previous_kb"]
-                    if previous_kb is None:
+                    if row.get("previous_note") == scan_store.PREVIOUS_UNMEASURED:
+                        # 지난번에 못 잰 곳 - 크기 전체를 '신규'로 쓰면 없던 급증이 된다.
+                        delta_text = i18n.t("growth.unmeasured")
+                    elif previous_kb is None:
                         delta_text = i18n.t("scan.new_path")
                     else:
                         diff = current_kb - previous_kb
@@ -930,10 +933,7 @@ def _append_large_files_section(
         lines.append(account_name)
         for item in items[:5]:
             share = f"{item.share_pct:.1f}%" if item.share_pct is not None else "-"
-            if item.previous_kb is None:
-                change = i18n.t("large.new")
-            else:
-                change = formatting.format_kb_delta(item.delta_kb)
+            change = formatting.format_large_file_change(item)
             lines.append(
                 "  "
                 + pad(formatting.format_kb(item.size_kb), 12, ">")

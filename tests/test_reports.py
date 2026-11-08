@@ -338,6 +338,23 @@ class ScanProgressInReportTests(unittest.TestCase):
 
         self.assertNotIn(i18n.t("reports.scan_progress_heading"), text)
 
+    def test_weekly_does_not_call_a_folder_new_when_it_was_not_measured_last_time(self):
+        """지난번에 권한 오류로 못 잰 폴더는 '신규'가 아니다 - 크기 전체가 증가처럼 읽힌다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir, config, account = self._setup(tmp)
+            with scan_store.session(data_dir) as conn:
+                conn.execute("DELETE FROM scan_checkpoints")
+                conn.commit()
+                support.scan_pass(conn, account.account_id, 1, ["/acct/x"],
+                                  {"/acct/x": support.failed()})
+                support.scan_pass(conn, account.account_id, 2, ["/acct/x"],
+                                  {"/acct/x": support.whole({"/acct/x": 5000})})
+            text = reports.build_weekly_report(data_dir, config, datetime.now(timezone.utc))
+        line = next(row for row in text.splitlines() if row.endswith("/acct/x"))
+        self.assertIn(i18n.t("growth.unmeasured"), line)
+        self.assertNotIn(i18n.t("scan.new_path"), line)
+
     def test_weekly_labels_the_scan_by_date(self):
         """'세대'도 '몇 번째'도 사용자에게 기준점이 못 된다.
 

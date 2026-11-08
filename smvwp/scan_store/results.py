@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .db import utc_now_iso
 
@@ -68,13 +68,20 @@ def save_tree_entries(
     보여 달라"는 요구가 어느 서브트리에서든 같은 의미가 된다.
 
     같은 경로가 다시 들어오면 덮어쓴다 (`INSERT OR REPLACE`) - 쪼개기 뒤
-    재측정이 겹칠 수 있고, 나중 값이 항상 더 정확하다."""
+    재측정이 겹칠 수 있고, 나중 값이 항상 더 정확하다.
+
+    **루트 줄이 없으면** (시간 초과로 끊겼다) 바로 아래 자식들이 측정 단위다 -
+    깊이를 한 단계씩 당긴다. 끊긴 체크포인트는 남은 자식만 다시 큐에 넣고 그것들은
+    자기 루트에서 깊이 0 이 되는데, 먼저 끝난 자식만 깊이 1 로 남으면 깊이 0 을 더하는
+    계정 합계(`measured_total_kb`)와 증가 경로 목록에서 그 자식이 통째로 빠진다.
+    실제로 나눠 잰 밤마다 계정 합계가 그만큼 줄었다가 다음 밤 '늘었다'로 돌아왔다."""
 
     if not entries:
         return 0
 
     now = utc_now_iso()
     root = root_path.rstrip("/")
+    unfinished = all(path.rstrip("/") != root for path, _ in entries)
     rows = []
     for path, size_kb in entries:
         normalized = path.rstrip("/")
@@ -83,6 +90,8 @@ def save_tree_entries(
         else:
             relative = normalized[len(root):].lstrip("/")
             depth = relative.count("/") + 1 if relative else 0
+            if unfinished:
+                depth = max(0, depth - 1)
         rows.append((account_id, generation, normalized, size_kb, now, depth))
 
     conn.executemany(
@@ -128,10 +137,66 @@ def top_paths(
     ).fetchall()
 
 
-def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: int, previous_generation: int, limit: int = 15, max_depth: int = 1):
+# `growth_delta` 줄의 `previous_note` - 지난 스캔에 같은 경로의 줄이 없었던 까닭.
+#
+# 줄이 없다고 다 새로 생긴 것이 아니다. 결과 표의 경로는 "파일시스템에 있는 것" 이
+# 아니라 **그 밤에 잰 단위**라, 밤마다 다르게 나뉠 수 있다 (`is_confidently_new`
+# 와 같은 이야기). 예전에는 이것을 가리지 않아 지난밤 나눠 잰 폴더가 오늘 통째로
+# '새 경로'가 되고, 그 크기 전체가 증가로 잡혀 **경로 급증 알림**까지 갔다.
+PREVIOUS_PIECED = "pieced"          # 지난번에는 나눠 쟀다 - previous_kb 는 조각의 합
+PREVIOUS_UNMEASURED = "unmeasured"  # 지난번에 못 쟀다 - previous_kb 는 모른다 (None)
+
+# `growth_delta` 의 순서.
+ORDER_GROWTH = "growth"   # 많이 는 것부터 (알림·보고서 - "어디가 찼나")
+ORDER_CHANGE = "change"   # 많이 변한 것부터, 늘든 줄든 (화면 - 정리한 곳도 보인다)
+
+
+def _pieces_kb(conn: sqlite3.Connection, account_id: str, generation: int, path: str):
+    """그 세대가 `path` 를 나눠 쟀으면 조각들의 합, 아니면 None.
+
+    조각 = `path` 아래에서 위로 잰 조상이 없는 줄들. 바로 아래 자식만 더하면
+    쪼개진 자식의 손주들을 놓치고, 다 더하면 부모와 자식을 겹쳐 센다. 쪼개진
+    폴더에 직접 있는 파일은 그 밤에 아무도 안 셌으므로 이 합은 **하한**이다.
+    `path/` 와 `path0` 사이의 경로 범위라 기본 열쇠 인덱스 범위 하나로 읽는다."""
+
+    rows = conn.execute(
+        "SELECT path, size_kb FROM baseline_results "
+        "WHERE account_id = ? AND generation = ? AND path > ? AND path < ?",
+        (account_id, generation, path + "/", path + "0"),
+    ).fetchall()
+    if not rows:
+        return None
+    sizes = {row["path"]: row["size_kb"] for row in rows}
+    total = 0
+    for piece, size_kb in sizes.items():
+        parent = piece.rsplit("/", 1)[0]
+        while len(parent) > len(path) and parent not in sizes:
+            parent = parent.rsplit("/", 1)[0]
+        if len(parent) <= len(path):
+            total += size_kb
+    return total
+
+
+def growth_delta(
+    conn: sqlite3.Connection,
+    account_id: str,
+    current_generation: int,
+    previous_generation: int,
+    limit: int = 15,
+    max_depth: int = 1,
+    order: str = ORDER_GROWTH,
+) -> List[dict]:
     """같은 경로(path) 기준으로 현재/이전 세대를 대조한다 (top N 목록 자체를
     비교하지 않음 - "어제 top N vs 오늘 top N"은 순위가 바뀌면 다른 항목처럼
-    보이는 문제가 있었다). 증가량 기준 내림차순으로 최대 limit개 반환."""
+    보이는 문제가 있었다).
+
+    줄은 `{path, current_kb, previous_kb, previous_note}`. 지난 세대에 같은 줄이
+    없으면 그 자리를 나눠 쟀는지(`PREVIOUS_PIECED` - 조각의 합을 지난 값으로), 못
+    쟀는지(`PREVIOUS_UNMEASURED` - 지난 값은 None) 보고, 둘 다 아니어야 새 경로다
+    (`previous_note` None, `previous_kb` None). 새 경로는 크기 전체를 증가로 친다.
+
+    `order` 가 `ORDER_GROWTH` 면 증가량, `ORDER_CHANGE` 면 증감의 크기 순으로 최대
+    `limit` 개. 지난 값을 모르는 줄은 증감 0 으로 줄 세운다."""
 
     rows = conn.execute(
         f"""
@@ -139,13 +204,194 @@ def growth_delta(conn: sqlite3.Connection, account_id: str, current_generation: 
         FROM ({_shallow('path, size_kb', max_depth, null_depth=1)}) cur
         LEFT JOIN baseline_results prev
             ON prev.account_id = :account AND prev.generation = :previous AND prev.path = cur.path
-        ORDER BY (cur.size_kb - COALESCE(prev.size_kb, 0)) DESC, cur.path
-        LIMIT :limit
         """,
         {"account": account_id, "generation": current_generation,
-         "previous": previous_generation, "max_depth": max_depth, "limit": limit},
+         "previous": previous_generation, "max_depth": max_depth},
     ).fetchall()
-    return rows
+
+    out = []
+    unmeasured = None
+    for row in rows:
+        item = {
+            "path": row["path"], "current_kb": row["current_kb"],
+            "previous_kb": row["previous_kb"], "previous_note": None,
+        }
+        if item["previous_kb"] is None:
+            pieces = _pieces_kb(conn, account_id, previous_generation, item["path"])
+            if pieces is not None:
+                item["previous_kb"], item["previous_note"] = pieces, PREVIOUS_PIECED
+            else:
+                if unmeasured is None:
+                    unmeasured = {
+                        found["path"].rstrip("/")
+                        for found in conn.execute(
+                            "SELECT path FROM scan_checkpoints WHERE account_id = ? "
+                            "AND kind = 'baseline' AND generation = ? AND status = 'error'",
+                            (account_id, previous_generation),
+                        )
+                    }
+                if item["path"].rstrip("/") in unmeasured:
+                    item["previous_note"] = PREVIOUS_UNMEASURED
+        out.append(item)
+
+    def change(item) -> int:
+        if item["previous_note"] == PREVIOUS_UNMEASURED:
+            return 0
+        return item["current_kb"] - (item["previous_kb"] or 0)
+
+    if order == ORDER_CHANGE:
+        out.sort(key=lambda item: (-abs(change(item)), item["path"]))
+    else:
+        out.sort(key=lambda item: (-change(item), item["path"]))
+    return out[:limit]
+
+
+# -- 변화가 어디에 몰렸나 ----------------------------------------------------
+
+# 따라 내려갈 때 자식 하나가 부모 변화의 이만큼을 넘게 설명해야 내려간다.
+# 고르게 퍼진 변화를 한 곳으로 지목하면 틀린 안내가 된다.
+FOCUS_SHARE = 0.5
+# 이보다 작은 변화는 따라가지 않는다 (사람이 손댈 값어치가 있는 크기).
+FOCUS_MIN_KB = 1024 * 1024   # 1GB
+
+# `change_focus` 결과의 note.
+FOCUS_NEW = "new"       # 지난 스캔에는 없던 폴더
+FOCUS_GONE = "gone"     # 이번 스캔에는 없는 폴더 (지웠다)
+FOCUS_FILES = "files"   # 그 폴더에 **직접 있는 파일**이 변했다 (하위 폴더가 아니라)
+FOCUS_SPREAD = "spread" # 하위 폴더 여럿에 고르게 퍼졌다 - 한 곳을 지목하지 않는다
+
+
+def _rows_under(conn: sqlite3.Connection, account_id: str, generation, path: str) -> Dict[str, int]:
+    if not generation:
+        return {}
+    rows = conn.execute(
+        "SELECT path, size_kb FROM baseline_results "
+        "WHERE account_id = ? AND generation = ? AND path >= ? AND path < ?",
+        (account_id, generation, path, path + "0"),
+    ).fetchall()
+    out = {}
+    for row in rows:
+        key = row["path"].rstrip("/")
+        if key == path or key.startswith(path + "/"):
+            out[key] = row["size_kb"]
+    return out
+
+
+def change_focus(
+    conn: sqlite3.Connection,
+    account_id: str,
+    current_generation: int,
+    previous_generation: int,
+    path: str,
+) -> Optional[dict]:
+    """`path` 의 증감이 그 안의 어디에 몰렸나 - `{path, delta_kb, note}` 또는 None.
+
+    증가 경로 목록은 측정 단위(계정 바로 아래 폴더)까지만 말한다 - "sim 이 3.2TB
+    늘었다". 사람이 하려는 일은 그다음, 그 안의 **어디인지** 찾아 담당자에게 묻는
+    것이다. 두 스캔의 기록을 따라, 자식 하나가 부모 변화의 반을 넘게 설명하는 동안
+    내려간다.
+
+    - 그 폴더에 **직접 있는 파일**도 후보다 (부모 크기에서 하위 폴더 합을 뺀 것의
+      변화). 그쪽이 반을 넘으면 `FOCUS_FILES` - 하위 폴더를 지목하면 틀린 안내다.
+    - 처음부터 하위 폴더 여럿에 고르게 퍼졌으면 `FOCUS_SPREAD`.
+    - 더 말할 것이 없으면 None - 변화가 작거나, 하위 폴더 기록이 없는 폴더다.
+
+    - 두 스캔 모두 그 폴더 **안을 기록했을 때만** 내려간다. 한쪽 기록이 거기서
+      끝났으면(깊이 제한) 안쪽 폴더가 새로 생긴 것인지 알 수 없다.
+    - 나눠 잰 폴더는 조각의 합으로 친다 (`growth_delta` 와 같다).
+    - 새로 생긴 폴더(`FOCUS_NEW`)와 없어진 폴더(`FOCUS_GONE`)에서는 멈춘다.
+
+    결과 표의 그 폴더 아래 줄을 두 세대 모두 읽는다 - 창을 열 때가 아니라 야간
+    스캔이 요약을 남길 때(`nightly_scan.save_summaries`) 부른다."""
+
+    path = path.rstrip("/")
+    current = _rows_under(conn, account_id, current_generation, path)
+    previous = _rows_under(conn, account_id, previous_generation, path)
+    if not current and not previous:
+        return None
+
+    # 두 세대의 경로를 한 나무로 세운다 (가장 가까운 기록된 조상이 부모).
+    known = set(current) | set(previous) | {path}
+    children: Dict[str, List[str]] = {}
+    for item in known:
+        if item == path:
+            continue
+        parent = item.rsplit("/", 1)[0]
+        while parent not in known and len(parent) > len(path):
+            parent = parent.rsplit("/", 1)[0]
+        children.setdefault(parent, []).append(item)
+
+    def sizes(recorded: Dict[str, int]) -> Dict[str, int]:
+        """기록된 값, 없으면 아래 조각들의 합 (아래에서 위로)."""
+
+        out: Dict[str, int] = {}
+        for item in sorted(known, key=lambda name: -name.count("/")):
+            if item in recorded:
+                out[item] = recorded[item]
+            else:
+                pieces = [out[kid] for kid in children.get(item, []) if kid in out]
+                if pieces:
+                    out[item] = sum(pieces)
+        return out
+
+    def looked_inside(recorded: Dict[str, int]) -> set:
+        out = set()
+        for item in recorded:
+            parent = item.rsplit("/", 1)[0]
+            while len(parent) >= len(path):
+                out.add(parent)
+                if parent == path:
+                    break
+                parent = parent.rsplit("/", 1)[0]
+        return out
+
+    now, before = sizes(current), sizes(previous)
+    if path not in now or path not in before:
+        return None
+    opened_now, opened_before = looked_inside(current), looked_inside(previous)
+
+    def files_change(node: str) -> Optional[int]:
+        """그 폴더에 직접 있는 파일의 변화. 두 스캔 모두 그 폴더를 통째로 쟀을 때만."""
+
+        if node not in current or node not in previous:
+            return None
+        kids = children.get(node, [])
+        here_now = current[node] - sum(now[kid] for kid in kids if kid in now)
+        here_before = previous[node] - sum(before[kid] for kid in kids if kid in before)
+        return here_now - here_before
+
+    node, delta, note = path, now[path] - before[path], None
+    while abs(delta) >= FOCUS_MIN_KB:
+        if node not in opened_now or node not in opened_before:
+            break
+        best, best_delta = None, 0
+        for kid in children.get(node, []):
+            if kid not in now and kid not in before:
+                continue
+            change = now.get(kid, 0) - before.get(kid, 0)
+            if best is None or (change > best_delta if delta > 0 else change < best_delta):
+                best, best_delta = kid, change
+        here = files_change(node)
+        if here is not None and (here > 0) == (delta > 0) and abs(here) >= FOCUS_SHARE * abs(delta) \
+                and abs(here) >= FOCUS_MIN_KB and abs(here) >= abs(best_delta):
+            return {"path": node, "delta_kb": here, "note": FOCUS_FILES}
+        if (
+            best is None
+            or (best_delta > 0) != (delta > 0)
+            or abs(best_delta) < FOCUS_MIN_KB
+            or abs(best_delta) < FOCUS_SHARE * abs(delta)
+        ):
+            if node == path and best is not None:
+                note = FOCUS_SPREAD
+            break
+        node, delta = best, best_delta
+        if node not in before or node not in now:
+            note = FOCUS_NEW if node not in before else FOCUS_GONE
+            break
+
+    if node == path and note is None:
+        return None
+    return {"path": node, "delta_kb": delta, "note": note}
 
 
 def save_large_files(
@@ -189,23 +435,29 @@ def large_file_changes(
 ):
     """이번 세대의 큰 파일들을 이전 세대와 견준다.
 
-    `(경로, 지금 KB, 이전 KB 또는 None)` 을 큰 것부터. 이전 값이 None 이면
-    **지난 밤에는 없던(또는 그때는 크지 않던) 파일**이다.
+    `(경로, 지금 KB, 이전 KB 또는 None, 견줬나)` 를 큰 것부터. 견줬는데 이전 값이
+    None 이면 **지난 밤에는 없던(또는 그때는 크지 않던) 파일**이다.
 
     두 경우를 굳이 안 가른다 - 상위 목록에 없었다는 것만 알 수 있고, 그것이
     "새로 생겼다"인지 "그때는 작았다"인지는 이 데이터로 판단할 수 없다.
     지어내지 않는 편이 맞다.
+
+    **견줄 목록이 아예 없으면** (첫 스캔, 또는 지난 바퀴가 큰 파일을 모으지 않는
+    `du` 엔진이었다) 견줬나가 False 다. 예전에는 이 경우도 모든 파일이 '목록에 없던
+    파일'이 되어 첫 화면이 온통 주황색이었다. 스캔 상태는 첫 세대의 이전을 0 으로
+    넘기므로 0 도 없는 것으로 친다.
     """
 
     current = largest_files(conn, account_id, generation, limit=1000)
-    if previous_generation is None:
-        return [(row["path"], row["size_kb"], None) for row in current]
-    previous = {
-        row["path"]: row["size_kb"]
-        for row in largest_files(conn, account_id, previous_generation, limit=1000)
-    }
+    previous = {}
+    if previous_generation:
+        previous = {
+            row["path"]: row["size_kb"]
+            for row in largest_files(conn, account_id, previous_generation, limit=1000)
+        }
+    compared = bool(previous)
     return [
-        (row["path"], row["size_kb"], previous.get(row["path"]))
+        (row["path"], row["size_kb"], previous.get(row["path"]), compared)
         for row in current
     ]
 
