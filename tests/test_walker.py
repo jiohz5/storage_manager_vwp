@@ -88,6 +88,48 @@ class WalkShapeTests(unittest.TestCase):
         self.assertEqual(outcome.dir_count, 5)   # acct, a, b, c, d
 
 
+class MemoryTests(unittest.TestCase):
+    """깊이 제한 아래의 디렉터리는 끝난 뒤에 쥐고 있지 않는다.
+
+    결과로 내는 것은 깊이 `max_depth` 까지다. 그런데 순회는 만난 디렉터리 노드를
+    **전부** 목록에 담아 체크포인트가 끝날 때까지 쥐고 있었다 - 재 보니 디렉터리
+    하나에 366바이트(경로 117자), 100만 개면 350MiB 이고 계정을 병렬로 돌면 그
+    배수다. 수십 TB 계정의 최상위 폴더 하나가 디렉터리 수백만 개일 수 있다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "acct"
+        # 깊이 1 에 폴더 둘, 그 아래로 깊이 5 까지 폴더 40개.
+        for top in ("a", "b"):
+            for leaf in range(5):
+                make_file(self.root / top / f"l2_{leaf}" / "l3" / "l4" / "l5" / "f.bin", 1000)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _walker(self, **kwargs):
+        made = walker.ParallelWalker(str(self.root), **kwargs)
+        return made, made.run()
+
+    def test_only_reportable_directories_are_kept(self):
+        made, outcome = self._walker(max_depth=1, workers=4)
+        self.assertTrue(outcome.completed)
+        self.assertEqual(outcome.dir_count, 1 + 2 + 2 * 5 * 4)
+        # 쥐고 있는 것은 낼 것(루트와 깊이 1 의 둘)뿐이다.
+        self.assertEqual(made.kept_nodes, 3)
+
+    def test_the_answer_does_not_change(self):
+        _made, shallow = self._walker(max_depth=1, workers=4)
+        _made, deep = self._walker(max_depth=9, workers=4)
+        sizes = dict(deep.entries)
+        for path, size_kb in shallow.entries:
+            self.assertEqual(size_kb, sizes[path], path)
+        self.assertEqual(shallow.root_size_kb, deep.root_size_kb)
+        # 가장 깊이 본 곳은 내는 깊이와 무관하게 센다 (진단이 쓴다).
+        self.assertEqual(shallow.max_depth_seen, 5)
+        self.assertEqual(deep.max_depth_seen, 5)
+
+
 class ExclusionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -183,6 +225,82 @@ class TimeoutTests(unittest.TestCase):
         # 완료 안 된 루트는 목록에 없어야 한다.
         root = str(self.root).replace("\\", "/")
         self.assertNotIn(root, [p.replace("\\", "/") for p, _ in outcome.entries])
+
+
+class TimeoutKeepsFinishedSubtreesTests(unittest.TestCase):
+    """시간이 다 돼 끊겨도, 그때까지 **끝난 하위 폴더는 남아야** 한다.
+
+    야간 스캔은 끊긴 체크포인트에서 끝난 것을 저장하고 안 끝난 자식만 다시 잰다
+    (`detail_scan.process_one_checkpoint` - "버려지는 작업이 없다"). `du` 는 깊이
+    우선이라 그 말이 맞는데, 이 순회는 큐 앞에서 꺼내는 **넓이 우선**이었다. 얕은
+    층부터 훑으므로 가장 깊은 층을 다 볼 때까지 어떤 폴더도 끝나지 않는다 - 15분을
+    쓰고 끊기면 끝난 것이 거의 없어 그 15분(과 파일서버가 한 일)이 통째로 버려지고,
+    자식들을 처음부터 다시 쟀다.
+
+    뒤에서 꺼내면(깊이 우선) 하위 폴더를 하나씩 끝내 가므로, 끊겨도 끝난 만큼 남는다."""
+
+    DEPTH = 4
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "acct"
+        # 최상위 폴더 셋, 저마다 깊이 4 의 사슬 하나.
+        for top in ("a", "b", "c"):
+            chain = self.root / top
+            for level in range(1, self.DEPTH):
+                chain = chain / f"d{level}"
+            make_file(chain / "f.bin", 1000)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _walk_until(self, scans: int):
+        """디렉터리를 `scans` 개 읽고 시간이 다 된 것으로 친다 (한 스레드라 순서가 정해진다)."""
+
+        made = walker.ParallelWalker(str(self.root), max_depth=1, workers=1)
+        calls = {"n": 0}
+
+        def expired():
+            calls["n"] += 1
+            return calls["n"] > scans
+
+        with patch.object(made, "_expired", side_effect=expired):
+            return made.run()
+
+    def test_a_finished_top_folder_survives_the_timeout(self):
+        # 루트 + 사슬 하나(깊이 4) = 5 개를 읽으면 최상위 폴더 하나는 끝났어야 한다.
+        outcome = self._walk_until(1 + self.DEPTH)
+        self.assertTrue(outcome.timed_out)
+        finished = [Path(path).name for path, _kb in outcome.entries]
+        self.assertEqual(len(finished), 1, finished)
+        self.assertIn(finished[0], ("a", "b", "c"))
+
+    def test_each_further_chain_finishes_another(self):
+        outcome = self._walk_until(1 + 2 * self.DEPTH)
+        self.assertEqual(len(outcome.entries), 2)
+
+    def test_the_waiting_line_stays_short(self):
+        """넓이 우선이면 가장 넓은 층이 통째로 줄을 선다 (디렉터리 수백만 개짜리 층이면
+        그만큼의 메모리). 깊이 우선이면 지금 내려가는 길의 형제들뿐이다."""
+
+        wide = Path(self.tmp.name) / "wide"
+        for index in range(50):
+            for branch in range(4):
+                make_file(wide / f"t{index:02d}" / f"x{branch}" / "y" / "f.bin", 10)
+        made = walker.ParallelWalker(str(wide), max_depth=1, workers=1)
+        longest = {"n": 0}
+        original = made._next
+
+        def watching():
+            longest["n"] = max(longest["n"], len(made._queue))
+            return original()
+
+        with patch.object(made, "_next", side_effect=watching):
+            outcome = made.run()
+        self.assertTrue(outcome.completed)
+        # 최상위 50 개와 지금 내려가는 폴더의 형제 넷까지다. 넓이 우선이면 둘째 층
+        # 200 개가 통째로 줄을 선다.
+        self.assertLessEqual(longest["n"], 60)
 
 
 class UnreadableTests(unittest.TestCase):

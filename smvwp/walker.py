@@ -36,6 +36,14 @@ pickle 직렬화와 프로세스 생성 비용만 더하고, 얻는 것이 없�
 성질이고, 야간 스캔의 재개 설계가 이 성질에 기대고 있다 (완료된 것은 신뢰할 수
 있으므로 저장하고, 나머지만 다시 큐에 넣는다).
 
+그러려면 **깊이 우선**이어야 한다 (`_next`). 넓이 우선으로는 끊기는 순간 끝난
+폴더가 거의 없다 - 한동안 그랬고, 끊긴 체크포인트마다 그 시간이 통째로 버려졌다.
+
+## 메모리
+
+쥐고 있는 것은 결과로 낼 깊이까지의 노드와, 지금 내려가는 길의 형제들뿐이다.
+디렉터리 수에 비례해 늘지 않는다 (`_kept`).
+
 그래서 "이 디렉터리가 끝났는가"를 직접 센다 - 하위 디렉터리가 모두 끝나고 제
 파일을 다 셌을 때 완료다. gdu가 못 하는 것이 정확히 이것이라(트리를 메모리에 다
 만든 뒤 한 번에 내보낸다) 갈아탈 수 없었다.
@@ -86,9 +94,12 @@ def disk_blocks(info) -> int:
     return rounded // 512
 
 
-@dataclass
+@dataclass(slots=True)
 class _Node:
-    """순회 중인 디렉터리 하나의 상태."""
+    """순회 중인 디렉터리 하나의 상태.
+
+    `slots` - 디렉터리마다 하나씩 생기므로 `__dict__` 를 두지 않는다 (수백만 개가
+    잠깐씩이라도 떠 있는 물건이다)."""
 
     path: str
     depth: int
@@ -157,9 +168,17 @@ class ParallelWalker:
         self._stop = threading.Event()
 
         self._root_node = _Node(path=self.root, depth=0, parent=None)
-        # 만들어진 노드 전부. 결과를 낼 때 한 번 훑으면 되므로 목록이면 충분하다
-        # (경로를 키로 하는 사전은 노드 수만큼 해시 비용만 더한다).
-        self._all_nodes: List[_Node] = [self._root_node]
+        # **결과로 낼 깊이까지의** 노드. 결과를 낼 때 한 번 훑으면 되므로 목록이면
+        # 충분하다 (경로를 키로 하는 사전은 노드 수만큼 해시 비용만 더한다).
+        #
+        # 예전에는 만난 노드를 전부 담았다. 그러면 깊이 제한 아래의 디렉터리도
+        # 체크포인트가 끝날 때까지 살아 있다 - 재 보니 하나에 366바이트(경로 117자),
+        # 100만 개면 350MiB 이고 계정을 병렬로 돌면 그 배수다. 깊은 노드는 여기에
+        # 담지 않으면 합계를 부모로 올린 뒤(`_settle`) 아무도 붙잡지 않아 사라진다
+        # (자식이 부모를 가리킬 뿐 부모는 자식을 모른다).
+        self._kept: List[_Node] = [self._root_node]
+        # 가장 깊이 읽은 디렉터리의 깊이 - 내는 깊이와 무관하게 센다 (진단이 쓴다).
+        self._deepest = 0
         self._seen_inodes: Set[tuple] = set()
 
         self.file_count = 0
@@ -171,6 +190,12 @@ class ParallelWalker:
         # 넘으면 그것을 밀어낸다. 전체를 모아 정렬하면 파일 수만큼 메모리를
         # 쓰는데, 우리가 필요한 것은 상위 몇 개뿐이다.
         self._largest: List[tuple] = []
+
+    @property
+    def kept_nodes(self) -> int:
+        """지금 쥐고 있는 노드 수 (결과로 낼 깊이까지만이어야 한다)."""
+
+        return len(self._kept)
 
     # -- 큐 -----------------------------------------------------------
     def _next(self) -> Optional[_Node]:
@@ -190,7 +215,13 @@ class ParallelWalker:
                     return None
                 if self._queue:
                     self._busy += 1
-                    return self._queue.popleft()
+                    # **뒤에서 꺼낸다 (깊이 우선).** 앞에서 꺼내면 얕은 층부터 훑어서
+                    # 가장 깊은 층을 다 볼 때까지 어떤 폴더도 끝나지 않는다 - 시간이
+                    # 다 돼 끊기면 끝난 것이 거의 없어 그때까지 한 일이 버려졌다
+                    # (재개 설계는 `du` 처럼 끝난 폴더가 남는다고 믿고 있다). 줄도
+                    # 가장 넓은 층만큼 길어졌다. 뒤에서 꺼내면 하위 폴더를 하나씩
+                    # 끝내 가고, 줄에는 지금 내려가는 길의 형제들만 선다.
+                    return self._queue.pop()
                 if self._busy == 0:
                     self._cond.notify_all()
                     return None
@@ -329,7 +360,10 @@ class ParallelWalker:
             node.blocks += blocks
             node.pending_children += len(children)
             node.scanned = True
-            self._all_nodes.extend(children)
+            if node.depth > self._deepest:
+                self._deepest = node.depth
+            if node.depth < self.max_depth:
+                self._kept.extend(children)
             self._settle(node)
 
         return files, 1, unreadable, children
@@ -404,17 +438,14 @@ class ParallelWalker:
         """완료된 디렉터리만 `du -k --max-depth=N` 모양으로 낸다."""
 
         entries = []
-        for node in self._all_nodes:
+        for node in self._kept:
             if not node.complete or node.depth > self.max_depth:
                 continue
             entries.append((node.path, node.blocks * 512 // 1024))
         entries.sort(key=lambda item: item[0])
 
         root = self._root_node
-        deepest = 0
-        for node in self._all_nodes:
-            if node.scanned and node.depth > deepest:
-                deepest = node.depth
+        deepest = self._deepest
         return WalkOutcome(
             entries=entries,
             root_size_kb=(root.blocks * 512 // 1024) if root.complete else None,
