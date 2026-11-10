@@ -320,6 +320,10 @@ _COLUMNS_ADDED = {
         "unavailable_at": "TEXT",
         "unavailable_reason": "TEXT",
         "unavailable_detail": "TEXT",
+        # 그 세대를 끝낼 때 표본(`df`/quota)이 말하던 사용량 (KB). 지금 값과 견주면
+        # '스캔 뒤로 얼마나 변했나' 가 나오고, 야간 스캔은 많이 변한 계정을 먼저 돈다
+        # (`scan_order`). 그때 표본이 없었으면 비어 있다.
+        "used_kb_at_scan": "INTEGER",
     },
 }
 

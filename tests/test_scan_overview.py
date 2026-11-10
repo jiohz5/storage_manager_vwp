@@ -14,10 +14,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from smvwp import config as config_module
-from smvwp import nightly_scan, scan_overview, scan_store
+from smvwp import nightly_scan, scan_order, scan_overview, scan_store
 
+GB = 1024 * 1024
 NIGHT = SimpleNamespace(detail_scan_window_start_hour=22, detail_scan_window_end_hour=6,
-                        nightly_parallel_accounts=1)
+                        nightly_parallel_accounts=1, detail_scan_max_age_days=14,
+                        growth_alert_min_kb=100 * GB, growth_notice_pct=2.0)
 
 
 def entry(name, last=None, done=0, total=0, dirs=40, speed=60.0, unseen=None, **extra):
@@ -106,6 +108,73 @@ class PassTests(unittest.TestCase):
         self.assertEqual(result.stalest.age_days(self.NOW), 9)
         result = overview([entry("a", last="2026-10-25T03:00:00"), entry("new")], self.NOW)
         self.assertEqual(result.stalest.account_id, "new")
+
+
+class ChangedFirstTests(unittest.TestCase):
+    """화면의 예고는 야간 스캔과 같은 순서다 (`scan_order`) - 마지막 스캔 뒤로 많이
+    변한 계정이 먼저 돈다. 이번 바퀴에 이미 끝낸 계정이라도 다시 잰다."""
+
+    NOW = datetime(2026, 10, 26, 14, 0)
+
+    def sample(self, used):
+        return SimpleNamespace(ok=True, used_kb=used, mount_point="/u", quota_used_kb=None,
+                               overall_tier="normal")
+
+    def build(self):
+        return overview([
+            # 이번 바퀴에 아직 - 여드레 전에 끝냈고 그 뒤로 그대로다.
+            entry("quiet", last="2026-10-18T03:00:00", dirs=60, speed=60.0,
+                  used_kb_at_scan=2000 * GB, current_measured_kb=2000 * GB),
+            # 이번 바퀴에 이미 끝냈는데(어제) 그 뒤로 500GB 늘었다.
+            entry("hot", last="2026-10-25T03:00:00", dirs=60, speed=60.0,
+                  used_kb_at_scan=3000 * GB, current_measured_kb=3000 * GB),
+        ], self.NOW, pass_started_at="2026-10-22T22:00:00",
+            samples={"quiet": self.sample(2000 * GB), "hot": self.sample(3500 * GB)})
+
+    def test_the_changed_account_is_first_tonight_even_if_done_this_pass(self):
+        result = self.build()
+        hot = next(item for item in result.accounts if item.account_id == "hot")
+        quiet = next(item for item in result.accounts if item.account_id == "quiet")
+        self.assertEqual((hot.order, quiet.order), (1, 2))
+        self.assertEqual(hot.reason, scan_order.REASON_CHANGED)
+        self.assertEqual(hot.drift_kb, 500 * GB)
+        self.assertEqual([slot.account_id for slot in result.nights[0].slots], ["hot", "quiet"])
+
+    def test_the_pass_still_counts_only_what_it_has_not_seen(self):
+        """'남은 1개' - 다시 재는 계정은 이번 바퀴의 남은 계정이 아니다."""
+
+        result = self.build()
+        self.assertEqual([item.account_id for item in result.remaining], ["quiet"])
+        # 끝 예상은 남은 계정이 끝나는 때다 - 앞서 다시 재는 계정의 한 시간 뒤.
+        self.assertEqual(result.finish_at, datetime(2026, 10, 27, 0, 0))
+
+    def test_the_finish_tile_counts_the_pass_not_the_rescans(self):
+        """'남은 1개 · 오늘 밤 1개' - 다시 재는 계정까지 세면 "남은 1개 · 오늘 밤 2개" 다."""
+
+        from smvwp import i18n
+
+        i18n.set_language("ko")
+        result = self.build()
+        self.assertEqual(scan_overview.nights_text(result),
+                         i18n.t("home.tile.night_count", night=i18n.t("overview.night.tonight"), count=1))
+
+    def test_the_card_says_why(self):
+        from smvwp import i18n
+
+        i18n.set_language("ko")
+        result = self.build()
+        hot = next(item for item in result.accounts if item.account_id == "hot")
+        self.assertIn("500.0 GB", scan_overview.tonight_why(hot, self.NOW))
+
+    def test_a_quiet_account_done_this_pass_is_not_queued(self):
+        result = overview([
+            entry("done", last="2026-10-25T03:00:00", used_kb_at_scan=1000 * GB),
+            entry("todo", last="2026-10-18T03:00:00"),
+        ], self.NOW, pass_started_at="2026-10-22T22:00:00",
+            samples={"done": self.sample(1001 * GB)})
+        self.assertEqual([item.account_id for item in result.remaining], ["todo"])
+        done = next(item for item in result.accounts if item.account_id == "done")
+        self.assertIsNone(done.order)
 
 
 class ScheduleTests(unittest.TestCase):

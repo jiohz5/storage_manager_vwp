@@ -33,7 +33,7 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Callable, Dict, List, Optional, Sequence
 
-from . import formatting, i18n, scan_digest, scan_window
+from . import formatting, i18n, notable, scan_digest, scan_order, scan_window, tiers
 
 DONE = "done"          # 이번 바퀴에 끝냈다
 DOING = "doing"        # 재다 말았다 (다음 밤에 이어서)
@@ -67,8 +67,11 @@ class AccountCoverage:
     previous_kb: Optional[int] = None
     change_excluded: int = 0
     current_kb: Optional[int] = None   # 지금 쓰는 양 - 그 계정만의 값을 알 때만 (아래)
-    work_seconds: float = 0.0          # 이번 바퀴에 남은 일 어림
-    order: Optional[int] = None        # 남은 계정 가운데 몇 번째로 도나 (1부터)
+    work_seconds: float = 0.0          # 다음에 잴 때 걸릴 일 어림 (하는 중이면 남은 일)
+    order: Optional[int] = None        # 야간 스캔이 몇 번째로 도나 (1부터). 안 돌면 None
+    # 그 순서인 까닭 (`scan_order.REASON_*`) 과, 마지막 스캔 뒤로 사용량이 변한 양.
+    reason: Optional[str] = None
+    drift_kb: Optional[int] = None
     unavailable_reason: Optional[str] = None
 
     @property
@@ -155,11 +158,21 @@ class Overview:
         return int(round(100 * self.done_dirs / total)) if total else 100
 
     @property
-    def remaining(self) -> List[AccountCoverage]:
+    def queue(self) -> List[AccountCoverage]:
+        """야간 스캔이 돌 계정들, 도는 순서대로 - 이번 바퀴에 남은 계정과, 이미 끝냈지만
+        그 뒤로 많이 변했거나 너무 오래돼 다시 재는 계정."""
+
         return sorted(
             (item for item in self.accounts if item.order is not None),
             key=lambda item: item.order,
         )
+
+    @property
+    def remaining(self) -> List[AccountCoverage]:
+        """**이번 바퀴에** 남은 계정들 (도는 순서대로). 다시 재는 계정은 세지 않는다 -
+        '한 바퀴' 는 모든 계정을 한 번씩 본 것이다."""
+
+        return [item for item in self.queue if item.state in (DOING, WAITING)]
 
     @property
     def stalest(self) -> Optional[AccountCoverage]:
@@ -209,19 +222,27 @@ def build(
     ]
     _fill_work(accounts, entries)
 
-    remaining = _fair_order([item for item in accounts if item.state in (DOING, WAITING)])
-    for position, item in enumerate(remaining, start=1):
+    queue = _queue(accounts, entries, latest_samples, settings, now)
+    for position, item in enumerate(queue, start=1):
         item.order = position
+    remaining_ids = {item.account_id for item in queue if item.state in (DOING, WAITING)}
 
     if lanes_for is None:
         lanes_for = lambda items: _default_lanes(items, by_id, settings)   # noqa: E731
-    lanes = max(1, int(lanes_for([by_id[item.account_id] for item in remaining]) or 1))
+    lanes = max(1, int(lanes_for([by_id[item.account_id] for item in queue]) or 1))
     # 시간창 안인데 스캔이 돌고 있지 않으면 이 밤의 실행은 이미 끝났다(다 돌았거나
     # 누가 멈췄다) - 남은 일은 다음 밤부터다.
-    nights, finish_at, beyond = _schedule(
-        remaining, now, settings.detail_scan_window_start_hour,
+    nights, _all_done_at, beyond = _schedule(
+        queue, now, settings.detail_scan_window_start_hour,
         settings.detail_scan_window_end_hour, lanes, skip_current=not snapshot.is_running,
     )
+    # 한 바퀴가 끝나는 때는 **이번 바퀴에 남은 계정**이 끝나는 때다. 다시 재는 계정은
+    # 그 앞에서 밤 시간을 쓸 뿐 바퀴의 끝을 정하지 않는다.
+    ends = [
+        slot.end for night in nights for slot in night.slots
+        if slot.account_id in remaining_ids and not slot.carries_over
+    ]
+    finish_at = max(ends) if ends and not beyond else None
 
     return Overview(
         now=now,
@@ -312,20 +333,45 @@ def _fill_work(accounts: List[AccountCoverage], entries) -> None:
             if not item.total_dirs:
                 item.total_dirs = dirs_fallback
             item.work_seconds = item.total_dirs * speed
+        elif item.state == DONE:
+            # 이번 바퀴에 끝낸 계정도 그 뒤로 많이 변했으면 다시 잰다 (`_queue`) -
+            # 그때 걸릴 시간은 지난번만큼으로 어림한다.
+            item.work_seconds = (item.total_dirs or dirs_fallback) * speed
 
 
-def _fair_order(items: List[AccountCoverage]) -> List[AccountCoverage]:
-    """`nightly_scan._fair_order` 와 같은 규칙 (설정 순서가 같은 조건의 순서)."""
+def _queue(accounts: List[AccountCoverage], entries, latest_samples, settings,
+           now: datetime) -> List[AccountCoverage]:
+    """야간 스캔이 돌 계정들, 도는 순서대로 (`scan_order` - 야간 스캔과 같은 규칙).
 
-    def rank(pair):
-        index, item = pair
-        if item.state == DOING:
-            return (0, datetime.min, index)
-        if item.last_completed_at is None:
-            return (1, datetime.min, index)
-        return (2, item.last_completed_at, index)
+    이번 바퀴에 아직인 계정은 모두 들고, 이미 끝낸 계정은 **그 뒤로 많이 변했거나
+    상한을 넘겨 못 봤을 때만** 든다 (야간 스캔은 시간이 남으면 나머지도 오래된
+    순으로 돌지만, 그것까지 예고하지는 않는다). 경로를 못 본 계정은 빠진다."""
 
-    return [item for _index, item in sorted(enumerate(items), key=rank)]
+    by_id = {entry.account_id: entry for entry in entries}
+    candidates = []
+    for index, item in enumerate(accounts):
+        if item.state == UNSEEN:
+            continue
+        entry = by_id[item.account_id]
+        sample = latest_samples.get(item.account_id)
+        item.drift_kb = scan_order.drift_kb(sample, getattr(entry, "used_kb_at_scan", None))
+        candidates.append(scan_order.Candidate(
+            account_id=item.account_id,
+            index=index,
+            in_progress=item.state == DOING,
+            last_completed_at=item.last_completed_at,
+            drift_kb=item.drift_kb,
+            threshold_kb=notable.growth_threshold_kb(item.measured_kb, settings),
+            tier=getattr(sample, "overall_tier", None) or tiers.UNKNOWN,
+        ))
+    queue = []
+    for candidate, reason in scan_order.order(candidates, now, settings.detail_scan_max_age_days):
+        item = accounts[candidate.index]
+        again = reason in (scan_order.REASON_CHANGED, scan_order.REASON_OVERDUE)
+        if item.state in (DOING, WAITING) or again:
+            item.reason = reason
+            queue.append(item)
+    return queue
 
 
 def _default_lanes(items, by_id, settings) -> int:
@@ -560,7 +606,7 @@ def size_text(item: AccountCoverage) -> str:
 
 
 def next_text(item: AccountCoverage, overview: "Overview") -> str:
-    if item.state == DONE:
+    if item.state == DONE and item.order is None:
         return i18n.t("overview.next.done")
     if item.state == UNSEEN:
         return i18n.t("overview.next.unseen")
@@ -641,7 +687,9 @@ def home_chip(item: AccountCoverage, overview: "Overview") -> "tuple[str, str, s
         return text, "doing", next_text(item, overview)
     age, kind = age_text(item, overview.now)
     if item.state == DONE:
-        return i18n.t("overview.chip.done", age=age), "done", ""
+        # 이번 바퀴에 끝냈어도 그 뒤로 많이 변했으면 다시 잰다 - 언제인지 옆에 적는다.
+        again = next_text(item, overview) if item.order is not None else ""
+        return i18n.t("overview.chip.done", age=age), "done", again
     return age, kind, next_text(item, overview)
 
 
@@ -652,6 +700,9 @@ def tonight_why(item: AccountCoverage, now: datetime) -> str:
         return i18n.t("home.tonight.why_doing", count=max(0, item.total_dirs - item.done_dirs))
     if item.last_completed_at is None:
         return i18n.t("home.tonight.why_never", count=item.total_dirs)
+    if item.reason == scan_order.REASON_CHANGED and item.drift_kb is not None:
+        return i18n.t("home.tonight.why_changed", delta=formatting.format_kb(item.drift_kb),
+                      count=item.total_dirs)
     age, _kind = age_text(item, now)
     return i18n.t("home.tonight.why_old", age=age, count=item.total_dirs)
 
@@ -671,12 +722,21 @@ def finish_detail(overview: "Overview") -> str:
 
 
 def nights_text(overview: "Overview", shown: int = 3) -> str:
-    """`오늘 밤 3개, 내일 밤 4개, 모레 밤 1개` - 밤마다 끝낼 계정 수."""
+    """`오늘 밤 3개, 내일 밤 4개, 모레 밤 1개` - 밤마다 끝낼 **이번 바퀴의** 계정 수.
 
-    parts = [
-        i18n.t("home.tile.night_count", night=night_name(night, overview.now), count=night.finished)
-        for night in overview.nights[:shown]
-        if night.finished
-    ]
+    다시 재는 계정(이번 바퀴에 이미 끝냈지만 그 뒤로 많이 변한 것)은 세지 않는다 -
+    이 글은 '남은 N개' 옆에 서므로, 세면 "남은 3개 · 오늘 밤 4개" 가 된다."""
+
+    remaining = {item.account_id for item in overview.remaining}
+    parts = []
+    for night in overview.nights[:shown]:
+        count = sum(
+            1 for slot in night.slots
+            if slot.account_id in remaining and not slot.carries_over
+        )
+        if count:
+            parts.append(i18n.t(
+                "home.tile.night_count", night=night_name(night, overview.now), count=count,
+            ))
     return ", ".join(parts)
 

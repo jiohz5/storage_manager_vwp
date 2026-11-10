@@ -59,10 +59,13 @@ from . import (
     loadstat,
     servermon,
     scan_lock,
+    scan_order,
     scan_store,
     scan_window,
     search_index,
     sqlite_db,
+    store,
+    tiers,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,40 +314,116 @@ def _engine_plan(settings) -> "tuple[str, int, int]":
     return detail_scan.ENGINE_DU, workers, 1
 
 
-def _fair_order(data_dir: Path, accounts) -> list:
-    """이 밤에 돌 순서 - 하다 만 계정, 한 번도 못 끝낸 계정, 오래전에 끝낸 계정 순.
+def _fair_order(data_dir: Path, accounts, settings=None, now: Optional[datetime] = None) -> list:
+    """이 밤에 돌 순서 (`scan_order` - 규칙은 그쪽에 있고 화면의 예고와 같이 쓴다).
+
+    하다 만 계정, 한 번도 못 끝낸 계정, 상한(`detail_scan_max_age_days`)을 넘겨 못 본
+    계정, **마지막 스캔 뒤로 많이 변한 계정**, 나머지는 오래전에 끝낸 것부터.
 
     예전에는 날짜로 시작 위치를 하루 한 칸씩 돌렸다. 하룻밤에 다 못 도는 밤이
     이어지면 그 한 칸으로는 따라잡지 못한다 - 계정 109개에 밤마다 50개면 어떤
     계정은 50일 연속 스캔되고 그다음 59일은 한 번도 안 된다. 하다 만 계정도 다음
-    밤에 맨 뒤로 밀려 그 세대가 오래 끝나지 않았다.
+    밤에 맨 뒤로 밀려 그 세대가 오래 끝나지 않았다. 그 뒤로는 오래된 순 하나였는데,
+    그러면 어제 크게 늘어난 계정도 자기 차례까지 며칠을 기다린다.
 
-    이 순서면 밤마다 가장 오래 못 본 계정부터 가므로, 하룻밤에 K 개를 끝내는
-    한 어느 계정도 (계정 수 / K) 밤 넘게 비지 않는다. 같은 조건끼리는 설정 순서다."""
+    변한 계정을 앞세워도 상한이 그보다 먼저라 굶는 계정은 없다. 사용량을 모르면
+    (표본이 없거나 이 규칙 전에 끝낸 스캔) 예전처럼 오래된 순이다. `now` 는 현지 시각."""
+
+    settings = settings if settings is not None else config_module.Settings()
+    now = now or datetime.now()
+    latest = _latest_samples(data_dir, [account.account_id for account in accounts])
+    candidates = []
+    with scan_store.session(data_dir) as conn:
+        states = scan_store.account_states(conn)
+        for index, account in enumerate(accounts):
+            state = states.get(account.account_id) or scan_store.AccountScanState(
+                account_id=account.account_id)
+            sample = latest.get(account.account_id)
+            drift = scan_order.drift_kb(sample, state.used_kb_at_scan)
+            threshold = int(settings.growth_alert_min_kb)
+            if drift is not None and drift >= threshold and state.last_completed_generation:
+                # 계정 크기는 문턱을 넘길 만한 것만 묻는다 (바닥값보다 작게 변했으면
+                # 계정이 얼마나 크든 '많이 변한' 것이 아니다).
+                threshold = notable.growth_threshold_kb(
+                    scan_store.measured_total_kb(
+                        conn, account.account_id, state.last_completed_generation),
+                    settings,
+                )
+            candidates.append(scan_order.Candidate(
+                account_id=account.account_id,
+                index=index,
+                in_progress=scan_store.is_seeded(
+                    conn, account.account_id, scan_store.BASELINE, state.working_generation),
+                last_completed_at=(
+                    scan_window.local_time_of(state.last_completed_at)
+                    if state.last_completed_at else None
+                ),
+                drift_kb=drift,
+                threshold_kb=threshold,
+                tier=getattr(sample, "overall_tier", None) or tiers.UNKNOWN,
+            ))
+    ranked = scan_order.order(candidates, now, settings.detail_scan_max_age_days)
+    return [accounts[candidate.index] for candidate, _reason in ranked]
+
+
+def _latest_samples(data_dir: Path, account_ids) -> dict:
+    """계정마다 가장 최근 표본. 못 읽으면 빈 것 - 순서가 예전(오래된 순)으로 돌아갈 뿐이다."""
+
+    try:
+        with store.session(data_dir) as conn:
+            return store.latest_samples(conn, list(account_ids))
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("표본을 읽지 못해 스캔 순서를 오래된 순으로 정합니다")
+        return {}
+
+
+def record_scan_usage(data_dir: Path, account_id: str, conn=None) -> Optional[int]:
+    """계정의 세대를 끝낸 지금, 표본이 말하는 사용량을 스캔 상태에 남긴다.
+
+    다음 밤들이 "그 뒤로 얼마나 변했나" 를 이것과 견준다 (`scan_order`). 표본이
+    없으면 비워 둔다 - 그 계정은 변한 계정으로 앞서지 않을 뿐 예전처럼 돈다."""
+
+    used = scan_order.usage_kb(_latest_samples(data_dir, [account_id]).get(account_id))
+    if conn is not None:
+        scan_store.set_scan_usage(conn, account_id, used)
+    else:
+        with scan_store.session(data_dir) as own:
+            scan_store.set_scan_usage(own, account_id, used)
+    return used
+
+
+def backfill_scan_usage(data_dir: Path, config: config_module.AppConfig) -> int:
+    """이 규칙 전에 끝난 스캔에 그때의 사용량을 채운다. 채운 계정 수를 준다.
+
+    끝낸 시각의(또는 그 직전의) 표본을 이력에서 찾는다 - 계정마다 인덱스로 한 줄.
+    야간 스캔을 시작할 때와 `prepare` 가 부른다. 이미 있는 계정은 건드리지 않는다."""
 
     with scan_store.session(data_dir) as conn:
         states = scan_store.account_states(conn)
-        started = {
-            account.account_id
-            for account in accounts
-            if scan_store.is_seeded(
-                conn, account.account_id, scan_store.BASELINE,
-                (states.get(account.account_id) or scan_store.AccountScanState(
-                    account_id=account.account_id)).working_generation,
-            )
-        }
-
-    def rank(item):
-        index, account = item
-        state = states.get(account.account_id)
-        finished_at = state.last_completed_at if state else None
-        if account.account_id in started:
-            return (0, "", index)          # 하다 만 것 - 그 세대부터 끝낸다
-        if not finished_at:
-            return (1, "", index)          # 한 번도 못 끝냈다
-        return (2, finished_at, index)     # 오래전에 끝낸 것부터
-
-    return [account for _index, account in sorted(enumerate(accounts), key=rank)]
+    missing = [
+        (account.account_id, states[account.account_id].last_completed_at)
+        for account in config.accounts
+        if account.account_id in states
+        and states[account.account_id].last_completed_at
+        and states[account.account_id].used_kb_at_scan is None
+    ]
+    if not missing:
+        return 0
+    found = {}
+    try:
+        with store.session(data_dir) as conn:
+            for account_id, finished_at in missing:
+                used = scan_order.usage_kb(store.sample_at(conn, account_id, finished_at))
+                if used is not None:
+                    found[account_id] = used
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("스캔 때의 사용량을 채우지 못했습니다 (순서는 오래된 순으로 돕니다)")
+        return 0
+    if found:
+        with scan_store.session(data_dir) as conn:
+            for account_id, used in found.items():
+                scan_store.set_scan_usage(conn, account_id, used)
+    return len(found)
 
 
 def _default_top_level_lister(account_path: str) -> List[str]:
@@ -422,6 +501,9 @@ def _process_baseline(
     scan_store.mark_generation_completed(
         conn, account.account_id, generation, completed_at=_utc_iso(clock())
     )
+    # 이때의 사용량을 남긴다 - 다음 밤들이 "그 뒤로 얼마나 변했나" 를 보고 많이 변한
+    # 계정을 먼저 돈다 (`scan_order`).
+    record_scan_usage(data_dir, account.account_id, conn=conn)
     scan_store.prune_old_generations(conn, account.account_id, settings.detail_scan_keep_generations)
     return "done", generation
 
@@ -960,7 +1042,14 @@ def _scan_under_lock(
     settings = config.settings
     scan_lock.clear_stop_request(data_dir)
 
-    accounts = _fair_order(data_dir, config_module.enabled_accounts(config))
+    # 이 규칙 전에 끝난 스캔에는 그때의 사용량이 없다 - 순서를 정하기 전에 채운다.
+    try:
+        backfill_scan_usage(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("스캔 때의 사용량을 채우지 못했습니다 (순서는 오래된 순으로 돕니다)")
+    accounts = _fair_order(
+        data_dir, config_module.enabled_accounts(config), settings, local_now,
+    )
     skipped: List[AccountOutcome] = []
     if not bypass_window:
         accounts, skipped = _skip_done_tonight(data_dir, accounts, local_now, settings)
@@ -1461,6 +1550,9 @@ class AccountScanSnapshot:
     current_measured_kb: Optional[int] = None
     seconds_per_dir: Optional[float] = None
     working_started_at: Optional[str] = None
+    # 마지막 세대를 끝낼 때 표본이 말하던 사용량 (KB). 화면이 지금 값과 견줘 오늘 밤
+    # 순서를 예고한다 (`scan_order`). 모르면 None.
+    used_kb_at_scan: Optional[int] = None
 
 
 @dataclass
@@ -1680,6 +1772,7 @@ def get_status_snapshot(
                         pending_baseline_count,
                     ),
                     last_completed_at=state.last_completed_at,
+                    used_kb_at_scan=state.used_kb_at_scan,
                     current_dirs=settled.get("current_dirs", 0),
                     current_started_at=settled.get("current_started_at"),
                     current_finished_at=settled.get("current_finished_at"),

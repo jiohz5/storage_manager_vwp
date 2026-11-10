@@ -200,6 +200,10 @@ class Settings:
     # `du -k --max-depth=N`. 출력(=DB 행)만 제한하고 크기 계산은 전체를
     # 돈다. 깊게 잡을수록 트리 화면이 자세해지지만 행이 기하급수로 는다.
     detail_scan_max_depth: int = DEFAULT_DETAIL_SCAN_MAX_DEPTH
+    # 어느 계정도 이 날수를 넘겨 못 보는 일은 없게 한다. 야간 스캔은 마지막 스캔
+    # 뒤로 많이 변한 계정을 먼저 도는데(`scan_order`), 그것만으로는 그대로인 계정이
+    # 끝없이 밀릴 수 있다 - 이 날수가 지난 계정은 변한 계정보다 먼저 돈다.
+    detail_scan_max_age_days: int = 14
     # 평평한 목록(증가 경로)에 보여줄 최대 깊이.
     #
     # 0 = 측정 단위(계정 바로 아래 디렉터리)만. 1 이상으로 올리면 부모와 자식이
@@ -394,6 +398,7 @@ _NUMBER_RANGES = (
     ("search_result_limit", 1, 10000, ""),
     ("growth_alert_min_kb", 0, None, ""),
     ("growth_notice_pct", 0, 100, "0이면 바닥값만"),
+    ("detail_scan_max_age_days", 1, None, ""),
     ("full_prediction_window_hours", 1, None, ""),
     ("full_prediction_min_samples", 2, None, "회귀에 최소 2점 필요"),
     ("trend_short_min_samples", 2, None, "회귀에 최소 2점 필요"),

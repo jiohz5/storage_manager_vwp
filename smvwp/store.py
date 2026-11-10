@@ -310,6 +310,20 @@ def latest_samples(
     return result
 
 
+def sample_at(conn: sqlite3.Connection, account_id: str, at_iso: str) -> Optional[SampleRecord]:
+    """그 시각이나 그 직전의 표본 하나 (없으면 None). 계정·시각 인덱스로 한 줄을 찾는다.
+
+    스캔을 끝낸 때의 사용량을 나중에 채울 때 쓴다 (`nightly_scan.backfill_scan_usage`).
+    시각은 둘 다 UTC ISO 라 글자로 견준다."""
+
+    row = conn.execute(
+        "SELECT * FROM samples WHERE account_id = ? AND collected_at <= ? "
+        "ORDER BY collected_at DESC LIMIT 1",
+        (account_id, at_iso),
+    ).fetchone()
+    return _row_to_record(row) if row is not None else None
+
+
 def history(conn: sqlite3.Connection, account_id: str, limit: int = 500) -> List[SampleRecord]:
     rows = conn.execute(
         """

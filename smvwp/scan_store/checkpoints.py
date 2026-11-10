@@ -72,6 +72,8 @@ class AccountScanState:
     unavailable_at: Optional[str] = None
     unavailable_reason: Optional[str] = None
     unavailable_detail: str = ""
+    # 마지막 세대를 끝낼 때 표본이 말하던 사용량 (KB). 모르면 None (`set_scan_usage`).
+    used_kb_at_scan: Optional[int] = None
 
     @property
     def working_generation(self) -> int:
@@ -125,7 +127,18 @@ def _state_from_row(row) -> AccountScanState:
         unavailable_at=row["unavailable_at"],
         unavailable_reason=row["unavailable_reason"],
         unavailable_detail=row["unavailable_detail"] or "",
+        used_kb_at_scan=row["used_kb_at_scan"],
     )
+
+
+def set_scan_usage(conn: sqlite3.Connection, account_id: str, used_kb: Optional[int]) -> None:
+    """마지막 세대를 끝낼 때의 사용량을 남긴다 (`scan_order` 가 지금 값과 견준다)."""
+
+    conn.execute(
+        "UPDATE account_scan_state SET used_kb_at_scan = ? WHERE account_id = ?",
+        (used_kb, account_id),
+    )
+    conn.commit()
 
 
 def mark_unavailable(
@@ -173,11 +186,14 @@ def mark_generation_completed(
     찾는다. SQLite 의 UPDATE 는 오른쪽 식에서 **바꾸기 전** 값을 본다."""
 
     get_account_state(conn, account_id)  # 행이 없으면 만들어 둠
+    # 그때의 사용량은 비운다 - 앞 세대의 값이 새 세대의 것처럼 남으면 안 된다.
+    # 야간 스캔이 곧바로 채운다 (`nightly_scan.record_scan_usage`).
     conn.execute(
         "UPDATE account_scan_state SET "
         "previous_baseline_completed_at = CASE WHEN last_completed_generation = ? "
         "THEN last_baseline_completed_at END, "
-        "last_completed_generation = ?, last_baseline_completed_at = ? WHERE account_id = ?",
+        "last_completed_generation = ?, last_baseline_completed_at = ?, "
+        "used_kb_at_scan = NULL WHERE account_id = ?",
         (generation - 1, generation, completed_at or utc_now_iso(), account_id),
     )
     conn.commit()

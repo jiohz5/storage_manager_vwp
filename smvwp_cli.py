@@ -244,6 +244,10 @@ def command_prepare(args) -> int:
         ("헬스체크 대조 남기기", lambda: f"{health.save_results(data_dir, config)}개 프로젝트 계정"),
         ("스캔 탭 요약 남기기", lambda: f"{nightly_scan.save_summaries(data_dir, config)}개 계정 새로"),
         ("한 바퀴 시작 남기기", lambda: nightly_scan.advance_pass(data_dir, config) and "남김"),
+        # 야간 스캔은 마지막 스캔 뒤로 많이 변한 계정을 먼저 돈다 (`scan_order`). 이 규칙
+        # 전에 끝난 스캔에는 그때의 사용량이 없어, 표본 이력에서 찾아 채운다.
+        ("스캔 때의 사용량 채우기",
+         lambda: f"{nightly_scan.backfill_scan_usage(data_dir, config)}개 계정"),
     ]
 
     print(f"업데이트 뒤 준비 - {data_dir}")

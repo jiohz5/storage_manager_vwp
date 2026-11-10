@@ -881,8 +881,9 @@ class MainWindow(QMainWindow):
                                  ("scan", "home.tile.scan"), ("finish", "home.tile.finish")):
             self.tiles[key].caption.setText(i18n.t(caption_key))
         self.tiles["attention"].setToolTip(i18n.t("dashboard.df_caveat"))
-        self.tonight_note.setText(i18n.t("home.tonight.note"))
-        self.tonight_card.setToolTip(i18n.t("home.tonight.note"))
+        note = i18n.t("home.tonight.note", days=self._config.settings.detail_scan_max_age_days)
+        self.tonight_note.setText(note)
+        self.tonight_card.setToolTip(note)
         self.changes_title.setText(i18n.t("home.changes.title"))
         self.changes_hint.setText(i18n.t("home.changes.hint"))
         self.table.setHorizontalHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
