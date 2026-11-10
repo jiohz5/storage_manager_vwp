@@ -34,8 +34,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
+from . import config as config_module
 from . import health as health_module
 from . import large_files as large_files_module
+from . import notable
 from . import scan_digest
 from . import tiers
 
@@ -55,12 +57,10 @@ ACT_SURGE = "surge"              # 갑자기 늘었다
 # 되는 순간 "무엇부터" 라는 물음이 다시 사라진다.
 MAX_ACTIONS = 10
 
-# 이만큼 이상 비울 수 있을 때만 정리를 따로 권한다. 몇 GB 를 위해 사람을
-# 움직이게 하면 다음부터 이 목록을 안 믿는다.
-CLEANUP_WORTH_KB = 50 * 1024 * 1024   # 50GB
-
-# 이만큼 늘면 급증으로 본다.
-SURGE_KB = 200 * 1024 * 1024          # 200GB
+# 정리를 따로 권할 값어치와 급증의 문턱은 여기 박아 두지 않는다 - 화면마다 다른
+# 값을 쓰던 것을 `notable` 한 곳으로 모았다 (`cleanup_threshold_kb`,
+# `growth_threshold_kb`). 몇 GB 를 위해 사람을 움직이게 하면 다음부터 이 목록을
+# 안 믿는다는 생각은 그대로다.
 
 
 @dataclass
@@ -184,6 +184,7 @@ def build(
     health_summary: Optional[health_module.HealthSummary] = None,
     scan_accounts: Sequence = (),
     accounts_by_id: Optional[dict] = None,
+    settings=None,
 ) -> Plan:
     """흩어진 사실들을 "무엇부터" 하나로 모은다.
 
@@ -192,6 +193,7 @@ def build(
     - `health_summary` - `health.check_all` 결과.
     - `scan_accounts` - `nightly_scan.StatusSnapshot.accounts`.
     - `accounts_by_id` - 계정 이름을 찾기 위한 `{id: 이름}`.
+    - `settings` - 급증·정리의 문턱 (`notable`). 안 주면 기본 설정.
 
     종류마다 함수 하나가 줄을 만들고, 여기서는 모아서 순서만 정한다. 넣는
     순서(사용률 → 백업 → 정리 → 스캔)는 순위가 같을 때의 순서가 되므로 바꾸지
@@ -199,6 +201,7 @@ def build(
     """
 
     names = dict(accounts_by_id or {})
+    settings = settings if settings is not None else config_module.Settings()
     plan = Plan()
     if health_summary is not None:
         plan.coarse_count = health_summary.coarse_count
@@ -206,8 +209,11 @@ def build(
 
     actions = _full_actions(samples, cleanup, names)
     actions += _backup_actions(health_summary)
-    actions += _cleanup_actions(cleanup, already=_accounts_on_full_lines(actions))
-    scan_lines, plan.accounts_without_scan = _scan_actions(scan_accounts)
+    actions += _cleanup_actions(
+        cleanup, already=_accounts_on_full_lines(actions),
+        worth_kb=notable.cleanup_threshold_kb(settings),
+    )
+    scan_lines, plan.accounts_without_scan = _scan_actions(scan_accounts, settings)
     actions += scan_lines
 
     actions.sort(key=_rank)
@@ -340,7 +346,7 @@ def _backup_actions(health_summary) -> List[Action]:
 
 
 # -- 3. 정리 후보 (사용률 줄에 안 붙은 것만) ---------------------------------
-def _cleanup_actions(cleanup: dict, already: set) -> List[Action]:
+def _cleanup_actions(cleanup: dict, already: set, worth_kb: int) -> List[Action]:
     """이미 사용률 줄에 붙은 계정을 또 내놓으면 같은 일이 두 줄이 되고,
     합계도 두 번 세인다."""
 
@@ -354,12 +360,12 @@ def _cleanup_actions(cleanup: dict, already: set) -> List[Action]:
             count=bucket["count"],
         )
         for account_id, bucket in cleanup.items()
-        if account_id not in already and bucket["kb"] >= CLEANUP_WORTH_KB
+        if account_id not in already and bucket["kb"] >= worth_kb
     ]
 
 
 # -- 4. 스캔이 준 것들 ---------------------------------------------------------
-def _scan_actions(scan_accounts) -> "tuple":
+def _scan_actions(scan_accounts, settings) -> "tuple":
     """큰 파일과 급증. 스캔이 한 번도 안 끝난 계정은 따로 돌려준다
     `(줄들, 스캔 없는 계정 이름들)` - 빈 목록이 "문제 없음" 으로 읽히면 안 된다."""
 
@@ -398,7 +404,7 @@ def _scan_actions(scan_accounts) -> "tuple":
         # 합계끼리의 차이는 그 폴더 전체만큼 '급증' 한다 (`scan_digest.account_change`).
         delta = scan_digest.account_change(entry)
         if current is not None and delta is not None:
-            if delta >= SURGE_KB:
+            if delta >= notable.growth_threshold_kb(current, settings):
                 actions.append(
                     Action(
                         kind=ACT_SURGE,

@@ -262,9 +262,12 @@ class Settings:
     report_retention_days: int = 365
     # 검색 인덱스 (계정별 opt-in, 기본 꺼짐)
     search_result_limit: int = 500
-    # 야간 상세 스캔에서 경로 하나가 직전 세대 대비 이만큼 늘면 알림을 보낸다.
-    # 통계 추정이 아니라 설명 가능한 단순 절대 임계치다.
-    growth_alert_min_kb: int = 100 * 1024 * 1024  # 100GB
+    # '많이 늘었다' 의 문턱 (`notable.growth_threshold_kb`): 계정 크기의
+    # `growth_notice_pct` % 와 `growth_alert_min_kb` 가운데 큰 쪽. 홈의 급증 줄, 상세
+    # 스캔 요약의 '살펴볼 것', 경로 급증 알림이 모두 이 값을 쓴다. 통계 추정이 아니라
+    # 설명할 수 있는 단순한 값이다 ("계정의 2% 또는 100GB 넘게").
+    growth_alert_min_kb: int = 100 * 1024 * 1024  # 100GB (바닥값)
+    growth_notice_pct: float = 2.0                # 0 이면 바닥값만
     growth_alert_enabled: bool = True
     # 관리자 PIN 해시 (평문 아님). 비어 있으면 기본 PIN을 쓴다.
     admin_pin_hash: str = ""
@@ -390,6 +393,7 @@ _NUMBER_RANGES = (
     ("report_retention_days", 1, None, ""),
     ("search_result_limit", 1, 10000, ""),
     ("growth_alert_min_kb", 0, None, ""),
+    ("growth_notice_pct", 0, 100, "0이면 바닥값만"),
     ("full_prediction_window_hours", 1, None, ""),
     ("full_prediction_min_samples", 2, None, "회귀에 최소 2점 필요"),
     ("trend_short_min_samples", 2, None, "회귀에 최소 2점 필요"),

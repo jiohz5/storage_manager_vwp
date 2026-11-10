@@ -52,6 +52,7 @@ from typing import Callable, List, Optional, Tuple
 from . import (
     config as config_module,
     detail_scan,
+    notable,
     notifications,
     paths,
     reports,
@@ -1173,6 +1174,12 @@ def _notify_growth(
                 if previous < 1:
                     continue  # 첫 기준선 - 비교 대상이 없다
 
+                # 문턱은 화면과 같다 - 계정 크기의 일정 비율, 바닥값 있음
+                # (`notable.growth_threshold_kb`). 예전에는 계정이 30TB 여도 폴더
+                # 하나가 100GB(0.3%) 늘면 알렸고, 화면은 또 다른 값을 썼다.
+                threshold_kb = notable.growth_threshold_kb(
+                    scan_store.measured_total_kb(conn, account.account_id, current), settings
+                )
                 # 화면의 증가 경로 목록과 같은 깊이로 본다. 예전에는 기본값(깊이 1)
                 # 이라 부모와 그 안의 자식이 같은 증가로 따로따로 알림을 냈다.
                 rows = scan_store.growth_delta(
@@ -1194,7 +1201,7 @@ def _notify_growth(
                         row["current_kb"],
                         row["previous_kb"],
                         state,
-                        min_increase_kb=settings.growth_alert_min_kb,
+                        min_increase_kb=threshold_kb,
                         cooldown_minutes=settings.notification_cooldown_minutes,
                         now=now,
                         mode=settings.notification_mode,

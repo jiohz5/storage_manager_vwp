@@ -302,6 +302,7 @@ def _read_plan(data_dir, config, samples, cache=None, step=lambda _key: None):
             accounts_by_id={
                 account.account_id: account.name for account in config.accounts
             },
+            settings=config.settings,
         )
     except Exception:
         logger.exception("처리 우선순위 계산 실패 (대시보드는 계속합니다)")

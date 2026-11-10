@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from . import large_files as large_files_module
+from . import notable
 
 
 def account_change(entry) -> Optional[int]:
@@ -59,11 +60,9 @@ def account_change(entry) -> Optional[int]:
 # 있는 것은 "먼저 볼 것"이지 전부가 아니다.
 MAX_FINDINGS = 8
 
-# 계정 증가를 살펴볼 것으로 올릴 최소 크기.
-#
-# 작은 계정이 조금 늘어난 것까지 올리면 목록이 잡음으로 찬다. 사람이 손댈
-# 값어치가 있는 크기여야 알림이 알림 구실을 한다.
-GROWTH_NOTICE_KB = 50 * 1024 * 1024   # 50GB
+# 계정 증가를 살펴볼 것으로 올릴 문턱은 여기 박아 두지 않는다 (`notable.
+# growth_threshold_kb` - 계정 크기의 일정 비율, 바닥값 있음). 예전에는 여기가
+# 50GB, 홈의 '무엇부터 할까' 가 200GB 라 같은 증가를 두 화면이 다르게 말했다.
 
 FINDING_LARGE_FILE = "large_file"
 FINDING_GROWTH = "growth"
@@ -176,8 +175,15 @@ def _as_dict(run):
         return {}
 
 
-def build(snapshot) -> Digest:
-    """`nightly_scan.StatusSnapshot` 을 요약으로 줄인다."""
+def build(snapshot, settings=None) -> Digest:
+    """`nightly_scan.StatusSnapshot` 을 요약으로 줄인다.
+
+    `settings` 는 '많이 늘었다' 의 문턱을 정한다 (`notable`). 안 주면 기본 설정."""
+
+    if settings is None:
+        from . import config as config_module
+
+        settings = config_module.Settings()
 
     run = _as_dict(getattr(snapshot, "latest_run", None))
     digest = Digest(
@@ -216,11 +222,11 @@ def build(snapshot) -> Digest:
     # 사실은 "견줄 것이 없다"이다.
     digest.total_delta_kb = total_delta if compared else None
     digest.growth.sort(key=lambda item: -(item.delta_kb or 0))
-    digest.findings = _findings(accounts)
+    digest.findings = _findings(accounts, settings)
     return digest
 
 
-def _findings(accounts) -> List[Finding]:
+def _findings(accounts, settings) -> List[Finding]:
     """살펴볼 것을 모은다 - 급한 것부터.
 
     순서가 곧 사람이 보는 순서다. 실패를 아래에 두면 표 밑으로 밀려 안 보인다.
@@ -277,7 +283,7 @@ def _findings(accounts) -> List[Finding]:
 
         delta = account_change(entry)
         if current is not None and delta is not None:
-            if delta >= GROWTH_NOTICE_KB:
+            if delta >= notable.growth_threshold_kb(current, settings):
                 normal.append(
                     Finding(
                         kind=FINDING_GROWTH, account=name, account_id=entry.account_id,

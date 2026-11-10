@@ -589,7 +589,9 @@ class ScanTab(QFrame):
     def _refresh_digest(self, snapshot) -> None:
         """카드 넷과 살펴볼 것 목록."""
 
-        self.summary_page.show_digest(scan_digest.build(snapshot))
+        self.summary_page.show_digest(
+            scan_digest.build(snapshot, self._get_config().settings)
+        )
 
     def _refresh_large_files(self) -> None:
         self.large_page.show_account(self._scan_snapshot, self._selected_account())
