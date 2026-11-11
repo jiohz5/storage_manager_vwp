@@ -204,6 +204,13 @@ class Settings:
     # 뒤로 많이 변한 계정을 먼저 도는데(`scan_order`), 그것만으로는 그대로인 계정이
     # 끝없이 밀릴 수 있다 - 이 날수가 지난 계정은 변한 계정보다 먼저 돈다.
     detail_scan_max_age_days: int = 14
+    # 순회가 크기와 함께 남기는 것의 기준 (파이썬 순회 엔진만).
+    # - 이 날수 넘게 안 바뀐 파일을 '오래된 것' 으로 센다 (정리 후보를 찾는 근거).
+    # - 깊이 제한(`detail_scan_max_depth`) 아래라도 이 크기를 넘는 폴더는 남긴다.
+    #   0 이면 깊이만 본다. 줄 수는 크기로 묶인다 - 50GB 면 30TB 계정에서 층마다
+    #   많아야 600줄.
+    detail_scan_cold_days: int = 180
+    detail_scan_deep_min_kb: int = 50 * 1024 * 1024  # 50GB
     # 평평한 목록(증가 경로)에 보여줄 최대 깊이.
     #
     # 0 = 측정 단위(계정 바로 아래 디렉터리)만. 1 이상으로 올리면 부모와 자식이
@@ -399,6 +406,8 @@ _NUMBER_RANGES = (
     ("growth_alert_min_kb", 0, None, ""),
     ("growth_notice_pct", 0, 100, "0이면 바닥값만"),
     ("detail_scan_max_age_days", 1, None, ""),
+    ("detail_scan_cold_days", 1, None, ""),
+    ("detail_scan_deep_min_kb", 0, None, "0이면 깊이만"),
     ("full_prediction_window_hours", 1, None, ""),
     ("full_prediction_min_samples", 2, None, "회귀에 최소 2점 필요"),
     ("trend_short_min_samples", 2, None, "회귀에 최소 2점 필요"),

@@ -338,6 +338,9 @@ STRINGS = {
     "tree.col.size": "Size",
     "tree.col.share": "Share of account",
     "tree.col.change": "vs last scan",
+    "tree.col.files": "Files",
+    "tree.col.cold": "Unchanged {days}+ days",
+    "tree.cold_tip": "{pct}% of this folder has not changed for over {days} days\nMost recently changed file: {newest}",
     "tree.note.pieced": (
         "This folder was measured in pieces after a timeout. Its size adds up its "
         "subfolders, so files directly inside it are not counted."

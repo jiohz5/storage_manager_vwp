@@ -358,6 +358,9 @@ STRINGS = {
     "tree.col.size": "크기",
     "tree.col.share": "계정 비중",
     "tree.col.change": "지난 스캔 대비",
+    "tree.col.files": "파일 수",
+    "tree.col.cold": "{days}일 넘게 그대로",
+    "tree.cold_tip": "이 폴더의 {pct}% 가 {days}일 넘게 바뀌지 않았습니다\n가장 최근에 바뀐 파일: {newest}",
     "tree.note.pieced": (
         "시간 초과로 나눠 잰 폴더입니다. 크기는 하위 폴더를 더한 값이라 "
         "이 폴더에 직접 있는 파일은 빠져 있습니다."

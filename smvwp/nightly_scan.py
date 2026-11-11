@@ -476,6 +476,8 @@ def _process_baseline(
             generation=generation,
             engine=engine,
             workers=walk_workers,
+            cold_days=settings.detail_scan_cold_days,
+            deep_min_kb=settings.detail_scan_deep_min_kb or None,
         )
 
     drained = _drain_checkpoints(

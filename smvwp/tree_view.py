@@ -100,6 +100,18 @@ class TreeNode:
     pieced: bool = False
     # 지난 스캔이 이 폴더를 나눠 쟀다 - `previous_kb` 는 그때 조각들의 합이다.
     previous_pieced: bool = False
+    # 순회가 같이 남긴 것 (모르면 None - `du` 엔진이거나 이 값들이 생기기 전의 스캔).
+    file_count: Optional[int] = None
+    newest_mtime: Optional[int] = None   # 가장 최근에 바뀐 파일의 수정 시각 (epoch 초)
+    cold_kb: Optional[int] = None        # 오래 안 바뀐 양
+
+    @property
+    def cold_share(self) -> Optional[float]:
+        """오래 안 바뀐 양이 이 폴더에서 차지하는 몫 (0~1). 모르면 None."""
+
+        if self.cold_kb is None or not self.size_kb:
+            return None
+        return min(1.0, self.cold_kb / self.size_kb)
 
     @property
     def delta_kb(self) -> Optional[int]:
@@ -348,6 +360,27 @@ def build_tree(
 
     roots.sort(key=lambda item: (-item.size_kb, item.path))
     return roots
+
+
+def attach_details(roots, rows) -> None:
+    """순회가 같이 남긴 값(파일 수·최근 수정·오래된 양)을 트리의 폴더들에 붙인다.
+
+    `rows` 는 `scan_store.tree_entries` 의 줄. 계산으로 만든 줄(직접 있는 파일, 그 밖
+    폴더, 나눠 잰 폴더를 다시 세운 것)에는 붙이지 않는다 - 잰 값이 아니다."""
+
+    by_path = {row["path"]: row for row in rows}
+    pending = list(roots)
+    while pending:
+        node = pending.pop()
+        pending.extend(node.children)
+        if node.kind != DIRECTORY or node.pieced:
+            continue
+        row = by_path.get(node.path)
+        if row is None:
+            continue
+        node.file_count = row["file_count"]
+        node.newest_mtime = row["newest_mtime"]
+        node.cold_kb = row["cold_kb"]
 
 
 def notes(node: TreeNode) -> List[str]:

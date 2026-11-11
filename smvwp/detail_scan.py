@@ -141,12 +141,17 @@ class DuTreeOutcome:
     timed_out: bool = False
     partial: bool = False        # 권한 등으로 일부를 못 읽었는가
     error_message: Optional[str] = None
+    # 순회 엔진이 경로마다 곁다리로 모은 것 (`walker.WalkOutcome.details`). `du` 엔진은
+    # 비운다 - 합계 말고는 알 방법이 없다.
+    details: dict = None
 
     def __post_init__(self):
         if self.entries is None:
             self.entries = []
         if self.largest_files is None:
             self.largest_files = []
+        if self.details is None:
+            self.details = {}
 
 
 def du_tree_command(path: str, max_depth: int) -> List[str]:
@@ -269,8 +274,13 @@ def measure_tree(
     max_depth: int = 3,
     engine: str = ENGINE_DU,
     workers: int = 1,
+    cold_days: int = 180,
+    deep_min_kb: Optional[int] = None,
 ) -> DuTreeOutcome:
     """서브트리 하나를 잰다. 결과 모양은 엔진과 무관하게 같다.
+
+    `cold_days`, `deep_min_kb` 는 순회 엔진만 듣는다 (오래된 것의 기준, 깊이 제한
+    아래라도 남길 폴더의 크기) - `du` 는 합계만 준다.
 
     ## 두 엔진의 차이 (고르기 전에 알아야 할 것)
 
@@ -294,8 +304,11 @@ def measure_tree(
             max_depth=max_depth,
             workers=workers,
             exclude_names=SNAPSHOT_DIR_NAMES,
+            cold_days=cold_days,
+            deep_min_kb=deep_min_kb,
         )
         return DuTreeOutcome(
+            details=outcome.details,
             entries=outcome.entries,
             largest_files=outcome.largest_files,
             root_size_kb=outcome.root_size_kb,
@@ -351,6 +364,8 @@ def process_one_checkpoint(
     generation: int = None,
     engine: str = ENGINE_DU,
     workers: int = 1,
+    cold_days: int = 180,
+    deep_min_kb: Optional[int] = None,
 ) -> str:
     """체크포인트 하나(서브트리 하나)를 처리하고 상태 문자열을 반환한다.
 
@@ -368,7 +383,8 @@ def process_one_checkpoint(
     path = checkpoint["path"]
 
     outcome = measure_tree(
-        path, timeout_seconds, max_depth=max_depth, engine=engine, workers=workers
+        path, timeout_seconds, max_depth=max_depth, engine=engine, workers=workers,
+        cold_days=cold_days, deep_min_kb=deep_min_kb,
     )
 
     if not outcome.root_size_kb and not outcome.timed_out and not os.path.lexists(path):
@@ -380,7 +396,10 @@ def process_one_checkpoint(
         return scan_store.STATUS_DONE
 
     if outcome.entries:
-        scan_store.save_tree_entries(conn, account_id, generation, outcome.entries, path)
+        scan_store.save_tree_entries(
+            conn, account_id, generation, outcome.entries, path,
+            details=getattr(outcome, "details", None),
+        )
     # 큰 파일은 시간 초과로 잘렸어도 이미 본 만큼은 쓸모가 있다. 완주 여부와
     # 무관하게 남긴다 - `entries` 와 같은 이유다.
     if outcome.largest_files:

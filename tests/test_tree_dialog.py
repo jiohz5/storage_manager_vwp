@@ -208,6 +208,56 @@ class TreeDialogTests(unittest.TestCase):
         self.assertEqual(dialog.band.value.text(), formatting.format_kb(700 * 1024))
         self.assertEqual([part[0] for part in dialog.stack.parts()], [500 * 1024, 200 * 1024])
 
+    def test_what_the_walk_left_shows_beside_the_size(self):
+        """실제 순회로 잰 계정 - 파일 수와 오래 안 바뀐 양이 폴더 옆에 나온다.
+
+        크기가 같아도 전부 1년 넘게 그대로인 폴더와 어제도 쓰인 폴더는 정리할 때 전혀
+        다른 물건인데, 예전에는 화면이 둘을 가르지 못했다."""
+
+        import os
+        import time
+
+        from smvwp import detail_scan
+        from smvwp.gui.tree_dialog import COL_COLD, COL_FILES
+        from smvwp.gui.widgets import CellDelegate
+
+        root = Path(self.account.path)
+        old, fresh = root / "old", root / "fresh"
+        for folder, days in ((old, 400), (fresh, 1)):
+            folder.mkdir()
+            for index in range(3):
+                target = folder / f"f{index}.bin"
+                target.write_bytes(b"x" * 8192)
+                stamp = time.time() - days * 86400
+                os.utime(target, (stamp, stamp))
+        tops = [f"{self.account.path}/old", f"{self.account.path}/fresh"]
+        scan_store.seed_checkpoints(self.conn, self.account.account_id, scan_store.BASELINE, 1, tops)
+        while True:
+            checkpoint = scan_store.next_pending(
+                self.conn, self.account.account_id, scan_store.BASELINE, 1)
+            if checkpoint is None:
+                break
+            detail_scan.process_one_checkpoint(
+                self.conn, checkpoint, 60, generation=1, engine=detail_scan.ENGINE_PYTHON)
+        scan_store.mark_generation_completed(self.conn, self.account.account_id, 1)
+
+        dialog = self.dialog()
+        rows = {dialog.tree.topLevelItem(i).text(0): dialog.tree.topLevelItem(i)
+                for i in range(dialog.tree.topLevelItemCount())}
+        self.assertEqual(rows["old"].text(COL_FILES), "3")
+        fraction, _kind = rows["old"].data(COL_COLD, CellDelegate.BAR_ROLE)
+        self.assertGreater(fraction, 0.5)
+        self.assertIsNone(rows["fresh"].data(COL_COLD, CellDelegate.BAR_ROLE))
+        self.assertEqual(rows["fresh"].text(COL_COLD), "-")
+
+    def test_a_scan_without_those_values_leaves_the_cells_empty(self):
+        from smvwp.gui.tree_dialog import COL_COLD, COL_FILES
+
+        seed(self.conn, self.account.account_id, 1, self.rows_for_tree())
+        dialog = self.dialog()
+        item = dialog.tree.topLevelItem(0)
+        self.assertEqual((item.text(COL_FILES), item.text(COL_COLD)), ("", ""))
+
     def test_share_and_change_cells_carry_bars(self):
         from smvwp.gui.tree_dialog import COL_SHARE
         from smvwp.gui.widgets import CellDelegate

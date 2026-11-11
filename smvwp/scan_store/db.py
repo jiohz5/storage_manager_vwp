@@ -304,6 +304,14 @@ _COLUMNS_ADDED = {
         # 평평한 목록(증가 경로)은 얕은 것만 보여야 읽히고, 트리 화면은 전부
         # 필요하다 - 깊이를 저장해 두 용도를 한 표로 감당한다.
         "depth": "INTEGER",
+        # 순회가 같은 stat 에서 곁다리로 모은 것 (`walker.WalkOutcome.details`).
+        # 크기만으로는 "어디가 큰가" 까지다 - 지워도 되는지(언제부터 안 바뀌었나),
+        # inode 를 누가 먹는지(파일 수)는 이것이 있어야 답한다. `du` 엔진으로 잰
+        # 줄과 이 열이 생기기 전의 줄은 비어 있다 (NULL = 모름).
+        "file_count": "INTEGER",
+        "newest_mtime": "INTEGER",   # 가장 최근에 바뀐 파일의 수정 시각 (epoch 초)
+        "cold_kb": "INTEGER",        # 오래 안 바뀐 양 (`detail_scan_cold_days`)
+        "own_kb": "INTEGER",         # 그 폴더에 직접 있는 파일의 크기
     },
     "account_scan_state": {
         # 계정 목록에 "최근 스캔일"을 보여주려면 기준선을 언제 완주했는지가

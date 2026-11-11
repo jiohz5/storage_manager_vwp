@@ -105,6 +105,11 @@ class _Node:
     depth: int
     parent: Optional["_Node"]
     blocks: int = 0              # 자기 파일 + 완료된 자식들의 합
+    # 아래 넷은 같은 stat 에서 곁다리로 모은다 (파일서버에 더 묻지 않는다).
+    own_blocks: int = 0          # 이 폴더에 직접 있는 파일 + 폴더 자신
+    files: int = 0               # 파일 수 (자기 것 + 완료된 자식들)
+    newest: float = 0.0          # 가장 최근에 바뀐 파일의 수정 시각 (없으면 0)
+    cold_blocks: int = 0         # 오래 안 바뀐 파일들의 블록 (`cold_days`)
     pending_children: int = 0
     scanned: bool = False        # 자기 디렉터리를 읽었는가
     complete: bool = False
@@ -132,6 +137,9 @@ class WalkOutcome:
     hardlink_files: int = 0   # nlink>1 이라 중복 검사를 거친 파일 수
     logical_bytes: int = 0    # st_size 합. 점유 블록과 벌어지면 희소/작은 파일
     max_depth_seen: int = 0   # 루트를 0으로 본 가장 깊은 디렉터리
+    # `entries` 의 경로마다 `{files, newest, cold_kb, own_kb}` - 파일 수, 가장 최근
+    # 수정 시각(epoch, 없으면 None), 오래 안 바뀐 양, 폴더에 직접 있는 파일의 크기.
+    details: dict = field(default_factory=dict)
 
 
 class ParallelWalker:
@@ -144,9 +152,17 @@ class ParallelWalker:
         workers: int = 4,
         timeout_seconds: Optional[float] = None,
         exclude_names: Optional[Set[str]] = None,
+        cold_days: int = 180,
+        deep_min_kb: Optional[int] = None,
     ):
         self.root = root.rstrip("/") or root
         self.max_depth = max_depth
+        # 이보다 오래 안 바뀐 파일을 '오래된 것' 으로 센다. 기준 시각은 순회를 시작할
+        # 때 한 번 정한다 (도는 동안 기준이 움직이면 같은 나이의 파일이 갈린다).
+        self._cold_before = time.time() - max(0, cold_days) * 86400
+        # 깊이 제한 아래라도 이 크기를 넘는 폴더는 남긴다 (None 이면 깊이만 본다).
+        # 큰 폴더의 조상도 크므로 사슬이 끊기지 않는다.
+        self._deep_min_blocks = deep_min_kb * 2 if deep_min_kb else None
         self.workers = max(1, workers)
         self.timeout_seconds = timeout_seconds
         self.exclude_names = exclude_names or set()
@@ -257,10 +273,17 @@ class ParallelWalker:
             if current.complete:
                 return
             current.complete = True
+            if (current.depth > self.max_depth and self._deep_min_blocks is not None
+                    and current.blocks >= self._deep_min_blocks):
+                self._kept.append(current)
             parent = current.parent
             if parent is None:
                 return
             parent.blocks += current.blocks
+            parent.files += current.files
+            parent.cold_blocks += current.cold_blocks
+            if current.newest > parent.newest:
+                parent.newest = current.newest
             parent.pending_children -= 1
             current = parent
 
@@ -276,6 +299,9 @@ class ParallelWalker:
         children: List[_Node] = []
         blocks = 0
         files = 0
+        newest = 0.0
+        cold = 0
+        cold_before = self._cold_before
         hardlinks: List[tuple] = []
         unreadable = 0
         logical = 0
@@ -325,13 +351,18 @@ class ParallelWalker:
                     # 대부분의 파일은 nlink==1 이라 중복 검사 자체를 건너뛴다.
                     if info.st_nlink > 1:
                         hardlinks.append(
-                            ((info.st_dev, info.st_ino), disk_blocks(info), info.st_size)
+                            ((info.st_dev, info.st_ino), disk_blocks(info), info.st_size,
+                             info.st_mtime)
                         )
                         continue
                     file_blocks = disk_blocks(info)
                     blocks += file_blocks
                     logical += info.st_size
                     files += 1
+                    if info.st_mtime > newest:
+                        newest = info.st_mtime
+                    if info.st_mtime < cold_before:
+                        cold += file_blocks
                     if file_blocks >= _MIN_BLOCKS:
                         big.append((file_blocks * 512 // 1024, entry.path))
         except (FileNotFoundError, NotADirectoryError):
@@ -345,19 +376,28 @@ class ParallelWalker:
         # 트리 갱신만 잠금 안에서 한다. 카운터는 스레드 지역으로 세고 끝에
         # 한 번만 합친다 - 디렉터리마다 잠금을 잡을 이유가 없다.
         with self._tree_lock:
-            for key, block_count, size in hardlinks:
+            for key, block_count, size, modified in hardlinks:
                 if key in self._seen_inodes:
                     continue
                 self._seen_inodes.add(key)
                 blocks += block_count
                 logical += size
                 files += 1
+                if modified > newest:
+                    newest = modified
+                if modified < cold_before:
+                    cold += block_count
             self.hardlink_files += len(hardlinks)
             self.logical_bytes += logical
             for candidate in big:
                 self._offer_large(candidate)
 
             node.blocks += blocks
+            node.own_blocks = blocks
+            node.files += files
+            node.cold_blocks += cold
+            if newest > node.newest:
+                node.newest = newest
             node.pending_children += len(children)
             node.scanned = True
             if node.depth > self._deepest:
@@ -438,10 +478,17 @@ class ParallelWalker:
         """완료된 디렉터리만 `du -k --max-depth=N` 모양으로 낸다."""
 
         entries = []
+        details = {}
         for node in self._kept:
-            if not node.complete or node.depth > self.max_depth:
+            if not node.complete:
                 continue
             entries.append((node.path, node.blocks * 512 // 1024))
+            details[node.path] = {
+                "files": node.files,
+                "newest": node.newest or None,
+                "cold_kb": node.cold_blocks * 512 // 1024,
+                "own_kb": node.own_blocks * 512 // 1024,
+            }
         entries.sort(key=lambda item: item[0])
 
         root = self._root_node
@@ -462,6 +509,7 @@ class ParallelWalker:
             hardlink_files=self.hardlink_files,
             logical_bytes=self.logical_bytes,
             max_depth_seen=deepest,
+            details=details,
         )
 
 
@@ -471,6 +519,8 @@ def walk_tree(
     max_depth: int = 3,
     workers: int = 4,
     exclude_names: Optional[Set[str]] = None,
+    cold_days: int = 180,
+    deep_min_kb: Optional[int] = None,
 ) -> WalkOutcome:
     """`du -k --max-depth=N` 자리에 그대로 쓸 수 있는 순회."""
 
@@ -480,4 +530,6 @@ def walk_tree(
         workers=workers,
         timeout_seconds=timeout_seconds,
         exclude_names=exclude_names,
+        cold_days=cold_days,
+        deep_min_kb=deep_min_kb,
     ).run()

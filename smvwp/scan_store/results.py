@@ -60,8 +60,12 @@ def save_tree_entries(
     generation: int,
     entries: List["tuple"],
     root_path: str,
+    details: Optional[dict] = None,
 ) -> int:
     """`du -k`가 준 (경로, KB) 목록을 기준선 결과로 저장한다.
+
+    `details` 는 순회 엔진이 경로마다 곁다리로 모은 것 `{경로: {files, newest,
+    cold_kb, own_kb}}` (`walker.WalkOutcome.details`). 없는 경로의 칸은 비워 둔다.
 
     깊이는 **계정 루트가 아니라 이 체크포인트 루트 기준**이다. 시간 초과로
     쪼개진 서브트리는 자기 루트에서 다시 0부터 세는데, 그래야 "얕은 것만
@@ -92,12 +96,19 @@ def save_tree_entries(
             depth = relative.count("/") + 1 if relative else 0
             if unfinished:
                 depth = max(0, depth - 1)
-        rows.append((account_id, generation, normalized, size_kb, now, depth))
+        extra = (details or {}).get(path) or {}
+        newest = extra.get("newest")
+        rows.append((
+            account_id, generation, normalized, size_kb, now, depth,
+            extra.get("files"), int(newest) if newest else None,
+            extra.get("cold_kb"), extra.get("own_kb"),
+        ))
 
     conn.executemany(
         "INSERT OR REPLACE INTO baseline_results "
-        "(account_id, generation, path, size_kb, completed_at, depth) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(account_id, generation, path, size_kb, completed_at, depth, "
+        "file_count, newest_mtime, cold_kb, own_kb) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
@@ -110,8 +121,8 @@ def tree_entries(
     """트리 화면용 - 이 스캔이 남긴 모든 디렉터리 (경로순)."""
 
     return conn.execute(
-        "SELECT path, size_kb, depth FROM baseline_results "
-        "WHERE account_id = ? AND generation = ? ORDER BY path",
+        "SELECT path, size_kb, depth, file_count, newest_mtime, cold_kb, own_kb "
+        "FROM baseline_results WHERE account_id = ? AND generation = ? ORDER BY path",
         (account_id, generation),
     ).fetchall()
 

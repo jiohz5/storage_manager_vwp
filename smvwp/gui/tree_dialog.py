@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -50,8 +51,9 @@ from ..scheduler import ThreadWorker
 from . import theme, visuals, widgets
 from .treemap_view import TreemapView
 
-COLUMN_KEYS = ("tree.col.path", "tree.col.size", "tree.col.share", "tree.col.change")
-(COL_PATH, COL_SIZE, COL_SHARE, COL_CHANGE) = range(4)
+COLUMN_KEYS = ("tree.col.path", "tree.col.size", "tree.col.share", "tree.col.change",
+               "tree.col.files", "tree.col.cold")
+(COL_PATH, COL_SIZE, COL_SHARE, COL_CHANGE, COL_FILES, COL_COLD) = range(6)
 
 # 처음 열 때 저절로 펼쳐 둘 깊이.
 #
@@ -104,10 +106,8 @@ class _TreeLoader(ThreadWorker):
                 return None
             previous = generation - 1 if generation > 1 else None
 
-            entries = [
-                (row["path"], row["size_kb"])
-                for row in scan_store.tree_entries(conn, account_id, generation)
-            ]
+            rows = scan_store.tree_entries(conn, account_id, generation)
+            entries = [(row["path"], row["size_kb"]) for row in rows]
             if not entries:
                 return None
             # 이전 세대가 없으면 **None** 을 넘긴다. 빈 목록으로 넘기면 모든
@@ -132,6 +132,8 @@ class _TreeLoader(ThreadWorker):
             large_files=large,
             root_path=self.account_paths.get(account_id),
         )
+        # 순회가 같이 남긴 파일 수·오래된 양을 폴더에 붙인다 (없으면 그 칸은 빈다).
+        tree_view.attach_details(roots, rows)
         return TreeResult(
             roots=roots,
             total_kb=sum(node.size_kb for node in roots) if roots else None,
@@ -216,7 +218,9 @@ class TreeDialog(QDialog):
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(COLUMN_KEYS))
-        self.tree.setHeaderLabels([i18n.t(key) for key in COLUMN_KEYS])
+        self.tree.setHeaderLabels([
+            i18n.t(key, days=self._config.settings.detail_scan_cold_days) for key in COLUMN_KEYS
+        ])
         self.tree.setUniformRowHeights(True)   # 행 높이를 재지 않아 훨씬 가볍다
         self.tree.setAlternatingRowColors(False)
         header = self.tree.header()
@@ -225,11 +229,12 @@ class TreeDialog(QDialog):
         header.setSectionResizeMode(COL_SIZE, header.ResizeToContents)
         # 비중·증감 칸에는 막대가 들어간다 (`widgets.CellDelegate`) - 내용 폭에 맞추면
         # 막대가 글자 밑에 숨는다.
-        for column, width in ((COL_SHARE, 150), (COL_CHANGE, 170)):
+        header.setSectionResizeMode(COL_FILES, header.ResizeToContents)
+        for column, width in ((COL_SHARE, 150), (COL_CHANGE, 170), (COL_COLD, 170)):
             header.setSectionResizeMode(column, header.Interactive)
             self.tree.setColumnWidth(column, width)
         self.cells = widgets.ChangeBarDelegate(self.tree)
-        for column in (COL_SHARE, COL_CHANGE):
+        for column in (COL_SHARE, COL_CHANGE, COL_COLD):
             self.tree.setItemDelegateForColumn(column, self.cells)
         self.tree.itemExpanded.connect(self._on_expanded)
         list_box.addWidget(self.tree, 1)
@@ -406,6 +411,8 @@ class TreeDialog(QDialog):
         if node.previous_pieced:
             item.setToolTip(COL_CHANGE, i18n.t("tree.note.previous_pieced"))
 
+        self._fill_scan_extras(item, node)
+
         if node.is_notable:
             for column in range(len(COLUMN_KEYS)):
                 item.setForeground(column, QColor(theme.tier_text(tiers.WARN)))
@@ -422,6 +429,33 @@ class TreeDialog(QDialog):
             # 하나 넣어 두고 펼칠 때 진짜로 채운다.
             item.addChild(QTreeWidgetItem([""]))
         return item
+
+    def _fill_scan_extras(self, item: QTreeWidgetItem, node) -> None:
+        """파일 수와 오래 안 바뀐 양 - 순회가 크기와 같이 남긴 것 (없으면 빈칸).
+
+        오래된 양은 그 폴더에서 차지하는 몫만큼의 막대다. 크기가 같아도 전부 1년 넘게
+        그대로인 폴더와 어제도 쓰인 폴더는 정리할 때 전혀 다른 물건이다."""
+
+        for column in (COL_FILES, COL_COLD):
+            item.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+        if node.file_count is not None:
+            item.setText(COL_FILES, f"{node.file_count:,}")
+        share = node.cold_share
+        if share is None:
+            return
+        days = self._config.settings.detail_scan_cold_days
+        item.setText(COL_COLD, formatting.format_kb(node.cold_kb) if node.cold_kb else "-")
+        if node.cold_kb:
+            item.setData(COL_COLD, widgets.CellDelegate.BAR_ROLE, (share, "neutral"))
+        else:
+            item.setForeground(COL_COLD, QColor(theme.TEXT_MUTED))
+        newest = (
+            datetime.fromtimestamp(node.newest_mtime).strftime("%Y-%m-%d")
+            if node.newest_mtime else i18n.t("common.none")
+        )
+        item.setToolTip(COL_COLD, i18n.t(
+            "tree.cold_tip", pct=f"{share * 100:.0f}", days=days, newest=newest,
+        ))
 
     def _label_for(self, node) -> str:
         if node.kind == tree_view.REST:

@@ -130,6 +130,97 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(deep.max_depth_seen, 5)
 
 
+class WhatTheWalkLeavesTests(unittest.TestCase):
+    """순회는 파일마다 이미 stat 을 한다 - 크기만 남기고 나머지를 버렸다.
+
+    "어디가 큰가" 는 답했지만 "지워도 되나(언제부터 안 바뀌었나)", "파일이 몇 개인가
+    (inode 를 누가 먹나)" 는 답하지 못했다. 같은 stat 에서 나오는 값이라 파일서버에
+    더 묻는 것이 없다. 폴더에 **직접 있는 파일**의 크기도 따로 남긴다 - 지금까지는
+    부모에서 자식들을 빼서 어림했다."""
+
+    DAY = 86400
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "acct"
+        self.now = 1_800_000_000.0
+        make_file(self.root / "top.bin", 4096)
+        make_file(self.root / "old" / "a.bin", 8192)
+        make_file(self.root / "old" / "b.bin", 8192)
+        make_file(self.root / "new" / "c.bin", 4096)
+        self._age(self.root / "top.bin", 10)
+        self._age(self.root / "old" / "a.bin", 400)
+        self._age(self.root / "old" / "b.bin", 300)
+        self._age(self.root / "new" / "c.bin", 2)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _age(self, path, days):
+        stamp = self.now - days * self.DAY
+        os.utime(path, (stamp, stamp))
+
+    def _details(self, **kwargs):
+        with patch("smvwp.walker.time.time", return_value=self.now):
+            outcome = walker.walk_tree(str(self.root), max_depth=3, cold_days=180, **kwargs)
+        sizes = {Path(p).name: kb for p, kb in outcome.entries}
+        return sizes, {Path(p).name: d for p, d in outcome.details.items()}
+
+    def test_file_counts_add_up_the_tree(self):
+        _sizes, details = self._details()
+        self.assertEqual(details["old"]["files"], 2)
+        self.assertEqual(details["new"]["files"], 1)
+        self.assertEqual(details["acct"]["files"], 4)
+
+    def test_the_newest_change_is_carried_up(self):
+        _sizes, details = self._details()
+        self.assertAlmostEqual(details["old"]["newest"], self.now - 300 * self.DAY, delta=2)
+        self.assertAlmostEqual(details["acct"]["newest"], self.now - 2 * self.DAY, delta=2)
+
+    def test_cold_is_what_has_not_changed_for_that_long(self):
+        sizes, details = self._details()
+        # old 의 파일 둘은 모두 180일 넘게 그대로다 - 폴더 자신의 블록만 빼고 전부.
+        self.assertGreater(details["old"]["cold_kb"], 0)
+        self.assertLessEqual(details["old"]["cold_kb"], sizes["old"])
+        self.assertEqual(details["new"]["cold_kb"], 0)
+        self.assertEqual(details["acct"]["cold_kb"], details["old"]["cold_kb"])
+
+    def test_own_is_what_sits_directly_in_the_folder(self):
+        sizes, details = self._details()
+        self.assertEqual(details["old"]["own_kb"], sizes["old"])
+        self.assertEqual(details["acct"]["own_kb"], sizes["acct"] - sizes["old"] - sizes["new"])
+
+
+class BigFoldersBelowTheDepthTests(unittest.TestCase):
+    """깊이 제한 아래라도 **큰 폴더는 남긴다.**
+
+    깊이 3 까지만 남기면 수십 TB 계정에서는 그 아래가 통째로 '더 들어갈 수 없음' 이다.
+    전부 남기면 줄이 디렉터리 수만큼 는다. 크기 문턱을 넘는 폴더만 깊이와 무관하게
+    남기면 줄 수는 크기로 묶이고(문턱이 50GB 면 30TB 계정에서 층마다 많아야 600줄),
+    큰 것은 어디에 있든 따라 내려갈 수 있다. 큰 폴더의 조상도 크므로 사슬이 끊기지
+    않는다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "acct"
+        make_file(self.root / "a" / "b" / "c" / "big" / "f.bin", 300_000)
+        make_file(self.root / "a" / "b" / "c" / "small" / "f.bin", 1_000)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _names(self, **kwargs):
+        outcome = walker.walk_tree(str(self.root), max_depth=1, **kwargs)
+        return sorted(str(Path(p).relative_to(self.root)).replace("\\", "/")
+                      for p, _ in outcome.entries if Path(p) != self.root)
+
+    def test_without_a_threshold_only_the_depth_counts(self):
+        self.assertEqual(self._names(), ["a"])
+
+    def test_a_big_folder_and_its_ancestors_are_kept(self):
+        self.assertEqual(self._names(deep_min_kb=100), ["a", "a/b", "a/b/c", "a/b/c/big"])
+
+
 class ExclusionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
