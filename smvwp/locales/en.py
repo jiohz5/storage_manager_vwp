@@ -514,6 +514,8 @@ STRINGS = {
     "scan.col.delta": "vs previous scan",
     "scan.col.delta_dated": "vs {previous}",
     "scan.col.focus": "Mostly in",
+    "scan.col.trend": "Trend",
+    "scan.trend_tip": "{first} {first_size} → {last} {last_size} ({count} scans)",
     "growth.unmeasured": "not measured last time",
     "growth.unmeasured_tip": (
         "The last scan could not measure this folder (permission or timeout), so its "

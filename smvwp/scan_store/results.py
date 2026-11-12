@@ -803,3 +803,75 @@ def comparable_change(
         "previous_kb": previous_kb,
         "excluded": roots,
     }
+
+
+# -- 최상위 폴더의 장기 이력 -------------------------------------------------
+
+def _top_of(path: str, account_path: str) -> Optional[str]:
+    """`path` 가 속한 계정 바로 아래 폴더. 계정 밖이거나 계정 자신이면 None."""
+
+    root = account_path.rstrip("/")
+    if not path.startswith(root + "/"):
+        return None
+    first = path[len(root) + 1:].split("/", 1)[0]
+    return f"{root}/{first}" if first else None
+
+
+def record_folder_history(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    account_path: str,
+    completed_at: str,
+) -> int:
+    """끝난 세대의 계정 바로 아래 폴더 크기를 이력에 남긴다. 남긴 줄 수를 준다.
+
+    측정 단위(깊이 0) 줄을 계정 바로 아래 폴더로 모아 더한다 - 시간 초과로 나눠 잰
+    폴더도 조각의 합으로 한 줄이 된다. 그 세대에 못 잰 체크포인트가 든 폴더는 남기지
+    않는다 (반쪽 값이 추세선을 거짓으로 꺾는다)."""
+
+    totals: Dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT path, size_kb FROM baseline_results WHERE account_id = ? AND generation = ? "
+        "AND (depth = 0 OR depth IS NULL)",
+        (account_id, generation),
+    ):
+        top = _top_of(row["path"], account_path)
+        if top is not None:
+            totals[top] = totals.get(top, 0) + (row["size_kb"] or 0)
+    for row in conn.execute(
+        "SELECT path FROM scan_checkpoints WHERE account_id = ? AND kind = 'baseline' "
+        "AND generation = ? AND status = 'error'",
+        (account_id, generation),
+    ):
+        totals.pop(_top_of(row["path"].rstrip("/"), account_path), None)
+    conn.executemany(
+        "INSERT OR REPLACE INTO folder_history (account_id, path, completed_at, size_kb) "
+        "VALUES (?, ?, ?, ?)",
+        [(account_id, path, completed_at, size) for path, size in totals.items()],
+    )
+    conn.commit()
+    return len(totals)
+
+
+def folder_history(conn: sqlite3.Connection, account_id: str, since: str) -> Dict[str, List[tuple]]:
+    """`{폴더: [(끝낸 때, KB), ...]}` - `since` 뒤의 것, 오래된 것부터."""
+
+    found: Dict[str, List[tuple]] = {}
+    for row in conn.execute(
+        "SELECT path, completed_at, size_kb FROM folder_history "
+        "WHERE account_id = ? AND completed_at >= ? ORDER BY path, completed_at",
+        (account_id, since),
+    ):
+        found.setdefault(row["path"], []).append((row["completed_at"], row["size_kb"]))
+    return found
+
+
+def prune_folder_history(conn: sqlite3.Connection, retention_days: int, now=None) -> int:
+    from datetime import datetime, timedelta, timezone
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=retention_days)).isoformat()
+    cursor = conn.execute("DELETE FROM folder_history WHERE completed_at < ?", (cutoff,))
+    conn.commit()
+    return cursor.rowcount

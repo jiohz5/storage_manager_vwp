@@ -56,8 +56,8 @@ FINDING_ACCOUNT_ROLE = Qt.UserRole
 FINDING_TAB_ROLE = Qt.UserRole + 1
 
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta",
-                      "scan.col.focus"]
-(GROWTH_PATH, GROWTH_SIZE, GROWTH_DELTA, GROWTH_FOCUS) = range(4)
+                      "scan.col.trend", "scan.col.focus"]
+(GROWTH_PATH, GROWTH_SIZE, GROWTH_DELTA, GROWTH_TREND, GROWTH_FOCUS) = range(5)
 
 # 가장 큰 파일 표. 디렉터리 합계만 보면 "파일 하나가 유난히 크다"를 놓친다 -
 # 300GB 짜리 디렉터리가 고른 파일 3천 개인지 한 파일이 280GB 인지 구분되지
@@ -270,6 +270,26 @@ def growth_focus_item(row) -> QTableWidgetItem:
             pct=f"{focus['delta_kb'] / change * 100:.0f}",
         ))
     item.setToolTip("\n".join(tip))
+    return item
+
+
+def trend_item(points) -> QTableWidgetItem:
+    """'추세' 칸 - 그 폴더의 바퀴마다 크기 `[(끝낸 때, KB), ...]` 를 작은 선으로.
+
+    둘 넘게 있어야 선이다. 툴팁은 처음과 지금 (`2025-11-02 3.1 TB → 2026-11-08 7.9 TB`).
+    정렬은 처음 대비 늘어난 양으로."""
+
+    points = list(points or [])
+    if len(points) < 2:
+        return widgets.NumericItem("", None)
+    (first_at, first_kb), (last_at, last_kb) = points[0], points[-1]
+    item = widgets.NumericItem("", last_kb - first_kb)
+    item.setData(widgets.CellDelegate.SPARK_ROLE, [kb for _at, kb in points])
+    item.setToolTip(i18n.t(
+        "scan.trend_tip", first=formatting.local_date_text(first_at),
+        first_size=formatting.format_kb(first_kb), last=formatting.local_date_text(last_at),
+        last_size=formatting.format_kb(last_kb), count=len(points),
+    ))
     return item
 
 
@@ -796,10 +816,13 @@ class GrowthPage(QWidget):
         header.setSectionResizeMode(GROWTH_DELTA, QHeaderView.Interactive)
         table.setColumnWidth(GROWTH_DELTA, 190)
         header.setSectionResizeMode(GROWTH_FOCUS, QHeaderView.Stretch)
+        # 계정 바로 아래 폴더의 장기 이력 (`folder_history`) - "언제부터 이렇게 늘었나".
+        header.setSectionResizeMode(GROWTH_TREND, QHeaderView.Fixed)
+        table.setColumnWidth(GROWTH_TREND, 110)
         self.bars = widgets.ChangeBarDelegate(table)
         table.setItemDelegateForColumn(GROWTH_DELTA, self.bars)
         self.cells = widgets.CellDelegate(table)
-        for column in (GROWTH_PATH, GROWTH_SIZE, GROWTH_FOCUS):
+        for column in (GROWTH_PATH, GROWTH_SIZE, GROWTH_TREND, GROWTH_FOCUS):
             table.setItemDelegateForColumn(column, self.cells)
         # 이 표에는 칸 위젯이 없어 Qt 내장 정렬을 그대로 쓸 수 있다.
         # (계정 표는 막대·배지가 칸 위젯이라 Qt 정렬을 켜면 위젯이 행을 따라
@@ -903,6 +926,8 @@ class GrowthPage(QWidget):
             self.table.setItem(index, GROWTH_SIZE, _size_item(current_kb, account_kb))
             # 새 경로는 통째로 늘어난 것으로 본다 (저장소가 고른 순서와 같다).
             self.table.setItem(index, GROWTH_DELTA, growth_delta_item(row))
+            self.table.setItem(index, GROWTH_TREND, trend_item(
+                (getattr(entry, "folder_trends", None) or {}).get(row["path"])))
             self.table.setItem(index, GROWTH_FOCUS, growth_focus_item(row))
         return GROWTH_DELTA
 
@@ -957,6 +982,8 @@ class GrowthPage(QWidget):
             self.table.setItem(index, GROWTH_PATH, _path_item(row["path"], account.path))
             self.table.setItem(index, GROWTH_SIZE, _size_item(row["size_kb"], account_kb))
             self.table.setItem(index, GROWTH_DELTA, widgets.NumericItem(dash, None))
+            self.table.setItem(index, GROWTH_TREND, trend_item(
+                (getattr(entry, "folder_trends", None) or {}).get(row["path"])))
             self.table.setItem(index, GROWTH_FOCUS, QTableWidgetItem(""))
         return GROWTH_SIZE
 

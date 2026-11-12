@@ -235,6 +235,17 @@ CREATE TABLE IF NOT EXISTS health_results (
 -- 그런데 창은 열 때마다 이것을 결과 표에서 줄마다 찾아 읽었다 (계정 20개면 14MB,
 -- NFS 요청 3천여 번 - 창을 열 때의 가장 큰 읽기). 스캔이 남긴 것을 창이 세대와
 -- 설정이 같을 때만 쓴다 (`nightly_scan.get_status_snapshot`).
+-- 계정 바로 아래 폴더의 크기 - 바퀴를 끝낼 때마다 한 줄씩, 오래 (`folder_history_days`).
+-- 스캔 결과는 두 바퀴만 남아 "언제부터 이렇게 늘었나" 에 답하지 못했다. 용량 변화 표의
+-- '추세' 칸이 읽는다 (`results.record_folder_history`).
+CREATE TABLE IF NOT EXISTS folder_history (
+    account_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    size_kb INTEGER NOT NULL,
+    PRIMARY KEY (account_id, path, completed_at)
+);
+
 CREATE TABLE IF NOT EXISTS scan_summaries (
     account_id TEXT PRIMARY KEY,
     input_key TEXT NOT NULL,

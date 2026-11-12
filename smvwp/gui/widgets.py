@@ -304,6 +304,7 @@ class CellDelegate(QStyledItemDelegate):
     - `CHIP_ROLE` - `(글, 알약 종류)`. 글자 앞에 알약 (새 폴더, 없어짐). 알약 글이 칸의
       글과 같으면 알약만 그린다 (`지난번 못 잼`, `목록에 없던 파일`).
     - `PATH_ROLE` - 참이면 경로의 마지막 조각만 굵게, 앞의 폴더는 흐리게.
+    - `SPARK_ROLE` - 값 목록 (오래된 것부터). 칸 안에 작은 추세선, 끝점에 점.
 
     글자색은 칸의 전경색을 따른다 (`setForeground`) - 시험과 다른 화면이 그 값을 읽는다."""
 
@@ -311,6 +312,7 @@ class CellDelegate(QStyledItemDelegate):
     BAR_ROLE = Qt.UserRole + 8
     CHIP_ROLE = Qt.UserRole + 9
     PATH_ROLE = Qt.UserRole + 10
+    SPARK_ROLE = Qt.UserRole + 11   # [값, ...] 오래된 것부터 - 칸 안의 작은 추세선
     INSET = 6
     ALPHA = 0.22
     PAD = 8
@@ -362,6 +364,9 @@ class CellDelegate(QStyledItemDelegate):
 
         rect = QRectF(opt.rect.adjusted(self.PAD, 0, -self.PAD, 0))
         middle = rect.center().y()
+        spark = index.data(self.SPARK_ROLE)
+        if spark and len(spark) >= 2:
+            self._paint_spark(painter, rect.adjusted(0, 8, 0, -8), spark)
         alignment = index.data(Qt.TextAlignmentRole)
         right = bool(int(alignment or 0) & Qt.AlignRight)
         chip = index.data(self.CHIP_ROLE)
@@ -429,6 +434,49 @@ class CellDelegate(QStyledItemDelegate):
                 metrics.elidedText(text, opt.textElideMode, int(rect.width())),
             )
         painter.restore()
+
+
+# 추세선의 세로 폭은 그 폴더의 최저~최고지만, 최고값의 이만큼보다 좁히지 않는다 -
+# 5.0 -> 4.9 -> 5.0 TB 가 칸을 꽉 채운 출렁임으로 보이면 '평평하다' 를 못 읽는다.
+SPARK_MIN_SPAN = 0.10
+
+
+def _spark_points(rect, values):
+    low, high = min(values), max(values)
+    real = high - low
+    span = max(real, abs(high) * SPARK_MIN_SPAN) or 1
+    low -= (span - real) / 2
+    step = rect.width() / (len(values) - 1)
+    return [
+        (rect.left() + i * step, rect.bottom() - (value - low) / span * rect.height())
+        for i, value in enumerate(values)
+    ]
+
+
+def _paint_spark(self, painter, rect, values) -> None:
+    """칸 안의 작은 추세선 - 축 없이 모양만 (오르나, 평평한가, 꺾였나).
+
+    세로는 그 폴더 자신의 최저~최고라, 작은 폴더의 출렁임도 모양으로 보인다. 크기는
+    옆 칸의 숫자와 막대가 말한다."""
+
+    from PyQt5.QtCore import QPointF
+    from PyQt5.QtGui import QPainterPath, QPen
+
+    points = _spark_points(rect, values)
+    path = QPainterPath(QPointF(*points[0]))
+    for x, y in points[1:]:
+        path.lineTo(x, y)
+    color = QColor(theme.ACCENT)
+    painter.setPen(QPen(color, 1.6))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawPath(path)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    x, y = points[-1]
+    painter.drawEllipse(QRectF(x - 2.5, y - 2.5, 5, 5))
+
+
+CellDelegate._paint_spark = _paint_spark
 
 
 class ChangeBarDelegate(CellDelegate):

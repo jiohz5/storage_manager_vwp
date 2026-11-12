@@ -45,7 +45,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -500,14 +500,29 @@ def _process_baseline(
     # 훑어 만들 필요가 없다 - 그렇게 하면 쪼개진 서브트리의 내부가 통째로
     # 빠진다.
     # 끝낸 시각은 이 스캔의 시계로 남긴다 - "이 밤에 이미 끝냈나" 를 그것으로 본다.
-    scan_store.mark_generation_completed(
-        conn, account.account_id, generation, completed_at=_utc_iso(clock())
-    )
+    finish_generation(conn, data_dir, account, generation, settings, clock())
+    return "done", generation
+
+
+def finish_generation(conn, data_dir: Path, account, generation: int, settings,
+                      now: datetime) -> None:
+    """한 계정의 세대를 끝낸다 - 완료 표시, 그때의 사용량, 폴더 이력, 옛 세대 정리.
+
+    `now` 는 스캔의 시계(현지 또는 시간대 있는 시각)."""
+
+    finished = _utc_iso(now)
+    scan_store.mark_generation_completed(conn, account.account_id, generation, completed_at=finished)
     # 이때의 사용량을 남긴다 - 다음 밤들이 "그 뒤로 얼마나 변했나" 를 보고 많이 변한
     # 계정을 먼저 돈다 (`scan_order`).
     record_scan_usage(data_dir, account.account_id, conn=conn)
+    # 계정 바로 아래 폴더의 크기를 오래 남긴다 - 결과는 두 바퀴만 남는다. 기록 실패가
+    # 세대를 끝내지 못하게 하지는 않는다.
+    try:
+        scan_store.record_folder_history(conn, account.account_id, generation, account.path, finished)
+        scan_store.prune_folder_history(conn, settings.folder_history_days)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("폴더 이력을 남기지 못했습니다: %s", account.name)
     scan_store.prune_old_generations(conn, account.account_id, settings.detail_scan_keep_generations)
-    return "done", generation
 
 
 def _unavailable_reason(conn, account, state, top_dirs) -> "Optional[tuple[str, str]]":
@@ -1332,10 +1347,11 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 # 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
 # 3: 증가 경로를 증감의 크기 순으로(줄어든 곳도), 지난번 나눠 쟀거나 못 잰 경로를 가림
 #    (`previous_note`), 변화가 몰린 곳(`focus`), 큰 파일의 '견줬나'.
-SUMMARY_FORMAT = 5   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
+SUMMARY_FORMAT = 6   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
                      # 3: 용량 변화 줄의 '가장 많이 변한 곳'
                      # 4: 계정 증감을 두 바퀴 모두 잰 곳끼리 (`comparable_change`)
                      # 5: 크고 오래 안 바뀐 폴더 (`cold_folders`)
+                     # 6: 계정 바로 아래 폴더의 장기 이력 (`folder_trends`)
 
 
 def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
@@ -1377,7 +1393,8 @@ def save_summaries(data_dir: Path, config: config_module.AppConfig) -> int:
             if saved.get(account.account_id) == key:
                 continue
             parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth,
-                                   focus=True, cold_min_kb=settings.cleanup_min_size_kb)
+                                   focus=True, cold_min_kb=settings.cleanup_min_size_kb,
+                                   trend_days=settings.folder_history_days)
             rows.append((account.account_id, key, json.dumps(_plain(parts), ensure_ascii=False),
                          scan_store.utc_now_iso()))
         ids = [account.account_id for account in config.accounts]
@@ -1526,6 +1543,8 @@ class AccountScanSnapshot:
     # 크고 거의 통째로 오래 안 바뀐 폴더 `[{path, size_kb, cold_kb, newest_mtime}]`
     # (`scan_store.cold_folders`). 야간 스캔이 요약을 남길 때만 채운다.
     cold_folders: List[dict] = field(default_factory=list)
+    # 계정 바로 아래 폴더들의 장기 이력 `{폴더: [(끝낸 때, KB), ...]}`. 요약에만 있다.
+    folder_trends: dict = field(default_factory=dict)
     # 지금까지 실제로 잰 용량 (KB). 진행 중인 세대 기준이라 스캔이 도는 동안
     # 계속 커진다 - "얼마나 찾았나"에 답하는 값이다. 아직 하나도 못 쟀으면
     # None (0과 '모름'은 다르다).
@@ -1576,7 +1595,8 @@ class StatusSnapshot:
 
 
 def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
-                   focus: bool = False, cold_min_kb: Optional[int] = None) -> dict:
+                   focus: bool = False, cold_min_kb: Optional[int] = None,
+                   trend_days: int = 730) -> dict:
     """완료된 세대에만 매인 값들. 세대가 바뀌기 전에는 달라지지 않는다.
 
     두 스캔의 날짜는 세대를 끝낼 때 남긴 시각을 먼저 쓴다. 결과 표에서 찾으면
@@ -1644,6 +1664,14 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
         "cold_folders": (
             scan_store.cold_folders(conn, account_id, current_gen, cold_min_kb)
             if focus and current_gen and cold_min_kb else []
+        ),
+        # 계정 바로 아래 폴더들의 장기 이력 (용량 변화 표의 '추세' 칸). 요약을 남길 때만.
+        "folder_trends": (
+            scan_store.folder_history(
+                conn, account_id,
+                (datetime.now(timezone.utc) - timedelta(days=trend_days)).isoformat(),
+            )
+            if focus and current_gen else {}
         ),
         "partial_paths": (
             scan_store.partial_paths(conn, account_id, current_gen) if current_gen else []
@@ -1758,6 +1786,10 @@ def get_status_snapshot(
                     growth=settled["growth"],
                     large_files=settled["large_files"],
                     cold_folders=list(settled.get("cold_folders") or []),
+                    folder_trends={
+                        path: [tuple(point) for point in points]
+                        for path, points in (settled.get("folder_trends") or {}).items()
+                    },
                     pending_baseline_count=pending_baseline_count,
                     baseline_done=baseline_counts["done"] + baseline_counts["error"],
                     baseline_total=baseline_counts["total"],

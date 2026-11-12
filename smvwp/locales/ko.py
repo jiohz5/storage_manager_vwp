@@ -535,6 +535,8 @@ STRINGS = {
     "scan.col.delta": "이전 스캔 대비",
     "scan.col.delta_dated": "{previous} 대비",
     "scan.col.focus": "가장 많이 변한 곳",
+    "scan.col.trend": "추세",
+    "scan.trend_tip": "{first} {first_size} → {last} {last_size} (스캔 {count}번)",
     "growth.unmeasured": "지난번 못 잼",
     "growth.unmeasured_tip": (
         "지난 스캔에서 이 폴더를 재지 못해(권한·시간 초과) 그때 얼마였는지 모릅니다. "

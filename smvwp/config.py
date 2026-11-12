@@ -210,6 +210,8 @@ class Settings:
     #   0 이면 깊이만 본다. 줄 수는 크기로 묶인다 - 50GB 면 30TB 계정에서 층마다
     #   많아야 600줄.
     detail_scan_cold_days: int = 180
+    # 계정 바로 아래 폴더 크기의 이력을 며칠 남기나 (용량 변화 표의 '추세' 칸).
+    folder_history_days: int = 730
     detail_scan_deep_min_kb: int = 50 * 1024 * 1024  # 50GB
     # 평평한 목록(증가 경로)에 보여줄 최대 깊이.
     #
@@ -407,6 +409,7 @@ _NUMBER_RANGES = (
     ("growth_notice_pct", 0, 100, "0이면 바닥값만"),
     ("detail_scan_max_age_days", 1, None, ""),
     ("detail_scan_cold_days", 1, None, ""),
+    ("folder_history_days", 30, None, ""),
     ("detail_scan_deep_min_kb", 0, None, "0이면 깊이만"),
     ("full_prediction_window_hours", 1, None, ""),
     ("full_prediction_min_samples", 2, None, "회귀에 최소 2점 필요"),

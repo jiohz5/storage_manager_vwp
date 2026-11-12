@@ -2292,6 +2292,38 @@ class HomePicturesTests(_GuiCase):
         self.assertEqual(self.window._scan_tab.scan_account_combo.currentData(), bak.account_id)
 
 
+class TrendColumnTests(_GuiCase):
+    """용량 변화 표의 '추세' 칸 - 폴더의 장기 이력 (`tests/test_folder_history.py`)."""
+
+    GB = 1024 * 1024
+
+    def test_the_growth_table_draws_the_history_of_each_folder(self):
+        from smvwp.gui.scan_pages import GROWTH_TREND, GrowthPage
+        from smvwp.gui.widgets import CellDelegate
+        from smvwp.nightly_scan import AccountScanSnapshot, StatusSnapshot
+
+        page = GrowthPage()
+        page.retranslate()
+        self.addCleanup(page.close)
+        account = config_module.Account(name="proj", path="/acct", account_id="a1")
+        entry = AccountScanSnapshot(
+            account_id="a1", account_name="proj", last_completed_generation=2, top_paths=[],
+            growth=[{"path": "/acct/sim", "current_kb": 300 * self.GB, "previous_kb": 200 * self.GB},
+                    {"path": "/acct/lib", "current_kb": 50 * self.GB, "previous_kb": 50 * self.GB}],
+            pending_baseline_count=0, current_scan_at="2026-10-01T00:00:00+00:00",
+            folder_trends={"/acct/sim": [("2025-11-01T03:00:00+00:00", 100 * self.GB),
+                                         ("2026-05-01T03:00:00+00:00", 200 * self.GB),
+                                         ("2026-10-01T03:00:00+00:00", 300 * self.GB)]},
+        )
+        page.show_account(StatusSnapshot(is_running=False, window_description="", latest_run=None,
+                                         accounts=[entry]), account)
+        cells = {page.table.item(r, 0).text(): page.table.item(r, GROWTH_TREND)
+                 for r in range(page.table.rowCount())}
+        self.assertEqual(cells["sim"].data(CellDelegate.SPARK_ROLE), [100 * self.GB, 200 * self.GB, 300 * self.GB])
+        self.assertIn("2025-11-01", cells["sim"].toolTip())
+        self.assertIsNone(cells["lib"].data(CellDelegate.SPARK_ROLE))
+
+
 class HomeHeaderTests(_GuiCase):
     """머리줄의 '마지막 수집' - 수집이 멈췄으면 그 경고가 그 자리에 먼저 온다."""
 
