@@ -127,6 +127,53 @@ def tree_entries(
     ).fetchall()
 
 
+# 폴더의 이만큼이 오래 안 바뀌었으면 '거의 통째로 오래된' 폴더로 본다.
+COLD_SHARE = 0.9
+
+
+def cold_folders(
+    conn: sqlite3.Connection,
+    account_id: str,
+    generation: int,
+    min_kb: int,
+    min_share: float = COLD_SHARE,
+    limit: int = 5,
+) -> List[dict]:
+    """크고, 거의 통째로 오래 안 바뀐 폴더들 `[{path, size_kb, cold_kb, newest_mtime}]`.
+
+    오래된 양이 `min_kb` 이상이고 그 폴더의 `min_share` 이상인 것. 그런 폴더 안의
+    폴더는 따로 올리지 않는다 (같은 덩어리가 여러 줄이 된다) - 가장 위의 것이 대표다.
+    반대로 요즘 쓰는 큰 폴더 안의 오래된 구석은 그 구석이 올라온다. 오래된 양이
+    큰 것부터 `limit` 개.
+
+    오래된 양은 순회가 남긴다 (`save_tree_entries` 의 details). 없는 스캔(`du` 엔진,
+    예전 줄)에서는 빈 목록이다. 세대의 줄을 훑으므로 야간 스캔이 요약을 남길 때와
+    보고서가 부른다 - 창이 열 때마다 부르지 않는다."""
+
+    rows = conn.execute(
+        "SELECT path, size_kb, cold_kb, newest_mtime FROM baseline_results "
+        "WHERE account_id = ? AND generation = ? AND cold_kb >= ?",
+        (account_id, generation, max(1, int(min_kb))),
+    ).fetchall()
+    cold = {
+        row["path"]: row for row in rows
+        if row["size_kb"] and row["cold_kb"] >= row["size_kb"] * min_share
+    }
+    top = []
+    for path, row in cold.items():
+        parent = path.rsplit("/", 1)[0]
+        while parent and parent not in cold:
+            parent = parent.rsplit("/", 1)[0] if "/" in parent else ""
+        if not parent:
+            top.append(row)
+    top.sort(key=lambda row: (-row["cold_kb"], row["path"]))
+    return [
+        {"path": row["path"], "size_kb": row["size_kb"], "cold_kb": row["cold_kb"],
+         "newest_mtime": row["newest_mtime"]}
+        for row in top[:limit]
+    ]
+
+
 def top_paths(
     conn: sqlite3.Connection,
     account_id: str,

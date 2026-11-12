@@ -490,14 +490,48 @@ def build_cleanup_report(data_dir: Path, config: config_module.AppConfig) -> str
             if i18n.get_language() == i18n.KOREAN
             else "No cleanup candidates met the criteria."
         )
-        return "\n".join(lines) + "\n"
-
     for item in candidates:
         lines.append(
             f"{_fmt_kb(item.size_kb):>12}  {item.account_name:<16} "
             f"(gen {item.first_seen_generation}~, {item.generations_observed})  {item.path}"
         )
+    lines.extend(_cold_section(data_dir, config))
     return "\n".join(lines) + "\n"
+
+
+def _cold_section(data_dir: Path, config: config_module.AppConfig) -> List[str]:
+    """크고 거의 통째로 오래 안 바뀐 폴더 - 파일의 수정 시각이 근거다.
+
+    위의 '크기 변화 없음' 은 두 바퀴 사이만 본다 - 어제 만든 폴더도 걸리고, 3년 묵은
+    폴더도 로그 한 줄이 붙으면 빠진다. 순회가 남긴 '오래 안 바뀐 양' 이 더 곧은 근거다.
+    그래도 검토용이다 - 오래됐어도 남겨야 하는 보관본이 있다."""
+
+    settings = config.settings
+    found = []
+    with scan_store.session(data_dir) as conn:
+        states = scan_store.account_states(conn)
+        for account in config.accounts:
+            state = states.get(account.account_id)
+            if state is None or not state.last_completed_generation:
+                continue
+            for row in scan_store.cold_folders(
+                conn, account.account_id, state.last_completed_generation,
+                settings.cleanup_min_size_kb, limit=20,
+            ):
+                found.append((account.name, row))
+    if not found:
+        return []
+    korean = i18n.get_language() == i18n.KOREAN
+    days = settings.detail_scan_cold_days
+    lines = ["", (
+        f"[{days}일 넘게 바뀌지 않은 큰 폴더]  (오래된 양 · 계정 · 마지막 변경 · 경로)" if korean
+        else f"[Big folders unchanged for over {days} days]  (old size, account, last change, path)"
+    )]
+    found.sort(key=lambda pair: -pair[1]["cold_kb"])
+    for name, row in found:
+        newest = formatting.epoch_date_text(row["newest_mtime"])
+        lines.append(f"{_fmt_kb(row['cold_kb']):>12}  {name:<16} {newest}  {row['path']}")
+    return lines
 
 
 # -- 생성 진입점 -----------------------------------------------------------

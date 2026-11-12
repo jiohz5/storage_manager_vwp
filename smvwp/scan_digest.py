@@ -70,6 +70,11 @@ FINDING_FAILED = "failed"
 FINDING_PARTIAL = "partial"
 # 계정 경로를 못 봐 그 밤을 통째로 건너뛰었다 (`nightly_scan._unavailable_reason`).
 FINDING_UNAVAILABLE = "unavailable"
+# 크고 거의 통째로 오래 안 바뀐 폴더 (`scan_store.cold_folders`). **지워도 된다는 말이
+# 아니다** - 오래됐어도 남겨야 하는 보관본이 있다. 살펴보라는 것이다.
+FINDING_COLD = "cold"
+# 계정마다 살펴볼 것에 올리는 오래된 폴더 수 - 다 올리면 목록이 그것으로 찬다.
+COLD_PER_ACCOUNT = 1
 
 
 @dataclass
@@ -290,6 +295,16 @@ def _findings(accounts, settings) -> List[Finding]:
                         size_kb=current, delta_kb=delta,
                     )
                 )
+
+        for row in (getattr(entry, "cold_folders", None) or [])[:COLD_PER_ACCOUNT]:
+            normal.append(
+                Finding(
+                    kind=FINDING_COLD, account=name, account_id=entry.account_id,
+                    path=row["path"], size_kb=row["cold_kb"],
+                    count=int(getattr(settings, "detail_scan_cold_days", 180)),
+                    when=str(row.get("newest_mtime") or ""),
+                )
+            )
 
     # 급한 것 안에서도 순서가 있다. **계정을 통째로 못 본 것**, 경로를 아예 못
     # 잰 것, 덜 세어진 것 순이다 - 앞쪽일수록 숫자가 더 많이 빠져 있다. 계정

@@ -1332,9 +1332,10 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 # 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
 # 3: 증가 경로를 증감의 크기 순으로(줄어든 곳도), 지난번 나눠 쟀거나 못 잰 경로를 가림
 #    (`previous_note`), 변화가 몰린 곳(`focus`), 큰 파일의 '견줬나'.
-SUMMARY_FORMAT = 4   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
+SUMMARY_FORMAT = 5   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
                      # 3: 용량 변화 줄의 '가장 많이 변한 곳'
                      # 4: 계정 증감을 두 바퀴 모두 잰 곳끼리 (`comparable_change`)
+                     # 5: 크고 오래 안 바뀐 폴더 (`cold_folders`)
 
 
 def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
@@ -1376,7 +1377,7 @@ def save_summaries(data_dir: Path, config: config_module.AppConfig) -> int:
             if saved.get(account.account_id) == key:
                 continue
             parts = _settled_parts(conn, state, current_gen, current_gen - 1, top_n, max_depth,
-                                   focus=True)
+                                   focus=True, cold_min_kb=settings.cleanup_min_size_kb)
             rows.append((account.account_id, key, json.dumps(_plain(parts), ensure_ascii=False),
                          scan_store.utc_now_iso()))
         ids = [account.account_id for account in config.accounts]
@@ -1522,6 +1523,9 @@ class AccountScanSnapshot:
     # 이 계정에서 가장 큰 파일들과 지난 세대 대비 변화
     # (`large_files.build` 에 그대로 넣을 수 있는 모양).
     large_files: List[tuple] = field(default_factory=list)
+    # 크고 거의 통째로 오래 안 바뀐 폴더 `[{path, size_kb, cold_kb, newest_mtime}]`
+    # (`scan_store.cold_folders`). 야간 스캔이 요약을 남길 때만 채운다.
+    cold_folders: List[dict] = field(default_factory=list)
     # 지금까지 실제로 잰 용량 (KB). 진행 중인 세대 기준이라 스캔이 도는 동안
     # 계속 커진다 - "얼마나 찾았나"에 답하는 값이다. 아직 하나도 못 쟀으면
     # None (0과 '모름'은 다르다).
@@ -1572,7 +1576,7 @@ class StatusSnapshot:
 
 
 def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
-                   focus: bool = False) -> dict:
+                   focus: bool = False, cold_min_kb: Optional[int] = None) -> dict:
     """완료된 세대에만 매인 값들. 세대가 바뀌기 전에는 달라지지 않는다.
 
     두 스캔의 날짜는 세대를 끝낼 때 남긴 시각을 먼저 쓴다. 결과 표에서 찾으면
@@ -1634,6 +1638,12 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
         "large_files": (
             scan_store.large_file_changes(conn, account_id, current_gen, previous_gen)
             if current_gen else []
+        ),
+        # 크고 오래 안 바뀐 폴더. 세대의 줄을 훑으므로 요약을 남길 때만 (`focus` 와 같은
+        # 까닭) - 창이 스스로 읽을 때는 비워 둔다.
+        "cold_folders": (
+            scan_store.cold_folders(conn, account_id, current_gen, cold_min_kb)
+            if focus and current_gen and cold_min_kb else []
         ),
         "partial_paths": (
             scan_store.partial_paths(conn, account_id, current_gen) if current_gen else []
@@ -1747,6 +1757,7 @@ def get_status_snapshot(
                     top_paths=settled["top_paths"],
                     growth=settled["growth"],
                     large_files=settled["large_files"],
+                    cold_folders=list(settled.get("cold_folders") or []),
                     pending_baseline_count=pending_baseline_count,
                     baseline_done=baseline_counts["done"] + baseline_counts["error"],
                     baseline_total=baseline_counts["total"],

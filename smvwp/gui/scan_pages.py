@@ -45,6 +45,8 @@ TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.
 FINDING_TABS = {
     scan_digest.FINDING_LARGE_FILE: TAB_LARGE,
     scan_digest.FINDING_GROWTH: TAB_GROWTH,
+    # 오래된 폴더는 용량 변화 탭에서 그 계정을 고른 채 '폴더 펼쳐 보기' 로 이어 본다.
+    scan_digest.FINDING_COLD: TAB_GROWTH,
     scan_digest.FINDING_FAILED: TAB_GROWTH,
     scan_digest.FINDING_PARTIAL: TAB_GROWTH,
     # 계정을 통째로 건너뛴 것은 계정 탭에서 그 계정의 지난 결과와 함께 본다.
@@ -581,6 +583,15 @@ class SummaryPage(QWidget):
                 name=finding.path.rsplit("/", 1)[-1],
                 size=formatting.format_kb(finding.size_kb),
                 change=change,
+            )
+        if finding.kind == scan_digest.FINDING_COLD:
+            return i18n.t(
+                "digest.item.cold",
+                account=finding.account,
+                name=finding.path.rsplit("/", 1)[-1],
+                size=formatting.format_kb(finding.size_kb),
+                days=finding.count,
+                newest=formatting.epoch_date_text(finding.when),
             )
         return i18n.t(
             "digest.item.growth",

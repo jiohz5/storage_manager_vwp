@@ -300,6 +300,7 @@ STRINGS = {
     "digest.item.unavailable_empty": "{account}: {when} 스캔에서 계정 경로가 비어 보여 건너뛰었습니다 - 마운트가 빠졌을 수 있습니다. 지난 결과를 그대로 보여 줍니다",
     "digest.item.large_file": "{account}: {name} - {size} ({change})",
     "digest.item.growth": "{account}: 지난 스캔보다 {delta} 늘었습니다 (지금 {total})",
+    "digest.item.cold": "{account}: {name} 의 {size} 가 {days}일 넘게 그대로입니다 (마지막 변경 {newest})",
     "load.title": "서버 부하 이력",
     "load.btn.open": "서버 부하",
     "load.btn.refresh": "새로고침",

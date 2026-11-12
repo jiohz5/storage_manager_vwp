@@ -298,6 +298,15 @@ def format_forecast_tooltip(forecast, window_hours: int) -> str:
     )
 
 
+def epoch_date_text(stamp) -> str:
+    """epoch 초(글자여도 된다)를 `2026-03-01` 로. 모르면 '-'."""
+
+    try:
+        return datetime.fromtimestamp(int(float(stamp))).strftime("%Y-%m-%d")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return i18n.t("common.none")
+
+
 def format_bytes(size_bytes: Optional[int]) -> str:
     """byte 단위 크기를 사람이 읽는 문자열로 (파일 실제 크기 표시용)."""
 
