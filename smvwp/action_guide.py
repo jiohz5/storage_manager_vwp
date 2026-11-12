@@ -126,6 +126,11 @@ def card(action) -> dict:
             "priority.detail.big_file", name=action.path.rsplit("/", 1)[-1],
             pct=f"{action.pct:.0f}" if action.pct is not None else "-",
         )
+    elif action.kind == priority.ACT_COLD:
+        chip = (i18n.t("priority.chip.cold"), "soft")
+        metric = formatting.format_kb(action.size_kb)
+        detail = i18n.t("priority.detail.cold", name=action.path.rsplit("/", 1)[-1],
+                        days=action.count)
     else:
         chip = (i18n.t("priority.chip.surge"), "tier_warn")
         metric = formatting.format_kb_delta(action.delta_kb)
@@ -197,6 +202,14 @@ def headline(action) -> str:
             size=formatting.format_kb(action.size_kb),
             pct=f"{action.pct:.0f}" if action.pct is not None else "-",
         )
+    if action.kind == priority.ACT_COLD:
+        return i18n.t(
+            "priority.item.cold",
+            account=action.account,
+            name=action.path.rsplit("/", 1)[-1],
+            size=formatting.format_kb(action.size_kb),
+            days=action.count,
+        )
     return i18n.t(
         "priority.item.surge",
         account=action.account,
@@ -215,7 +228,7 @@ def build(action, detail=None) -> Guide:
         headline=headline(action),
         account_id=action.account_id,
         account_path=detail.path if detail is not None else "",
-        path=action.path if action.kind == priority.ACT_BIG_FILE else "",
+        path=action.path if action.kind in (priority.ACT_BIG_FILE, priority.ACT_COLD) else "",
         loading=detail is None,
     )
     builder = {
@@ -224,6 +237,7 @@ def build(action, detail=None) -> Guide:
         priority.ACT_CLEANUP: _cleanup,
         priority.ACT_BIG_FILE: _big_file,
         priority.ACT_SURGE: _surge,
+        priority.ACT_COLD: _cold,
     }.get(action.kind)
     if builder is not None:
         builder(guide, action, detail)
@@ -525,3 +539,21 @@ def _surge(guide: Guide, action, detail) -> None:
     guide.why = i18n.t("guide.surge.why")
     guide.steps = [i18n.t(f"guide.surge.step{n}") for n in (1, 2, 3)]
     _growth_rows(guide, detail, "guide.evidence.surge")
+
+
+def _cold(guide: Guide, action, detail) -> None:
+    """크고 오래 안 바뀐 폴더 - 무엇인지 확인하고 주인에게 묻는다. 지우라고 하지 않는다."""
+
+    guide.situation.append(i18n.t(
+        "guide.cold.situation", name=action.path.rsplit("/", 1)[-1],
+        size=formatting.format_kb(action.size_kb), days=action.count,
+    ))
+    _usage_facts(guide, detail)
+    guide.why = i18n.t("guide.cold.why")
+    guide.steps = [i18n.t(f"guide.cold.step{n}") for n in (1, 2, 3)]
+    # 읽기만 하는 명령 - 안에 무엇이 있고 가장 최근에 바뀐 것이 무엇인지.
+    guide.commands = [
+        f"ls -la {_q(action.path)}",
+        f"du -sh {_q(action.path)}",
+        f"find {_q(action.path)} -type f -newermt '-{action.count} days' | head",
+    ]

@@ -52,6 +52,7 @@ ACT_NO_BACKUP = "no_backup"      # 백업이 안 된 과제가 있다
 ACT_CLEANUP = "cleanup"          # 정리하면 자리가 빈다
 ACT_BIG_FILE = "big_file"        # 파일 하나가 지나치게 크다
 ACT_SURGE = "surge"              # 갑자기 늘었다
+ACT_COLD = "cold"                # 크고 거의 통째로 오래 안 바뀐 폴더가 있다
 
 # 목록에 실을 최대 줄 수. 이보다 많으면 그것은 목록이 아니라 표이고, 표가
 # 되는 순간 "무엇부터" 라는 물음이 다시 사라진다.
@@ -397,6 +398,22 @@ def _scan_actions(scan_accounts, settings) -> "tuple":
                     delta_kb=item.delta_kb,
                     pct=item.share_pct,
                     path=item.path,
+                )
+            )
+
+        # 크고 거의 통째로 오래 안 바뀐 폴더 - 계정마다 가장 큰 것 하나 (`scan_store.
+        # cold_folders`, 야간 스캔이 요약에 남긴다). 정리 후보를 찾는 사람이 홈에서
+        # 바로 보게 한다. 지워도 된다는 말이 아니다 - 알아 둘 것이다.
+        for row in (getattr(entry, "cold_folders", None) or [])[:1]:
+            actions.append(
+                Action(
+                    kind=ACT_COLD,
+                    level=LEVEL_MEDIUM,
+                    account=name,
+                    account_id=entry.account_id,
+                    size_kb=row["cold_kb"],
+                    path=row["path"],
+                    count=int(settings.detail_scan_cold_days),
                 )
             )
 

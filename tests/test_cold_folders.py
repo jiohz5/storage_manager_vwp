@@ -110,5 +110,45 @@ class ShownTests(ColdFolderCase):
         self.assertNotIn("/acct/live", text)
 
 
+class HomeLineTests(ColdFolderCase):
+    """홈 '무엇부터 할까' 에도 한 줄 - 계정마다 가장 큰 오래된 폴더 하나, 알아 둘 급함.
+
+    스캔 요약은 상세 스캔 탭 안쪽이라 아침에 홈만 보는 사람에게는 안 닿았다."""
+
+    def setUp(self):
+        super().setUp()
+        i18n.set_language("ko")
+        self.save({"/acct/tape": (900 * GB, 890 * GB), "/acct/live": (900 * GB, 0)})
+        nightly_scan.save_summaries(self.data_dir, self.config)
+        self.snapshot = nightly_scan.get_status_snapshot(self.data_dir, self.config)
+
+    def plan(self):
+        from smvwp import priority
+
+        return priority.build(scan_accounts=self.snapshot.accounts, settings=self.config.settings)
+
+    def test_one_line_for_the_biggest_old_folder(self):
+        from smvwp import priority
+
+        lines = [a for a in self.plan().actions if a.kind == priority.ACT_COLD]
+        self.assertEqual([(a.path, a.size_kb, a.level) for a in lines],
+                         [("/acct/tape", 890 * GB, priority.LEVEL_MEDIUM)])
+
+    def test_the_card_and_guide_say_it_plainly_and_do_not_say_delete(self):
+        from smvwp import action_guide, priority
+
+        action = next(a for a in self.plan().actions if a.kind == priority.ACT_COLD)
+        card = action_guide.card(action)
+        self.assertEqual(card["metric"], "890.0 GB")
+        self.assertIn("tape", action_guide.headline(action))
+        guide = action_guide.build(action)
+        self.assertTrue(guide.steps)
+        self.assertEqual(guide.commands[0], "ls -la /acct/tape")
+        text = " ".join([guide.headline, guide.why] + guide.situation + guide.steps)
+        self.assertNotIn("priority.", text)
+        self.assertNotIn("guide.", text)
+        self.assertNotIn("rm ", " ".join(guide.commands))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
