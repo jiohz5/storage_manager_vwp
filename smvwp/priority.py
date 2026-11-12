@@ -165,6 +165,31 @@ def _storage_key(sample) -> "tuple":
     return (filesystem, mount_point, total_kb)
 
 
+def storage_groups(samples) -> List[List[str]]:
+    """같은 스토리지를 쓰는 계정들 `[[계정 id, ...], ...]` - 둘 이상인 것만.
+
+    '무엇부터 할까' 의 사용률 줄을 묶는 것과 같은 기준이다 (`_storage_key`, 사용률 차이
+    `SAME_STORAGE_PCT` 안). 홈 표가 같은 계정들을 스토리지 줄 하나 아래로 묶는 데 쓴다 -
+    두 화면이 다르게 묶으면 한쪽은 "같은 스토리지" 라고, 다른 쪽은 아니라고 말하게 된다.
+    수집이 실패한 표본은 묶지 않는다."""
+
+    groups = {}
+    for sample in samples:
+        if getattr(sample, "ok", True) is False or getattr(sample, "byte_pct", None) is None:
+            continue
+        key = _storage_key(sample)
+        if key[0] == "account":
+            continue
+        bucket = groups.setdefault(key, [])
+        if bucket and abs(bucket[0].byte_pct - sample.byte_pct) > SAME_STORAGE_PCT:
+            continue
+        bucket.append(sample)
+    return [
+        [sample.account_id for sample in members]
+        for members in groups.values() if len(members) > 1
+    ]
+
+
 def _usage_level(pct: Optional[float]) -> Optional[int]:
     """사용률을 급함 단계로. 등급 기준을 다시 쓰지 않고 `tiers` 를 따른다."""
 

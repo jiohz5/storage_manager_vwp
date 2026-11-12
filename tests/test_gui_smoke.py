@@ -2324,6 +2324,121 @@ class TrendColumnTests(_GuiCase):
         self.assertIsNone(cells["lib"].data(CellDelegate.SPARK_ROLE))
 
 
+class StorageGroupTests(_GuiCase):
+    """같은 스토리지를 쓰는 계정들은 스토리지 줄 하나 아래로 묶는다.
+
+    `df` 는 계정이 아니라 파일시스템을 잰다 - 한 스토리지에 계정이 여럿이면 표에 똑같은
+    96% 가 여러 줄 떴고, 어느 계정이 그 스토리지를 채웠는지는 어디에도 없었다. 묶으면
+    사용률·추세·FULL 예상은 스토리지 줄에 한 번, 계정 줄에는 상세 스캔이 잰 그 계정의
+    크기와 스토리지 안 비중이 선다. 묶는 기준은 '무엇부터 할까' 와 같다
+    (`priority.storage_groups`)."""
+
+    GB = 1024 * 1024
+    TB = 1024 * GB
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+
+    def samples(self, same=True):
+        from datetime import datetime, timezone
+
+        from smvwp import store
+
+        made = {}
+        for index, account in enumerate(self.config.accounts):
+            pct = 96.0 if same else (96.0, 40.0)[index]
+            total = 10 * self.TB
+            made[account.account_id] = store.SampleRecord(
+                account_id=account.account_id, collected_at=datetime.now(timezone.utc).isoformat(),
+                ok=True, filesystem="nfs4:/vol/shared", mount_point="/ifs", total_kb=total,
+                used_kb=int(total * pct / 100), avail_kb=1, byte_pct=pct,
+                overall_tier="alert" if pct > 90 else "normal",
+            )
+        return made
+
+    def rows(self):
+        from PyQt5.QtCore import Qt
+
+        from smvwp.gui.main_window import COL_NAME
+
+        table = self.window.table
+        return [(table.item(row, COL_NAME).text().strip(), table.item(row, COL_NAME).data(Qt.UserRole))
+                for row in range(table.rowCount())]
+
+    def test_accounts_on_one_storage_sit_under_one_storage_row(self):
+        proj, bak = self.config.accounts
+        self.window._render_table(self.samples())
+        rows = self.rows()
+        self.assertEqual(len(rows), 3)
+        self.assertIsNone(rows[0][1])          # 스토리지 줄 - 계정이 아니다
+        self.assertIn("/ifs", rows[0][0])
+        self.assertEqual({rows[1][1], rows[2][1]}, {proj.account_id, bak.account_id})
+
+    def test_the_storage_numbers_are_shown_once(self):
+        """사용률 막대·추세는 스토리지 줄에만 - 계정 줄에 같은 96% 를 되풀이하지 않는다."""
+
+        from smvwp.gui import widgets
+        from smvwp.gui.main_window import COL_BYTE
+
+        self.window._render_table(self.samples())
+        table = self.window.table
+        self.assertIsInstance(table.cellWidget(0, COL_BYTE), widgets.UsageBar)
+        for row in (1, 2):
+            self.assertNotIsInstance(table.cellWidget(row, COL_BYTE), widgets.UsageBar)
+
+    def test_different_storages_stay_one_row_each(self):
+        self.window._render_table(self.samples(same=False))
+        self.assertEqual(len(self.rows()), 2)
+        self.assertTrue(all(account_id for _name, account_id in self.rows()))
+
+    def test_an_account_row_shows_its_own_measured_size(self):
+        """상세 스캔이 잰 그 계정의 크기와 스토리지 사용량 안의 비중."""
+
+        from types import SimpleNamespace
+
+        from smvwp import formatting
+        from smvwp.gui.main_window import COL_SIZE
+
+        proj, bak = self.config.accounts
+        self.window._overview = SimpleNamespace(accounts=[
+            SimpleNamespace(account_id=proj.account_id, measured_kb=int(7.2 * self.TB)),
+            SimpleNamespace(account_id=bak.account_id, measured_kb=None),
+        ])
+        from PyQt5.QtWidgets import QWidget
+
+        self.window._scan_cell = lambda _account_id: QWidget()   # 상세 스캔 칸은 따로 본다
+        self.window._render_table(self.samples())
+        from smvwp.gui.main_window import COL_BYTE
+
+        cells, bars = {}, {}
+        for row in range(1, 3):
+            account_id = self.window._account_id_at_row(row)
+            cells[account_id] = self.window.table.item(row, COL_SIZE)
+            bars[account_id] = self.window.table.cellWidget(row, COL_BYTE)
+        self.assertEqual(cells[proj.account_id].text(), formatting.format_kb(int(7.2 * self.TB)))
+        self.assertEqual(bars[proj.account_id].text, "75%")   # 9.6 TB 가운데 7.2 TB
+        self.assertEqual(cells[bak.account_id].text(), "-")
+        self.assertIsNone(bars[bak.account_id])
+
+    def test_double_clicking_the_storage_row_opens_nothing(self):
+        from unittest.mock import patch
+
+        self.window._render_table(self.samples())
+        with patch("smvwp.gui.account_detail_dialog.AccountDetailDialog") as dialog:
+            self.window._open_account_detail(0)
+        dialog.assert_not_called()
+
+    def test_the_tiles_still_count_accounts(self):
+        """묶어도 '손볼 계정' 은 계정 수다 (스토리지 줄을 세지 않는다)."""
+
+        self.window._render_table(self.samples())
+        self.assertEqual(self.window.tiles["attention"].value.text(), "2")
+
+
 class HomeHeaderTests(_GuiCase):
     """머리줄의 '마지막 수집' - 수집이 멈췄으면 그 경고가 그 자리에 먼저 온다."""
 

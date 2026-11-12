@@ -68,7 +68,7 @@ from .. import (
 )
 from ..scheduler import CollectorScheduler, DashboardWorker, ThreadWorker
 from . import theme, widgets
-from .overview_widgets import Chip, SegmentBar, TimelineBar
+from .overview_widgets import Chip, MiniBar, SegmentBar, TimelineBar
 from .visuals import ActionDelegate, ChangeList, CollectStrip
 from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
@@ -1150,13 +1150,26 @@ class MainWindow(QMainWindow):
             i18n.t("dashboard.list_filtered", shown=len(accounts), total=len(every))
             if self._filter_text else i18n.t("dashboard.list_hint")
         )
-        self.table.setRowCount(len(accounts))
+        layout = self._storage_layout(accounts, latest)
+        self.table.setRowCount(len(layout))
 
         dash = i18n.t("common.none")
         # 행 수가 줄어든 경우 이전 행의 색이 남지 않도록 매번 비운다.
         self._row_tints.clear()
+        measured = {
+            item.account_id: item.measured_kb
+            for item in (getattr(self._overview, "accounts", None) or [])
+        }
 
-        for row, account in enumerate(accounts):
+        for row, (account, members) in enumerate(layout):
+            # 칸 위젯은 줄을 다시 쓸 때 남는다 - 스토리지 줄이 생기고 없어지며 같은 행이
+            # 다른 종류의 줄이 되므로, 이 줄이 다시 세울 칸의 위젯은 먼저 걷는다.
+            for column in (COL_BYTE, COL_TREND, COL_TIME):
+                if self.table.cellWidget(row, column) is not None:
+                    self.table.removeCellWidget(row, column)
+            if account is None:
+                self._fill_storage_row(row, members, latest)
+                continue
             sample = latest.get(account.account_id)
             name_item = QTableWidgetItem(account.name)
             # 정렬을 켜면 행 번호가 설정 순서와 달라진다. 행에서 계정을 찾을 때는
@@ -1183,6 +1196,12 @@ class MainWindow(QMainWindow):
                 self.table.setItem(
                     row, COL_TIME, QTableWidgetItem(i18n.t("dashboard.not_collected"))
                 )
+                continue
+
+            if members:
+                # 스토리지 줄 아래의 계정 - 스토리지의 숫자는 위 줄이 한 번 말한다.
+                name_item.setText("    " + account.name)
+                self._fill_member_row(row, account, sample, measured.get(account.account_id))
                 continue
 
             # 퍼센트 왼쪽에 실제 크기를 둔다. "95%"만으로는 남은 것이 5GB인지
@@ -1225,48 +1244,150 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, COL_FORECAST, forecast_item)
             self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account.account_id))
 
-            # 절대 시각보다 "얼마나 오래됐나"가 판단에 직접 쓰인다. 원본
-            # 타임스탬프는 툴팁에 남긴다.
-            status_info = self._freshness.get(account.account_id)
-            time_item = QTableWidgetItem(
-                freshness.format_age(status_info.age_seconds)
-                if status_info is not None and status_info.age_seconds is not None
-                else formatting.local_minute_text(sample.collected_at)
-            )
-            time_item.setToolTip(formatting.local_datetime_text(sample.collected_at))
-            stale = status_info is not None and status_info.status in (
-                freshness.STATUS_STALE, freshness.STATUS_NEVER)
-            if stale:
-                time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
-            # 수집 실패는 열을 따로 두지 않고 여기서 말한다. 실패하면 숫자가
-            # 낡은 것이므로, 사람이 보는 곳은 결국 "언제 잰 값인가" 다.
-            if not sample.ok:
-                time_item.setText(i18n.t("dashboard.collect_error_short"))
-                time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
-                time_item.setToolTip(
-                    i18n.t("dashboard.collect_failed", message=sample.error_message)
-                )
-            self.table.setItem(row, COL_TIME, time_item)
-            # 지난 24시간을 한 시간 한 칸으로 (`visuals.CollectStrip`). 예전에는 24시간 중
-            # 26% 만 모였을 때 '방금' 을 주황으로 칠했다 - 방금 모았다면서 경고 색이라
-            # 무슨 뜻인지 읽히지 않았다. 빈 시간은 빈 칸으로 보이고, 글자는 오래됐을
-            # 때만 경고 색이다. 실패한 표본은 글자 그대로 둔다 (그쪽이 할 말이 크다).
-            if sample.ok and status_info is not None and status_info.hourly:
-                strip = CollectStrip(
-                    status_info.hourly, time_item.text(), alert=stale,
-                    tooltip=i18n.t(
-                        "freshness.strip_tip", hours=self._config.settings.freshness_window_hours,
-                        coverage=int(status_info.coverage_pct or 0),
-                    ) + "\n" + time_item.toolTip(),
-                )
-                time_item.setText("")
-                self.table.setCellWidget(row, COL_TIME, strip)
+            self._fill_time_cell(row, account, sample)
 
             # 주의 이상인 행만 옅게 칠한다. 정상까지 칠하면 색이 배경 소음이
             # 되어 정작 문제 있는 행이 묻힌다.
             self._tint_row(row, sample.overall_tier if sample.ok else tiers.UNKNOWN)
 
         self._summarize(every, latest)
+
+    def _fill_time_cell(self, row: int, account, sample) -> None:
+        """'최근 수집' 칸 - 계정 줄과 스토리지 아래 계정 줄이 같이 쓴다."""
+
+        # 절대 시각보다 "얼마나 오래됐나"가 판단에 직접 쓰인다. 원본
+        # 타임스탬프는 툴팁에 남긴다.
+        status_info = self._freshness.get(account.account_id)
+        time_item = QTableWidgetItem(
+            freshness.format_age(status_info.age_seconds)
+            if status_info is not None and status_info.age_seconds is not None
+            else formatting.local_minute_text(sample.collected_at)
+        )
+        time_item.setToolTip(formatting.local_datetime_text(sample.collected_at))
+        stale = status_info is not None and status_info.status in (
+            freshness.STATUS_STALE, freshness.STATUS_NEVER)
+        if stale:
+            time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
+        # 수집 실패는 열을 따로 두지 않고 여기서 말한다. 실패하면 숫자가
+        # 낡은 것이므로, 사람이 보는 곳은 결국 "언제 잰 값인가" 다.
+        if not sample.ok:
+            time_item.setText(i18n.t("dashboard.collect_error_short"))
+            time_item.setForeground(QColor(theme.tier_text(tiers.ALERT)))
+            time_item.setToolTip(
+                i18n.t("dashboard.collect_failed", message=sample.error_message)
+            )
+        self.table.setItem(row, COL_TIME, time_item)
+        # 지난 24시간을 한 시간 한 칸으로 (`visuals.CollectStrip`). 예전에는 24시간 중
+        # 26% 만 모였을 때 '방금' 을 주황으로 칠했다 - 방금 모았다면서 경고 색이라
+        # 무슨 뜻인지 읽히지 않았다. 빈 시간은 빈 칸으로 보이고, 글자는 오래됐을
+        # 때만 경고 색이다. 실패한 표본은 글자 그대로 둔다 (그쪽이 할 말이 크다).
+        if sample.ok and status_info is not None and status_info.hourly:
+            strip = CollectStrip(
+                status_info.hourly, time_item.text(), alert=stale,
+                tooltip=i18n.t(
+                    "freshness.strip_tip", hours=self._config.settings.freshness_window_hours,
+                    coverage=int(status_info.coverage_pct or 0),
+                ) + "\n" + time_item.toolTip(),
+            )
+            time_item.setText("")
+            self.table.setCellWidget(row, COL_TIME, strip)
+
+    def _storage_layout(self, accounts, latest) -> list:
+        """표의 줄들 `[(계정 또는 None, 묶음), ...]` - 같은 스토리지의 계정들은 스토리지
+        줄(계정 None) 하나 아래로 모은다.
+
+        `df` 는 계정이 아니라 파일시스템을 잰다. 한 스토리지에 계정이 여럿이면 똑같은
+        96% 가 여러 줄 떴고, 어느 계정이 그 스토리지를 채웠는지는 어디에도 없었다.
+        묶음의 자리는 정렬에서 그 묶음의 첫 계정이 오는 자리다 - 정렬은 그대로 듣는다.
+        묶음 안은 상세 스캔이 잰 크기가 큰 계정부터 (모르면 정렬 순서대로)."""
+
+        groups = priority.storage_groups(
+            [latest[a.account_id] for a in accounts if a.account_id in latest]
+        )
+        group_of = {account_id: tuple(group) for group in groups for account_id in group}
+        measured = {
+            item.account_id: item.measured_kb or 0
+            for item in (getattr(self._overview, "accounts", None) or [])
+        }
+        by_id = {account.account_id: account for account in accounts}
+        layout, done = [], set()
+        for account in accounts:
+            group = group_of.get(account.account_id)
+            if group is None:
+                layout.append((account, None))
+                continue
+            if group in done:
+                continue
+            done.add(group)
+            members = [by_id[account_id] for account_id in group if account_id in by_id]
+            order = {member.account_id: index for index, member in enumerate(accounts)}
+            members.sort(key=lambda member: (-measured.get(member.account_id, 0),
+                                             order[member.account_id]))
+            layout.append((None, members))
+            layout.extend((member, members) for member in members)
+        return layout
+
+    def _fill_storage_row(self, row: int, members, latest) -> None:
+        """스토리지 줄 - 마운트 지점과 계정 수, 사용량·사용률·추세·FULL 예상 (한 번만)."""
+
+        sample = latest[members[0].account_id]
+        name = QTableWidgetItem(i18n.t(
+            "home.storage_row", mount=sample.mount_point or sample.filesystem, count=len(members),
+        ))
+        font = name.font()
+        font.setBold(True)
+        name.setFont(font)
+        name.setToolTip("\n".join(
+            [f"{sample.filesystem} · {sample.mount_point}"] + [member.name for member in members]
+        ))
+        self.table.setItem(row, COL_NAME, name)
+        self.table.setItem(row, COL_KIND, QTableWidgetItem(""))
+        size_item = QTableWidgetItem(formatting.format_size_pair(sample.used_kb, sample.total_kb))
+        size_item.setToolTip(formatting.size_tooltip(sample))
+        self._style_value_item(size_item, COL_SIZE)
+        self.table.setItem(row, COL_SIZE, size_item)
+        usage_bar = widgets.UsageBar(sample.byte_pct, sample.overall_tier, show_tier=True)
+        usage_bar.setToolTip(tiers.display_text(sample.overall_tier, sample.byte_pct))
+        self.table.setCellWidget(row, COL_BYTE, usage_bar)
+        self.table.setCellWidget(row, COL_TREND, self._spark_for(members[0].account_id, sample.overall_tier))
+        forecast = self._forecasts.get(members[0].account_id)
+        forecast_item = QTableWidgetItem(formatting.format_forecast_cell(forecast))
+        forecast_item.setToolTip(formatting.format_forecast_tooltip(
+            forecast, self._config.settings.full_prediction_window_hours))
+        if not formatting.forecast_has_estimate(forecast):
+            forecast_item.setForeground(QColor(theme.TEXT_FAINT))
+        self.table.setItem(row, COL_FORECAST, forecast_item)
+        if self.table.cellWidget(row, COL_SCAN) is not None:
+            self.table.removeCellWidget(row, COL_SCAN)
+        for column in (COL_SCAN, COL_TIME):
+            self.table.setItem(row, column, QTableWidgetItem(""))
+        self._tint_row(row, sample.overall_tier)
+
+    def _fill_member_row(self, row: int, account, sample, measured_kb) -> None:
+        """스토리지 줄 아래의 계정 - 상세 스캔이 잰 그 계정의 크기와 스토리지 안 비중.
+
+        스토리지의 사용률·추세·FULL 예상은 위 줄이 한 번 말한다. 계정 줄에 같은 96% 를
+        되풀이하면 "이 계정이 96%" 로 읽힌다."""
+
+        dash = i18n.t("common.none")
+        used = sample.used_kb or 0
+        if measured_kb and used:
+            share = measured_kb / used
+            # 비중은 옆 막대가 말한다 - 크기 칸에는 크기만.
+            size_item = QTableWidgetItem(formatting.format_kb(measured_kb))
+            size_item.setToolTip(i18n.t("home.account_share_tip", pct=f"{share * 100:.0f}"))
+            self.table.setCellWidget(row, COL_BYTE, MiniBar(
+                min(1.0, share), theme.ACCENT, f"{share * 100:.0f}%"))
+        else:
+            size_item = QTableWidgetItem(dash)
+            size_item.setToolTip(i18n.t("home.account_share_unknown"))
+            self.table.setItem(row, COL_BYTE, QTableWidgetItem(""))
+        self._style_value_item(size_item, COL_SIZE)
+        self.table.setItem(row, COL_SIZE, size_item)
+        self.table.setItem(row, COL_TREND, QTableWidgetItem(""))
+        self.table.setItem(row, COL_FORECAST, QTableWidgetItem(""))
+        self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account.account_id))
+        self._fill_time_cell(row, account, sample)
 
     def _summarize(self, accounts, latest) -> None:
         """히어로의 요약을 낸다.
@@ -1506,6 +1627,10 @@ class MainWindow(QMainWindow):
 
         self._show_tonight(overview)
         self._show_changes(overview)
+        # 스토리지 줄 아래 계정의 크기는 상세 스캔 현황에서 온다 - 묶인 줄이 있으면 다시.
+        if self._latest_samples and priority.storage_groups(list(self._latest_samples.values())):
+            self._render_table(self._latest_samples)
+            return
         for row in range(self.table.rowCount()):
             account_id = self._account_id_at_row(row)
             if account_id:
