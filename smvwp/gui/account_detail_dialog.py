@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
@@ -29,7 +30,6 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QStackedWidget,
@@ -41,7 +41,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import account_detail, config as config_module
-from .. import formatting, i18n, large_files, quota, tiers
+from .. import formatting, i18n, quota, tiers
 from ..scheduler import ThreadWorker
 from . import scan_pages, theme, widgets
 from .overview_widgets import Chip
@@ -52,10 +52,6 @@ logger = logging.getLogger(__name__)
 TAB_KEYS = ("detail.tab.large", "detail.tab.growth", "detail.tab.health")
 (TAB_LARGE, TAB_GROWTH, TAB_HEALTH) = range(3)
 
-LARGE_COLUMN_KEYS = ("large.col.path", "large.col.size", "large.col.share",
-                     "large.col.change")
-GROWTH_COLUMN_KEYS = ("scan.col.path", "scan.col.current_size", "scan.col.delta",
-                      "scan.col.focus")
 HEALTH_COLUMN_KEYS = ("detail.health.col.task", "detail.health.col.status",
                       "detail.health.col.size", "detail.health.col.reclaim")
 
@@ -269,18 +265,18 @@ class AccountDetailDialog(QDialog):
         column.addWidget(self.stack, 1)
         self.tabs.currentChanged.connect(self.stack.setCurrentIndex)
 
-        self.large_table = self._table(LARGE_COLUMN_KEYS, TAB_KEYS[TAB_LARGE])
-        self.growth_table = self._table(GROWTH_COLUMN_KEYS, TAB_KEYS[TAB_GROWTH])
-        # 막대·알약·두 색 경로 - 상세 스캔 탭의 용량 변화·큰 파일 표와 같다.
-        self.growth_bars = widgets.ChangeBarDelegate(self.growth_table)
-        self.growth_table.setItemDelegate(self.growth_bars)
-        self.large_cells = widgets.ChangeBarDelegate(self.large_table)
-        self.large_table.setItemDelegate(self.large_cells)
-        for table in (self.growth_table, self.large_table):
-            header = table.horizontalHeader()
-            for index, width in ((1, 150), (2, 150)):
-                header.setSectionResizeMode(index, QHeaderView.Interactive)
-                table.setColumnWidth(index, width)
+        # 큰 파일·용량 변화는 상세 스캔 탭의 쪽을 그대로 쓴다 - 예전에는 같은 표를 여기
+        # 따로 그려서, 한쪽을 고칠 때마다 다른 쪽도 따로 고쳐야 했다 (요약 띠·막대·추세
+        # 칸은 한쪽에만 있었다).
+        self.large_page = scan_pages.LargeFilesPage(compact=True)
+        self.growth_page = scan_pages.GrowthPage(compact=True)
+        for page, tab_key in ((self.large_page, TAB_KEYS[TAB_LARGE]),
+                              (self.growth_page, TAB_KEYS[TAB_GROWTH])):
+            page.retranslate()
+            self.stack.addWidget(page)
+            self.tabs.addTab(i18n.t(tab_key))
+        self.large_table = self.large_page.table
+        self.growth_table = self.growth_page.table
         self.health_table = self._table(HEALTH_COLUMN_KEYS, TAB_KEYS[TAB_HEALTH])
         return column
 
@@ -503,90 +499,17 @@ class AccountDetailDialog(QDialog):
             table.setItem(0, column, QTableWidgetItem(""))
 
     def _fill_large(self, detail) -> None:
-        table = self.large_table
-        table.setRowCount(0)
-        rows = detail.large_files[: account_detail.ROWS_SHOWN]
-        if not rows:
-            self._empty_row(table, i18n.t("detail.no_rows"))
-            return
-        table.setRowCount(len(rows))
-        dash = i18n.t("common.none")
-        biggest = max((item.size_kb for item in rows), default=0) or 1
-        share_scale = max([large_files.SHARE_ALERT_PCT * 2] + [item.share_pct or 0 for item in rows])
-        self.large_cells.scale = max(
-            (abs(item.delta_kb or 0) for item in rows if item.compared), default=0
+        self.large_page.show_files(
+            detail.large_files, detail.name, detail.path, detail.measured_kb,
+            limit=account_detail.ROWS_SHOWN,
         )
-        for row, item in enumerate(rows):
-            path_item = self._path_item(item.path)
-            path_item.setData(widgets.CellDelegate.PATH_ROLE, True)
-            table.setItem(row, 0, path_item)
-            size = widgets.NumericItem(formatting.format_kb(item.size_kb), item.size_kb)
-            size.setData(widgets.CellDelegate.BAR_ROLE, (item.size_kb / biggest, "accent"))
-            table.setItem(row, 1, size)
-            share = item.share_pct
-            share_item = widgets.NumericItem(
-                f"{share:.1f}%" if share is not None else dash, share or 0
-            )
-            if share is not None:
-                share_item.setData(widgets.CellDelegate.BAR_ROLE, (
-                    share / share_scale, "attention" if item.dominates_account else "neutral",
-                ))
-            table.setItem(row, 2, share_item)
-            if item.previous_kb is None:
-                change = QTableWidgetItem(formatting.format_large_file_change(item))
-                if item.is_new_to_the_list:
-                    change.setData(widgets.CellDelegate.CHIP_ROLE, (change.text(), "stale"))
-            else:
-                change = widgets.NumericItem(
-                    formatting.format_large_file_change(item), item.delta_kb
-                )
-                change.setData(widgets.CellDelegate.VALUE_ROLE, item.delta_kb)
-            table.setItem(row, 3, change)
-            for column in (1, 2, 3):
-                table.item(row, column).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            reasons = scan_pages.large_file_reasons(item)
-            if reasons:
-                path_cell = table.item(row, 0)
-                path_cell.setToolTip("\n".join(reasons + [path_cell.toolTip() or item.path]))
-            # 까닭이 된 칸만 칠한다 - 상세 스캔 탭의 큰 파일 표와 같다.
-            scan_pages.mark_large_file_row(table, row, item, 0, 2, 3)
 
     def _fill_growth(self, detail) -> None:
-        table = self.growth_table
-        table.setRowCount(0)
-        rows = detail.growth_rows[: account_detail.ROWS_SHOWN]
-        # 저장소는 증감의 크기 순으로 준다 (크게 정리한 곳도 잘리지 않게). 보여 줄 때는
-        # 상세 스캔 탭의 기본 정렬과 같이 많이 는 것부터 - 준 것은 아래로.
-        rows = sorted(
-            rows,
-            key=lambda row: -(scan_pages.growth_change(dict(row)) or 0)
-            if "current_kb" in row.keys() else 0,
-        )
-        if not rows:
-            self._empty_row(table, i18n.t("detail.no_rows"))
-            return
-        table.setRowCount(len(rows))
-        dash = i18n.t("common.none")
-        compared = [row for row in rows if "current_kb" in row.keys()]
-        self.growth_bars.scale = max(
-            (abs(scan_pages.growth_change(dict(row)) or 0) for row in compared), default=0
-        )
-        for index, row in enumerate(rows):
-            keys = row.keys() if hasattr(row, "keys") else []
-            table.setItem(index, 0, self._path_item(row["path"]))
-            # 기준선만 있는 계정은 "큰 경로" 목록이 온다 - 견줄 것이 없다.
-            current = row["current_kb"] if "current_kb" in keys else row["size_kb"]
-            size = widgets.NumericItem(formatting.format_kb(current), current)
-            size.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if detail.measured_kb:
-                size.setData(widgets.CellDelegate.BAR_ROLE, (current / detail.measured_kb, "accent"))
-            table.setItem(index, 1, size)
-            if "current_kb" not in keys:
-                table.setItem(index, 2, widgets.NumericItem(dash, None))
-                table.setItem(index, 3, QTableWidgetItem(""))
-            else:
-                table.setItem(index, 2, scan_pages.growth_delta_item(dict(row)))
-                table.setItem(index, 3, scan_pages.growth_focus_item(dict(row)))
+        """상세 스캔 탭의 용량 변화 쪽에 이 계정의 스캔 상태 하나를 넘긴다."""
+
+        account = SimpleNamespace(account_id=detail.account_id, name=detail.name, path=detail.path)
+        snapshot = SimpleNamespace(accounts=[detail.scan]) if detail.scan is not None else None
+        self.growth_page.show_account(snapshot, account)
 
     def _fill_health_table(self, detail) -> None:
         table = self.health_table

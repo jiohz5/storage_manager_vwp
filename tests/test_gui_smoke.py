@@ -1250,9 +1250,11 @@ class AccountDetailDialogTests(_GuiCase):
         from smvwp import i18n
 
         self.load()
-        self.assertEqual(self.dialog.large_table.rowCount(), 1)
+        # 상세 스캔 탭과 같은 쪽이다 - 빈 표 대신 설명 줄이 말한다.
+        self.assertEqual(self.dialog.large_table.rowCount(), 0)
         self.assertEqual(
-            self.dialog.large_table.item(0, 0).text(), i18n.t("detail.no_rows")
+            self.dialog.large_page.caption.text(),
+            i18n.t("large.none", account=self.account.name),
         )
 
     def test_a_missing_account_is_said_out_loud(self):

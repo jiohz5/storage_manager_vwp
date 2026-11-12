@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -795,8 +796,10 @@ class AccountsPage(QWidget):
 class GrowthPage(QWidget):
     """고른 계정의 경로별 증감. 비교할 이전 스캔이 없으면 큰 경로."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
+        # 좁은 자리(계정 상세 창) - 칸을 좁히고, 위에 이미 있는 계정 경로는 되풀이하지 않는다.
+        self._compact = compact
         layout = _page_box(self)
         # 계정 전체가 얼마나 변했나 - 큰 값과 전후 막대 (`visuals.SummaryBand`).
         self.delta_bar = visuals.DeltaBar()
@@ -812,13 +815,13 @@ class GrowthPage(QWidget):
         # 크기 칸에는 계정에서의 몫만큼 가는 막대, 증감 칸에는 증감만큼의 옅은 막대가
         # 들어간다 - 내용 폭에 맞추면 막대가 글자 밑에 숨는다.
         header.setSectionResizeMode(GROWTH_SIZE, QHeaderView.Interactive)
-        table.setColumnWidth(GROWTH_SIZE, 170)
+        table.setColumnWidth(GROWTH_SIZE, 130 if compact else 170)
         header.setSectionResizeMode(GROWTH_DELTA, QHeaderView.Interactive)
-        table.setColumnWidth(GROWTH_DELTA, 190)
+        table.setColumnWidth(GROWTH_DELTA, 150 if compact else 190)
         header.setSectionResizeMode(GROWTH_FOCUS, QHeaderView.Stretch)
         # 계정 바로 아래 폴더의 장기 이력 (`folder_history`) - "언제부터 이렇게 늘었나".
         header.setSectionResizeMode(GROWTH_TREND, QHeaderView.Fixed)
-        table.setColumnWidth(GROWTH_TREND, 110)
+        table.setColumnWidth(GROWTH_TREND, 80 if compact else 110)
         self.bars = widgets.ChangeBarDelegate(table)
         table.setItemDelegateForColumn(GROWTH_DELTA, self.bars)
         self.cells = widgets.CellDelegate(table)
@@ -872,7 +875,7 @@ class GrowthPage(QWidget):
         # 여기 한 번만 적는다. 권한 부족으로 축소 측정된 경로가 있으면 반드시
         # 알린다 - 모르고 보면 "안 늘었네"로 잘못 읽는다. 예전에는 설명 줄 밑에
         # 문장으로 붙였다 - 이제 요약 띠의 알약으로 세우고 경로와 사유는 툴팁에 둔다.
-        notice = _root_note(account.path)
+        notice = "" if self._compact else _root_note(account.path)
         self.band.setVisible(True)
         self._warning_chips = scan_warning_chips(entry, account)
 
@@ -996,8 +999,9 @@ class LargeFilesPage(QWidget):
     280GB 인지 구분되지 않는다. 후자는 사람이 바로 손댈 수 있는 것이라
     따로 보여 줄 값어치가 있다."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, compact: bool = False):
         super().__init__(parent)
+        self._compact = compact
         layout = _page_box(self)
         # 큰 파일들이 계정에서 얼마를 차지하나 - 큰 값과 쌓은 막대, 까닭별 알약.
         self.stack = visuals.ShareStack()
@@ -1012,7 +1016,8 @@ class LargeFilesPage(QWidget):
         header.setSectionResizeMode(LARGE_PATH, QHeaderView.Stretch)
         # 크기·비중 칸에는 막대가, 증감 칸에는 증감 막대나 알약이 들어간다 - 내용 폭에
         # 맞추면 막대가 글자 밑에 숨는다.
-        for column, width in ((LARGE_SIZE, 170), (LARGE_SHARE, 150), (LARGE_CHANGE, 170)):
+        widths = ((LARGE_SIZE, 140), (LARGE_SHARE, 120), (LARGE_CHANGE, 140)) if compact else             ((LARGE_SIZE, 170), (LARGE_SHARE, 150), (LARGE_CHANGE, 170))
+        for column, width in widths:
             header.setSectionResizeMode(column, QHeaderView.Interactive)
             table.setColumnWidth(column, width)
         self.cells = widgets.ChangeBarDelegate(table)
@@ -1039,18 +1044,29 @@ class LargeFilesPage(QWidget):
         # 비중은 그 파일들을 잰 바퀴(끝난 것)의 합계로 나눈다. `measured_kb` 는
         # 하는 중인 바퀴의 '지금까지 잰 양'이라 그것으로 나누면 비중이 부푼다.
         files = large_files.build(entry.large_files, entry.current_measured_kb)
+        self.show_files(files, entry.account_name, account.path if account else "",
+                        entry.current_measured_kb)
+
+    def show_files(self, files, account_name: str, root: str, total_kb, limit: int = 0) -> None:
+        """이미 만든 큰 파일 줄(`large_files.build`)을 그린다. 계정 상세 창도 이것을 쓴다 -
+        같은 표가 두 벌이면 한쪽만 고쳐지고(실제로 그랬다), 그림도 한쪽에만 붙는다."""
+
+        table = self.table
+        table.setRowCount(0)
+        fit_table(table)
+        self.band.setVisible(False)
         if not files:
-            self.caption.setText(i18n.t("large.none", account=entry.account_name))
+            self.caption.setText(i18n.t("large.none", account=account_name))
             return
 
-        root = account.path if account else ""
-        shown = files[:LARGE_ROWS_SHOWN]
+        shown = files[:limit or LARGE_ROWS_SHOWN]
+        entry = SimpleNamespace(current_measured_kb=total_kb)
         notable = sum(1 for item in shown if item.is_notable)
-        heading = i18n.t("large.heading", account=entry.account_name, count=len(shown))
+        heading = i18n.t("large.heading", account=account_name, count=len(shown))
         if notable:
             heading += i18n.t("large.heading_notable", notable=notable)
         # 범례 문장("주황 칸이 눈에 띈 까닭입니다 - ...")은 요약 띠의 알약 툴팁으로 갔다.
-        self.caption.setText(heading + _root_note(root))
+        self.caption.setText(heading + ("" if self._compact else _root_note(root)))
         self._show_band(entry, shown, root)
         table.setRowCount(len(shown))
         dash = i18n.t("common.none")
