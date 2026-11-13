@@ -197,10 +197,7 @@ class _Tile(QFrame):
     def set_chips(self, chips) -> None:
         """`[(글, 알약 종류), ...]` - 지난 것은 지운다."""
 
-        while self.chips.count():
-            item = self.chips.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+        widgets.clear_layout(self.chips)
         for text, kind in chips:
             self.chips.addWidget(Chip(text, kind))
 
@@ -1659,10 +1656,7 @@ class MainWindow(QMainWindow):
         ))
 
     def _show_tonight(self, overview) -> None:
-        while self.tonight_rows.count():
-            item = self.tonight_rows.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+        widgets.clear_layout(self.tonight_rows)
         if not overview.nights:
             self.tonight_title.setText(
                 i18n.t("home.tonight.title", night=i18n.t("overview.night.tonight"))

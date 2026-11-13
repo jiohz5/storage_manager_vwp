@@ -67,12 +67,7 @@ def _label(object_name: str = "", text: str = "", wrap: bool = False) -> QLabel:
 
 
 def _clear(layout) -> None:
-    while layout.count():
-        item = layout.takeAt(0)
-        if item.widget() is not None:
-            item.widget().deleteLater()
-        elif item.layout() is not None:
-            _clear(item.layout())
+    widgets.clear_layout(layout)
 
 
 class _NightBox(QFrame):

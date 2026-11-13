@@ -339,10 +339,7 @@ class AccountDetailDialog(QDialog):
         self.path_label.setText("  ·  ".join(parts))
 
         # 등급 배지는 값이 올 때 만든다 (만들어 두고 바꾸면 폭이 어긋난다).
-        while self.badge_holder.count():
-            item = self.badge_holder.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        widgets.clear_layout(self.badge_holder)
         pct = detail.sample.byte_pct if detail.sample else None
         self.badge_holder.addWidget(widgets.badge_cell(detail.tier, pct))
 

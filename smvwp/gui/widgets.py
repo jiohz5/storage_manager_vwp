@@ -252,6 +252,25 @@ class TierRowDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
+def clear_layout(layout) -> None:
+    """틀 안의 위젯을 모두 걷는다 - **곧바로 떼어 내고** 나중에 지운다.
+
+    `deleteLater()` 만 부르면 이벤트 루프가 그 지우기를 처리할 때까지 옛 위젯이 창의
+    자식으로 남는다. 리눅스(오프스크린)의 시험에서는 `processEvents()` 가 그 지우기를
+    처리하지 않아, 어두운 화면으로 바꾼 뒤에도 옛 알약(밝은 색)이 창 안에 남아 있었다
+    (CI 가 잡았다). 떼어 내면 그 순간부터 창의 일부가 아니다."""
+
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
+        elif item.layout() is not None:
+            clear_layout(item.layout())
+
+
 def bar_color(kind: str) -> str:
     """칸 막대·알약 옆 막대의 색 이름 -> 지금 화면의 색. 그릴 때마다 묻는다 (어두운
     화면으로 바꾸면 따라 바뀌어야 한다)."""

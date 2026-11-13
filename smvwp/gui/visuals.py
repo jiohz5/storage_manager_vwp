@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import (
 from .. import tiers
 from . import theme
 from .overview_widgets import Chip
-from .widgets import bar_color, paint_chip
+from .widgets import bar_color, clear_layout, paint_chip
 
 
 def _font(painter: QPainter, size: int, bold: bool = False) -> QFont:
@@ -447,10 +447,7 @@ class SummaryBand(QFrame):
     def set_chips(self, chips: Sequence[Tuple[str, str, str]]) -> None:
         """`[(글, 알약 종류, 툴팁), ...]` - 지난 것은 지운다."""
 
-        while self.chips.count():
-            item = self.chips.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+        clear_layout(self.chips)
         for text, kind, tip in chips:
             chip = Chip(text, kind)
             chip.setToolTip(tip)
