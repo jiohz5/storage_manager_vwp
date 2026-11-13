@@ -57,6 +57,7 @@ from .scan_pages import (
     LargeFilesPage,
     SummaryPage,
     status_text,
+    OwnersPage,
 )
 from .scan_progress_dialog import ScanProgressDialog
 
@@ -348,9 +349,10 @@ class ScanTab(QFrame):
         self.accounts_page = AccountsPage()
         self.growth_page = GrowthPage()
         self.large_page = LargeFilesPage()
+        self.owners_page = OwnersPage()
         self._pages = (
             self.overview_page, self.summary_page, self.accounts_page, self.growth_page,
-            self.large_page,
+            self.large_page, self.owners_page,
         )
         for page, key in zip(self._pages, TAB_KEYS):
             self.detail_stack.addWidget(page)
@@ -595,6 +597,8 @@ class ScanTab(QFrame):
 
     def _refresh_large_files(self) -> None:
         self.large_page.show_account(self._scan_snapshot, self._selected_account())
+        # 사람별도 계정을 따라간다 (큰 파일과 같은 때 다시 그린다).
+        self.owners_page.show_account(self._scan_snapshot, self._selected_account())
 
     def _refresh_growth_table(self) -> None:
         self.growth_page.show_account(self._scan_snapshot, self._selected_account())

@@ -803,7 +803,7 @@ class ScanTabHeightTests(_GuiCase):
 
         tabs = self.window._scan_tab.detail_tabs
         self.assertEqual(tabs.count(), len(TAB_KEYS))
-        self.assertEqual(len(TAB_KEYS), 5)
+        self.assertEqual(len(TAB_KEYS), 6)   # 현황·요약·계정별·용량 변화·큰 파일·사람별
 
     def test_each_detail_tab_has_a_name(self):
         tabs = self.window._scan_tab.detail_tabs
@@ -2442,6 +2442,49 @@ class StorageGroupTests(_GuiCase):
 
         self.window._render_table(self.samples())
         self.assertEqual(self.window.tiles["attention"].value.text(), "2")
+
+
+class OwnersPageTests(_GuiCase):
+    """사람별 쪽 - 가장 많이 쓰는 사람을 띠에 크게, 사람마다 크기 막대와 지난 스캔 대비."""
+
+    GB = 1024 * 1024
+
+    def test_owners_are_drawn_biggest_first_with_bars_and_change(self):
+        from smvwp.gui.scan_pages import OWNER_DELTA, OWNER_NAME, OWNER_SIZE, OwnersPage
+        from smvwp.gui.widgets import CellDelegate
+
+        page = OwnersPage()
+        page.retranslate()
+        self.addCleanup(page.close)
+        page.show_owners([
+            {"uid": 1002, "name": "lee", "size_kb": 100 * self.GB, "file_count": 5, "previous_kb": None},
+            {"uid": 1001, "name": "kim", "size_kb": 600 * self.GB, "file_count": 3,
+             "previous_kb": 400 * self.GB},
+        ], "proj", 1000 * self.GB)
+        table = page.table
+        self.assertEqual([table.item(r, OWNER_NAME).text() for r in range(2)], ["kim", "lee"])
+        self.assertAlmostEqual(table.item(0, OWNER_SIZE).data(CellDelegate.BAR_ROLE)[0], 0.6)
+        self.assertEqual(table.item(0, OWNER_DELTA).data(CellDelegate.VALUE_ROLE), 200 * self.GB)
+        self.assertEqual(page.band.value.text(), "kim")
+
+    def test_no_owners_says_why(self):
+        from smvwp import i18n
+        from smvwp.gui.scan_pages import OwnersPage
+
+        page = OwnersPage()
+        self.addCleanup(page.close)
+        page.show_owners([], "proj", None)
+        self.assertEqual(page.table.rowCount(), 0)
+        self.assertEqual(page.caption.text(), i18n.t("owners.none", account="proj"))
+
+    def test_the_scan_tab_and_the_detail_window_both_have_it(self):
+        from smvwp.gui.main_window import MainWindow
+        from smvwp.gui.scan_pages import TAB_KEYS, TAB_OWNERS
+
+        window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(window.close)
+        self.assertEqual(TAB_KEYS[TAB_OWNERS], "scan.tab.owners")
+        self.assertIs(window._scan_tab.detail_stack.widget(TAB_OWNERS), window._scan_tab.owners_page)
 
 
 class HomeHeaderTests(_GuiCase):

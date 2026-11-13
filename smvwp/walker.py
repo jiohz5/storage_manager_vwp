@@ -85,6 +85,20 @@ _MIN_BLOCKS = LARGEST_FILE_MIN_KB * 1024 // 512
 WAIT_TIMEOUT_SECONDS = 0.05
 
 
+def _merge_owners(node, owners: dict) -> None:
+    """`owners` (`{uid: [블록, 파일 수]}`) 를 노드의 몫에 더한다 (`_tree_lock` 안에서)."""
+
+    if node.owners is None:
+        node.owners = {}
+    for uid, (block_count, count) in owners.items():
+        tally = node.owners.get(uid)
+        if tally is None:
+            node.owners[uid] = [block_count, count]
+        else:
+            tally[0] += block_count
+            tally[1] += count
+
+
 def disk_blocks(info) -> int:
     """`du`가 세는 512바이트 블록 수."""
 
@@ -110,6 +124,9 @@ class _Node:
     files: int = 0               # 파일 수 (자기 것 + 완료된 자식들)
     newest: float = 0.0          # 가장 최근에 바뀐 파일의 수정 시각 (없으면 0)
     cold_blocks: int = 0         # 오래 안 바뀐 파일들의 블록 (`cold_days`)
+    # 파일 주인(uid)별 `[블록, 파일 수]` - 자기 것 + 완료된 자식들. 끝나면 부모로 합쳐
+    # 올리고 자기 것은 버린다 (깊이 우선이라 떠 있는 노드는 몇 개뿐이다).
+    owners: Optional[dict] = None
     pending_children: int = 0
     scanned: bool = False        # 자기 디렉터리를 읽었는가
     complete: bool = False
@@ -140,6 +157,10 @@ class WalkOutcome:
     # `entries` 의 경로마다 `{files, newest, cold_kb, own_kb}` - 파일 수, 가장 최근
     # 수정 시각(epoch, 없으면 None), 오래 안 바뀐 양, 폴더에 직접 있는 파일의 크기.
     details: dict = field(default_factory=dict)
+    # 파일 주인(uid)별 `{uid: (KB, 파일 수)}` - 이 순회가 **측정 단위로 낸 것**의 몫.
+    # 루트가 끝났으면 루트 전체, 끊겼으면 끝난 바로 아래 폴더들의 합이다 (크기와 같은
+    # 규칙 - 안 끝난 자식은 다시 재므로 두 번 세지 않는다). 폴더 자신의 블록은 뺀다.
+    owners: dict = field(default_factory=dict)
 
 
 class ParallelWalker:
@@ -284,6 +305,10 @@ class ParallelWalker:
             parent.cold_blocks += current.cold_blocks
             if current.newest > parent.newest:
                 parent.newest = current.newest
+            if current.owners:
+                _merge_owners(parent, current.owners)
+                if current.depth > 1:
+                    current.owners = None   # 깊은 노드는 다시 읽을 일이 없다
             parent.pending_children -= 1
             current = parent
 
@@ -302,6 +327,7 @@ class ParallelWalker:
         newest = 0.0
         cold = 0
         cold_before = self._cold_before
+        owners: dict = {}
         hardlinks: List[tuple] = []
         unreadable = 0
         logical = 0
@@ -352,7 +378,7 @@ class ParallelWalker:
                     if info.st_nlink > 1:
                         hardlinks.append(
                             ((info.st_dev, info.st_ino), disk_blocks(info), info.st_size,
-                             info.st_mtime)
+                             info.st_mtime, info.st_uid)
                         )
                         continue
                     file_blocks = disk_blocks(info)
@@ -363,6 +389,12 @@ class ParallelWalker:
                         newest = info.st_mtime
                     if info.st_mtime < cold_before:
                         cold += file_blocks
+                    tally = owners.get(info.st_uid)
+                    if tally is None:
+                        owners[info.st_uid] = [file_blocks, 1]
+                    else:
+                        tally[0] += file_blocks
+                        tally[1] += 1
                     if file_blocks >= _MIN_BLOCKS:
                         big.append((file_blocks * 512 // 1024, entry.path))
         except (FileNotFoundError, NotADirectoryError):
@@ -376,7 +408,7 @@ class ParallelWalker:
         # 트리 갱신만 잠금 안에서 한다. 카운터는 스레드 지역으로 세고 끝에
         # 한 번만 합친다 - 디렉터리마다 잠금을 잡을 이유가 없다.
         with self._tree_lock:
-            for key, block_count, size, modified in hardlinks:
+            for key, block_count, size, modified, uid in hardlinks:
                 if key in self._seen_inodes:
                     continue
                 self._seen_inodes.add(key)
@@ -387,6 +419,9 @@ class ParallelWalker:
                     newest = modified
                 if modified < cold_before:
                     cold += block_count
+                tally = owners.setdefault(uid, [0, 0])
+                tally[0] += block_count
+                tally[1] += 1
             self.hardlink_files += len(hardlinks)
             self.logical_bytes += logical
             for candidate in big:
@@ -398,6 +433,8 @@ class ParallelWalker:
             node.cold_blocks += cold
             if newest > node.newest:
                 node.newest = newest
+            if owners:
+                _merge_owners(node, owners)
             node.pending_children += len(children)
             node.scanned = True
             if node.depth > self._deepest:
@@ -493,7 +530,20 @@ class ParallelWalker:
 
         root = self._root_node
         deepest = self._deepest
+        # 주인별 몫 - 측정 단위로 내는 것의 것만 (루트가 끝났으면 루트, 아니면 끝난 바로
+        # 아래 폴더들). `save_tree_entries` 가 단위를 정하는 규칙과 같다.
+        units = [root] if root.complete else [
+            node for node in self._kept if node.depth == 1 and node.complete
+        ]
+        owners: dict = {}
+        for node in units:
+            for uid, (block_count, count) in (node.owners or {}).items():
+                tally = owners.setdefault(uid, [0, 0])
+                tally[0] += block_count
+                tally[1] += count
         return WalkOutcome(
+            owners={uid: (block_count * 512 // 1024, count)
+                    for uid, (block_count, count) in owners.items()},
             entries=entries,
             root_size_kb=(root.blocks * 512 // 1024) if root.complete else None,
             completed=root.complete,

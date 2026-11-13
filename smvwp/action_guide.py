@@ -305,6 +305,21 @@ def _usage_facts(guide: Guide, detail) -> None:
                 forecast=formatting.format_forecast_cell(detail.forecast),
             )
         )
+    _owner_facts(guide, detail)
+
+
+def _owner_facts(guide: Guide, detail) -> None:
+    """이 계정을 가장 많이 쓰는 사람 셋 - "누구에게 물어보나" 까지 말한다."""
+
+    scan = getattr(detail, "scan", None) if detail is not None else None
+    owners = list(getattr(scan, "owners", None) or [])[:3]
+    total = getattr(detail, "measured_kb", None) or sum(row["size_kb"] for row in owners)
+    if not owners or not total:
+        return
+    guide.situation.append(i18n.t("guide.owners", names=", ".join(
+        f"{row['name']} {formatting.format_kb(row['size_kb'])} ({row['size_kb'] / total * 100:.0f}%)"
+        for row in owners
+    )))
 
 
 def _cleanup_rows(guide: Guide, detail) -> None:

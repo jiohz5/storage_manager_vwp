@@ -1347,11 +1347,12 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
 # 옛 것은 쓰지 않고 창이 스스로 읽는다. 깜빡해도 세대가 바뀌는 다음 밤에 새로 남는다.
 # 3: 증가 경로를 증감의 크기 순으로(줄어든 곳도), 지난번 나눠 쟀거나 못 잰 경로를 가림
 #    (`previous_note`), 변화가 몰린 곳(`focus`), 큰 파일의 '견줬나'.
-SUMMARY_FORMAT = 6   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
+SUMMARY_FORMAT = 7   # 2: 측정 기간·디렉터리 수·잰 합계·디렉터리당 시간을 보탰다
                      # 3: 용량 변화 줄의 '가장 많이 변한 곳'
                      # 4: 계정 증감을 두 바퀴 모두 잰 곳끼리 (`comparable_change`)
                      # 5: 크고 오래 안 바뀐 폴더 (`cold_folders`)
                      # 6: 계정 바로 아래 폴더의 장기 이력 (`folder_trends`)
+                     # 7: 사람(파일 주인)별 사용량 (`owners`)
 
 
 def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -> str:
@@ -1543,6 +1544,8 @@ class AccountScanSnapshot:
     # 크고 거의 통째로 오래 안 바뀐 폴더 `[{path, size_kb, cold_kb, newest_mtime}]`
     # (`scan_store.cold_folders`). 야간 스캔이 요약을 남길 때만 채운다.
     cold_folders: List[dict] = field(default_factory=list)
+    # 사람(파일 주인)별 사용량 `[{uid, name, size_kb, file_count, previous_kb}]`.
+    owners: List[dict] = field(default_factory=list)
     # 계정 바로 아래 폴더들의 장기 이력 `{폴더: [(끝낸 때, KB), ...]}`. 요약에만 있다.
     folder_trends: dict = field(default_factory=dict)
     # 지금까지 실제로 잰 용량 (KB). 진행 중인 세대 기준이라 스캔이 도는 동안
@@ -1665,6 +1668,8 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
             scan_store.cold_folders(conn, account_id, current_gen, cold_min_kb)
             if focus and current_gen and cold_min_kb else []
         ),
+        # 사람별 사용량 (이번 세대, 지난 세대 값을 곁들여). 사람 수만큼 몇 줄이라 늘 읽는다.
+        "owners": _owners_with_change(conn, account_id, current_gen, previous_gen),
         # 계정 바로 아래 폴더들의 장기 이력 (용량 변화 표의 '추세' 칸). 요약을 남길 때만.
         "folder_trends": (
             scan_store.folder_history(
@@ -1681,6 +1686,25 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
         # 다 더하면 얼마였나, 디렉터리 하나에 얼마나 걸렸나(완료 일정 어림).
         **facts,
     }
+
+
+# 화면에 싣는 사람 수 - 그 아래는 '그 밖 N명' 으로 묶는다.
+OWNERS_SHOWN = 15
+
+
+def _owners_with_change(conn, account_id: str, current_gen, previous_gen) -> List[dict]:
+    """`[{uid, name, size_kb, file_count, previous_kb}]` - 큰 것부터, `OWNERS_SHOWN` 명."""
+
+    if not current_gen:
+        return []
+    rows = scan_store.owner_totals(conn, account_id, current_gen)
+    previous = {
+        row["uid"]: row["size_kb"]
+        for row in (scan_store.owner_totals(conn, account_id, previous_gen) if previous_gen else [])
+    }
+    for row in rows:
+        row["previous_kb"] = previous.get(row["uid"]) if previous_gen else None
+    return rows[:OWNERS_SHOWN]
 
 
 def _generation_facts(conn, account_id: str, generation) -> dict:
@@ -1786,6 +1810,7 @@ def get_status_snapshot(
                     growth=settled["growth"],
                     large_files=settled["large_files"],
                     cold_folders=list(settled.get("cold_folders") or []),
+                    owners=list(settled.get("owners") or []),
                     folder_trends={
                         path: [tuple(point) for point in points]
                         for path, points in (settled.get("folder_trends") or {}).items()

@@ -38,8 +38,12 @@ from .. import formatting, i18n, large_files, scan_digest, scan_store, tiers
 from . import theme, visuals, widgets
 
 # 세부 탭. 순서가 곧 화면 순서다 - 현황(`overview_page`)이 먼저 열린다.
-TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.tab.growth", "scan.tab.large"]
-(TAB_OVERVIEW, TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE) = range(5)
+TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.tab.growth",
+            "scan.tab.large", "scan.tab.owners"]
+(TAB_OVERVIEW, TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE, TAB_OWNERS) = range(6)
+
+OWNER_COLUMN_KEYS = ["owners.col.name", "owners.col.size", "owners.col.delta", "owners.col.files"]
+(OWNER_NAME, OWNER_SIZE, OWNER_DELTA, OWNER_FILES) = range(4)
 
 # 살펴볼 것 한 줄을 누르면 어느 탭으로 가나. 못 잰 것·덜 센 것은 증가 경로
 # 탭 설명에 사유가 나오므로 그쪽이다.
@@ -1158,3 +1162,105 @@ class LargeFilesPage(QWidget):
         band.set_chips([
             (i18n.t(key, count=count), kind, legend) for key, kind, count in counts if count
         ])
+
+
+# -- 6. 사람별 ----------------------------------------------------------------
+class OwnersPage(QWidget):
+    """계정을 사람(파일 주인)별로 - "누가 채웠나".
+
+    한 계정을 여럿이 쓰면 "이 계정이 32TB" 다음 질문은 늘 "누가?" 였고, 확인 명령을
+    돌려 주인을 하나씩 봐야 했다. 순회가 같은 stat 에서 센 것이다 (`walker` owners)."""
+
+    def __init__(self, parent=None, compact: bool = False):
+        super().__init__(parent)
+        self._compact = compact
+        layout = _page_box(self)
+        self.stack = visuals.ShareStack()
+        self.band = visuals.SummaryBand(self.stack)
+        self.band.setVisible(False)
+        layout.addWidget(self.band)
+        self.caption = _caption()
+        layout.addWidget(self.caption)
+        table = _table(len(OWNER_COLUMN_KEYS))
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(OWNER_NAME, QHeaderView.Stretch)
+        for column, width in ((OWNER_SIZE, 140 if compact else 200), (OWNER_DELTA, 150 if compact else 190)):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+            table.setColumnWidth(column, width)
+        header.setSectionResizeMode(OWNER_FILES, QHeaderView.ResizeToContents)
+        self.cells = widgets.ChangeBarDelegate(table)
+        table.setItemDelegate(self.cells)
+        table.setSortingEnabled(True)
+        self.table = table
+        layout.addWidget(table, 1)
+        layout.addStretch(0)
+
+    def retranslate(self) -> None:
+        self.table.setHorizontalHeaderLabels([i18n.t(key) for key in OWNER_COLUMN_KEYS])
+
+    def show_account(self, snapshot, account) -> None:
+        entry = _entry_for(snapshot, account.account_id if account else None)
+        if entry is None:
+            self.show_owners([], account.name if account else "", None)
+            return
+        self.show_owners(list(getattr(entry, "owners", None) or []), entry.account_name,
+                         getattr(entry, "current_measured_kb", None))
+
+    def show_owners(self, rows, account_name: str, total_kb) -> None:
+        table = self.table
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        if not rows:
+            self.band.setVisible(False)
+            self.caption.setText(i18n.t("owners.none", account=account_name))
+            fit_table(table)
+            return
+        rows = sorted(rows, key=lambda row: -row["size_kb"])
+        total = total_kb or sum(row["size_kb"] for row in rows) or 1
+        top = rows[0]
+        band = self.band
+        band.setVisible(True)
+        band.caption.setText(i18n.t("owners.band.title"))
+        band.set_value(top["name"])
+        band.sub.setText(i18n.t(
+            "owners.band.sub", size=formatting.format_kb(top["size_kb"]),
+            pct=f"{top['size_kb'] / total * 100:.0f}",
+        ))
+        self.stack.set_parts([
+            # 주황은 위험(등급)에만 - 가장 많이 쓰는 사람은 파랑, 나머지는 회색.
+            (row["size_kb"], "accent" if index == 0 else "neutral",
+             f"{row['name']} · {formatting.format_kb(row['size_kb'])}")
+            for index, row in enumerate(rows)
+        ], total)
+        band.set_chips([(i18n.t("owners.chip.count", count=len(rows)), "soft", "")])
+        self.caption.setText(i18n.t("owners.caption", account=account_name))
+        changes = [abs(row["size_kb"] - row["previous_kb"]) for row in rows
+                   if row.get("previous_kb") is not None]
+        self.cells.scale = max(changes, default=0)
+        table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            name = QTableWidgetItem(row["name"])
+            name.setToolTip(f"uid {row['uid']}")
+            table.setItem(index, OWNER_NAME, name)
+            size = widgets.NumericItem(formatting.format_kb(row["size_kb"]), row["size_kb"])
+            size.setData(widgets.CellDelegate.BAR_ROLE, (row["size_kb"] / total, "accent"))
+            size.setToolTip(i18n.t("scan.size_share", pct=f"{row['size_kb'] / total * 100:.1f}"))
+            table.setItem(index, OWNER_SIZE, size)
+            previous = row.get("previous_kb")
+            if previous is None:
+                delta = widgets.NumericItem(i18n.t("common.none"), None)
+            else:
+                change = row["size_kb"] - previous
+                delta = widgets.NumericItem(formatting.format_kb_delta(change), change)
+                delta.setData(widgets.CellDelegate.VALUE_ROLE, change)
+                delta.setForeground(QColor(
+                    theme.CHANGE_UP if change > 0 else theme.CHANGE_DOWN if change < 0
+                    else theme.TEXT_MUTED))
+            table.setItem(index, OWNER_DELTA, delta)
+            files = widgets.NumericItem(f"{row['file_count']:,}", row["file_count"])
+            table.setItem(index, OWNER_FILES, files)
+            for column in (OWNER_SIZE, OWNER_DELTA, OWNER_FILES):
+                table.item(index, column).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        table.setSortingEnabled(True)
+        table.sortItems(OWNER_SIZE, Qt.DescendingOrder)
+        fit_table(table)

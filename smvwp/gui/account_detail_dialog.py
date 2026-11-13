@@ -278,6 +278,11 @@ class AccountDetailDialog(QDialog):
         self.large_table = self.large_page.table
         self.growth_table = self.growth_page.table
         self.health_table = self._table(HEALTH_COLUMN_KEYS, TAB_KEYS[TAB_HEALTH])
+        # 사람별 - 상세 스캔 탭의 쪽을 그대로.
+        self.owners_page = scan_pages.OwnersPage(compact=True)
+        self.owners_page.retranslate()
+        self.stack.addWidget(self.owners_page)
+        self.tabs.addTab(i18n.t("scan.tab.owners"))
         return column
 
     def _table(self, column_keys, tab_key: str) -> QTableWidget:
@@ -318,6 +323,11 @@ class AccountDetailDialog(QDialog):
         self._show_trend(detail)
         self._fill_large(detail)
         self._fill_growth(detail)
+        scan = detail.scan
+        self.owners_page.show_owners(
+            list(getattr(scan, "owners", None) or []) if scan is not None else [],
+            detail.name, detail.measured_kb,
+        )
         self._fill_health_table(detail)
 
     def _show_header(self, detail) -> None:

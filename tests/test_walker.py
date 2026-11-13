@@ -221,6 +221,52 @@ class BigFoldersBelowTheDepthTests(unittest.TestCase):
         self.assertEqual(self._names(deep_min_kb=100), ["a", "a/b", "a/b/c", "a/b/c/big"])
 
 
+class OwnersTests(unittest.TestCase):
+    """같은 stat 에서 파일 주인(uid)별 크기와 파일 수 - "누가 채웠나".
+
+    시간이 다 돼 끊기면 그때 끝난 하위 폴더의 것만 낸다 (크기와 같은 규칙) - 안 끝난
+    자식은 다시 재므로, 지금까지 본 것을 다 내면 그 몫을 두 번 센다."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "acct"
+        make_file(self.root / "a" / "f1.bin", 8192)
+        make_file(self.root / "a" / "f2.bin", 4096)
+        make_file(self.root / "b" / "f3.bin", 4096)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _owner_of(self, owners):
+        """시험 장비의 사용자 하나가 모든 파일의 주인이다."""
+
+        self.assertEqual(len(owners), 1)
+        return next(iter(owners.values()))
+
+    def test_a_complete_walk_counts_every_file_once(self):
+        outcome = walker.walk_tree(str(self.root), max_depth=1)
+        kb, files = self._owner_of(outcome.owners)
+        self.assertEqual(files, 3)
+        # 폴더 자신의 블록은 주인에게 세지 않는다 - 파일만.
+        self.assertLessEqual(kb, outcome.root_size_kb)
+        self.assertGreater(kb, 0)
+
+    def test_a_cut_walk_gives_only_what_finished_below_the_root(self):
+        made = walker.ParallelWalker(str(self.root), max_depth=1, workers=1)
+        calls = {"n": 0}
+
+        def expired():
+            calls["n"] += 1
+            return calls["n"] > 2      # 루트와 첫 하위 폴더 하나까지만
+
+        with patch.object(made, "_expired", side_effect=expired):
+            outcome = made.run()
+        self.assertTrue(outcome.timed_out)
+        finished = [Path(path).name for path, _kb in outcome.entries]
+        _kb, files = self._owner_of(outcome.owners)
+        self.assertEqual(files, {"a": 2, "b": 1}[finished[0]])
+
+
 class ExclusionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -560,9 +560,13 @@ def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: 
         (account_id, *to_delete),
     )
     # 큰 파일 목록도 같은 세대 기준으로 정리한다. 빠뜨리면 계정마다 세대마다
-    # 50행씩 영원히 쌓인다.
+    # 50행씩 영원히 쌓인다. 사람별 사용량도 같다.
     conn.execute(
         f"DELETE FROM baseline_large_files WHERE account_id = ? AND generation IN ({placeholders})",
+        (account_id, *to_delete),
+    )
+    conn.execute(
+        f"DELETE FROM baseline_owners WHERE account_id = ? AND generation IN ({placeholders})",
         (account_id, *to_delete),
     )
     conn.commit()
@@ -875,3 +879,41 @@ def prune_folder_history(conn: sqlite3.Connection, retention_days: int, now=None
     cursor = conn.execute("DELETE FROM folder_history WHERE completed_at < ?", (cutoff,))
     conn.commit()
     return cursor.rowcount
+
+
+# -- 사람(파일 주인)별 사용량 -------------------------------------------------
+
+def add_owners(conn: sqlite3.Connection, account_id: str, generation: int,
+               owners: Dict[int, tuple], names: Dict[int, str]) -> None:
+    """측정 단위 하나의 주인별 `{uid: (KB, 파일 수)}` 를 그 세대의 합에 더한다."""
+
+    if not owners:
+        return
+    conn.executemany(
+        "INSERT INTO baseline_owners (account_id, generation, uid, name, size_kb, file_count) "
+        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(account_id, generation, uid) DO UPDATE SET "
+        "size_kb = size_kb + excluded.size_kb, file_count = file_count + excluded.file_count, "
+        "name = COALESCE(excluded.name, name)",
+        [
+            (account_id, generation, int(uid), names.get(uid), int(size_kb), int(count))
+            for uid, (size_kb, count) in owners.items()
+        ],
+    )
+    conn.commit()
+
+
+def owner_totals(conn: sqlite3.Connection, account_id: str, generation: int,
+                 limit: int = 0) -> List[dict]:
+    """그 세대의 사람별 사용량 `[{uid, name, size_kb, file_count}]` - 큰 것부터."""
+
+    rows = conn.execute(
+        "SELECT uid, name, size_kb, file_count FROM baseline_owners "
+        "WHERE account_id = ? AND generation = ? ORDER BY size_kb DESC, uid"
+        + (" LIMIT ?" if limit else ""),
+        (account_id, generation, limit) if limit else (account_id, generation),
+    ).fetchall()
+    return [
+        {"uid": row["uid"], "name": row["name"] or str(row["uid"]),
+         "size_kb": row["size_kb"], "file_count": row["file_count"]}
+        for row in rows
+    ]

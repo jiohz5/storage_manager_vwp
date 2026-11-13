@@ -144,6 +144,8 @@ class DuTreeOutcome:
     # 순회 엔진이 경로마다 곁다리로 모은 것 (`walker.WalkOutcome.details`). `du` 엔진은
     # 비운다 - 합계 말고는 알 방법이 없다.
     details: dict = None
+    # 파일 주인별 `{uid: (KB, 파일 수)}` (`walker.WalkOutcome.owners`). `du` 엔진은 비운다.
+    owners: dict = None
 
     def __post_init__(self):
         if self.entries is None:
@@ -152,6 +154,8 @@ class DuTreeOutcome:
             self.largest_files = []
         if self.details is None:
             self.details = {}
+        if self.owners is None:
+            self.owners = {}
 
 
 def du_tree_command(path: str, max_depth: int) -> List[str]:
@@ -309,6 +313,7 @@ def measure_tree(
         )
         return DuTreeOutcome(
             details=outcome.details,
+            owners=outcome.owners,
             entries=outcome.entries,
             largest_files=outcome.largest_files,
             root_size_kb=outcome.root_size_kb,
@@ -318,6 +323,26 @@ def measure_tree(
             error_message=outcome.error_message,
         )
     return run_du_tree(path, timeout_seconds, max_depth=max_depth)
+
+
+_OWNER_NAMES: dict = {}
+
+
+def owner_name(uid) -> str:
+    """uid 를 사용자 이름으로 (이 장비의 계정 정보). 모르면 숫자 그대로.
+
+    NIS/LDAP 면 조회가 네트워크라 사람마다 한 번만 묻고 기억한다."""
+
+    if uid in _OWNER_NAMES:
+        return _OWNER_NAMES[uid]
+    try:
+        import pwd
+
+        name = pwd.getpwuid(int(uid)).pw_name
+    except (ImportError, KeyError, ValueError, OverflowError):
+        name = str(uid)
+    _OWNER_NAMES[uid] = name
+    return name
 
 
 def _decode_stream(raw) -> str:
@@ -404,6 +429,12 @@ def process_one_checkpoint(
     # 무관하게 남긴다 - `entries` 와 같은 이유다.
     if outcome.largest_files:
         scan_store.save_large_files(conn, account_id, generation, outcome.largest_files)
+    # 사람별 사용량 - 이 체크포인트가 측정 단위로 낸 것의 몫 (끊겼으면 끝난 하위 폴더의
+    # 것만 - 남은 자식은 다시 재며 그때 더한다).
+    owners = getattr(outcome, "owners", None)
+    if owners:
+        scan_store.add_owners(conn, account_id, generation, owners,
+                              {uid: owner_name(uid) for uid in owners})
 
     if outcome.completed:
         scan_store.mark_done(

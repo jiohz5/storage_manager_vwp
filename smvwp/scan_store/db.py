@@ -246,6 +246,19 @@ CREATE TABLE IF NOT EXISTS folder_history (
     PRIMARY KEY (account_id, path, completed_at)
 );
 
+-- 파일 주인(uid)별 사용량 - 세대마다 계정에 사람 수만큼 몇 줄. 측정 단위마다 더해
+-- 쌓는다 (`results.add_owners`). 이름은 스캔한 장비에서 바꿔 둔다 (창은 다른 장비에
+-- 뜰 수 있다). 세대와 함께 지운다 (`prune_old_generations`).
+CREATE TABLE IF NOT EXISTS baseline_owners (
+    account_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    uid INTEGER NOT NULL,
+    name TEXT,
+    size_kb INTEGER NOT NULL,
+    file_count INTEGER NOT NULL,
+    PRIMARY KEY (account_id, generation, uid)
+);
+
 CREATE TABLE IF NOT EXISTS scan_summaries (
     account_id TEXT PRIMARY KEY,
     input_key TEXT NOT NULL,
