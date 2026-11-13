@@ -719,9 +719,13 @@ def command_probe(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    import smvwp
+
     parser = argparse.ArgumentParser(
         prog="smvwp_cli.py", description="Storage Manager VWP"
     )
+    # 폐쇄망에서 어느 판이 깔렸는지 (git 이 없다).
+    parser.add_argument("--version", action="version", version=f"smvwp {smvwp.__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def _add_data_dir(target):

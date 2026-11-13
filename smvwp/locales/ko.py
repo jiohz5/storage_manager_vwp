@@ -396,6 +396,7 @@ STRINGS = {
     "common.unknown_value": "확인불가",
     # -- 대시보드 ----------------------------------------------
     "app.title": "Storage Manager VWP",
+    "app.title_versioned": "Storage Manager VWP · {version}",
     "dashboard.df_caveat": (
         "※ 사용률은 계정 경로가 속한 파일시스템 전체 사용량 기준입니다 "
         "(df 특성상 계정 단독 사용량이 아닙니다)."

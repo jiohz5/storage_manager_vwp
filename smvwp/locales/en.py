@@ -376,6 +376,7 @@ STRINGS = {
     "common.unknown_value": "Unknown",
     # -- Dashboard ---------------------------------------------
     "app.title": "Storage Manager VWP",
+    "app.title_versioned": "Storage Manager VWP · {version}",
     "dashboard.df_caveat": (
         "* Usage reflects the whole filesystem containing the account path "
         "(df does not report per-account usage)."

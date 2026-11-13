@@ -51,6 +51,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from .. import config as config_module
 from .. import formatting
 from .. import action_guide
@@ -856,7 +857,8 @@ class MainWindow(QMainWindow):
         """언어에 따라 달라지는 정적 문자열을 다시 채운다. 동적 문자열(표 내용,
         상태 줄)은 이어지는 갱신 호출이 알아서 다시 그린다."""
 
-        self.setWindowTitle(i18n.t("app.title"))
+        # 판을 제목에 - 실기에서 "그 고친 것이 들어갔나" 를 git 없이 본다.
+        self.setWindowTitle(i18n.t("app.title_versioned", version=__version__))
         self.language_menu.setTitle(i18n.t("menu.language"))
         self.tabs.setTabText(0, i18n.t("tab.home"))
         self.tabs.setTabText(1, i18n.t("tab.scan"))
