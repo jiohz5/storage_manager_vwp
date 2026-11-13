@@ -15,4 +15,4 @@ from __future__ import annotations
 # 판 - 고친 날짜 (같은 날 두 번이면 `.2`). 반입은 ZIP 을 풀어 `smvwp/` 를 갈아 끼우는
 # 것이라 실기에서 git 으로 "그 고친 것이 들어갔나" 를 볼 수 없다 - 창 제목과
 # `smvwp_cli.py --version` 이 이 값을 보인다. **고쳐서 내보낼 때마다 올린다.**
-__version__ = "2026.11.14.2"
+__version__ = "2026.11.14.3"

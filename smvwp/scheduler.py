@@ -20,7 +20,7 @@ from typing import Optional
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
-from . import dashboard, nightly_scan, sqlite_db, store
+from . import nightly_scan, sqlite_db, store
 from .cycle import run_collection_cycle
 
 logger = logging.getLogger(__name__)
@@ -315,8 +315,11 @@ class DashboardWorker(ThreadWorker):
         return self.start()
 
     def _work(self):
-        # 읽는 방법 자체는 `dashboard` 에 있다 - Qt 없이 시험할 수 있어야 한다.
-        return dashboard.read_dashboard(
+        # 수집이 써 둔 홈 결과 파일이 믿을 만하면 그것만 읽는다 - DB 를 열지 않는다
+        # (`home_view`). 아니면 예전처럼 DB 에서. 읽는 방법은 Qt 밖에 있다.
+        from . import home_view
+
+        return home_view.load(
             self._data_dir, self._get_config(),
             on_step=lambda index, total, key: emit_safely(self, "progress", index, total, key),
             cache=self._settled,

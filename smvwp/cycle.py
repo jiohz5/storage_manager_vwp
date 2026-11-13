@@ -138,4 +138,13 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
     except Exception:  # pragma: no cover - 방어적 처리
         logger.exception("보고서 생성 실패 (수집 결과는 이미 저장됨)")
 
+    # 홈 한 장을 파일로 - 창은 이것만 읽는다 (`home_view`). 실패하면 창이 예전처럼 DB 에서
+    # 읽을 뿐이다.
+    try:
+        from . import home_view
+
+        home_view.write(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("홈 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
+
     return records
