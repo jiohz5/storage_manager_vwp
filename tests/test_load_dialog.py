@@ -171,6 +171,33 @@ class LoadDialogTests(unittest.TestCase):
         self.assertIn("%", text)
         self.assertNotIn("load.", text)   # 키가 새어 나오지 않는다
 
+    def test_the_busy_share_is_a_bar_not_just_a_number(self):
+        """시간대 표가 숫자 넷뿐이라 어느 시간이 바빴는지 읽어야 알았다 - 다른 작업의 CPU 를
+        막대로 (붐빈 시간은 주의 색)."""
+
+        from smvwp.gui.widgets import CellDelegate
+
+        self.save(sample(hours_ago=1, busy=10.0))
+        self.save(sample(hours_ago=2, busy=60.0))
+        dialog = self.dialog()
+        fractions = sorted(
+            dialog.hours_table.item(row, 1).data(CellDelegate.BAR_ROLE)[0]
+            for row in range(dialog.hours_table.rowCount())
+        )
+        self.assertAlmostEqual(fractions[0], 0.10, places=2)
+        self.assertAlmostEqual(fractions[-1], 0.60, places=2)
+
+    def test_the_busiest_job_fills_its_column(self):
+        from smvwp.gui.widgets import CellDelegate
+
+        self.save(sample(processes=[process(1, "virtuoso", "alice", 180.0),
+                                    process(2, "calibre", "bob", 45.0)]))
+        dialog = self.dialog()
+        bars = {dialog.jobs_table.item(row, 1).text(): dialog.jobs_table.item(row, 2).data(
+            CellDelegate.BAR_ROLE)[0] for row in range(dialog.jobs_table.rowCount())}
+        self.assertAlmostEqual(bars["virtuoso"], 1.0)
+        self.assertAlmostEqual(bars["calibre"], 0.25)
+
     # -- 작업 -----------------------------------------------------------
     def test_jobs_are_listed_with_their_owner(self):
         self.save(sample(processes=[process(1, "virtuoso", "alice", 180.0)]))

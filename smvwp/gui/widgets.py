@@ -299,7 +299,7 @@ class CellDelegate(QStyledItemDelegate):
     칸의 역할(role)로 무엇을 그릴지 정한다:
 
     - `VALUE_ROLE` - 부호 있는 증감(KB). 칸 뒤에 옅은 막대를 깐다 - 늘면 주의 색,
-      줄면 좋은 색. 가장 큰 변화가 칸을 다 채운다 (`scale`, 표를 채울 때 정한다).
+      줄면 회청 (`theme.CHANGE_*`). 가장 큰 변화가 칸을 다 채운다 (`scale`, 표를 채울 때 정한다).
     - `BAR_ROLE` - `(비율 0~1, 색 이름)`. 글자 왼쪽에 가는 막대 (비중·크기).
     - `CHIP_ROLE` - `(글, 알약 종류)`. 글자 앞에 알약 (새 폴더, 없어짐). 알약 글이 칸의
       글과 같으면 알약만 그린다 (`지난번 못 잼`, `목록에 없던 파일`).
@@ -352,9 +352,9 @@ class CellDelegate(QStyledItemDelegate):
         if value and self.scale > 0 and not selected:
             back = opt.rect.adjusted(self.INSET, 7, -self.INSET, -7)
             width = max(2.0, back.width() * min(1.0, abs(value) / self.scale))
-            # 옅은 면 색(`WARN_SOFT`)은 어두운 화면에서 바탕과 거의 같아 막대가 안
-            # 보였다. 등급 색·좋은 색을 비쳐 보이게 깔면 두 화면 모두에서 읽힌다.
-            color = QColor(theme.tier_color(tiers.WARN) if value > 0 else theme.GOOD_TEXT)
+            # 옅은 면 색은 어두운 화면에서 바탕과 거의 같아 막대가 안 보였다. 변화 색을
+            # 비쳐 보이게 깔면 두 화면 모두에서 읽힌다 (등급 색은 쓰지 않는다 - 위험이 아니다).
+            color = QColor(theme.CHANGE_UP_FILL if value > 0 else theme.CHANGE_DOWN_FILL)
             color.setAlphaF(self.ALPHA)
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)

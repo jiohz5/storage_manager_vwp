@@ -107,6 +107,13 @@ TOOLTIP_TEXT = "#ffffff"
 GOOD_TEXT = "#1e5e23"    # '끝남' 처럼 잘 된 것을 말하는 글자
 GOOD_SOFT = "#e8f5e9"
 WARN_SOFT = "#fff3e0"
+# 변화 - 지난 스캔보다 늘었음(청록)·줄었음(회청). 등급 색(초록·노랑·주황·빨강·보라)과
+# 겹치지 않게 고른다. 예전에는 는 것을 주의 노랑·주황으로 칠해, 그냥 는 폴더가 위험으로
+# 읽혔다. `*_FILL` 은 막대·면, 맨 이름은 글자.
+CHANGE_UP = "#0f766e"
+CHANGE_UP_FILL = "#14b8a6"
+CHANGE_DOWN = "#475569"
+CHANGE_DOWN_FILL = "#94a3b8"
 
 # 상세 스캔 현황의 상태 색. 등급 색(초록·노랑·주황·빨강·보라)과 섞이지 않게 파랑
 # 계열과 회색으로 짓고, 서로는 밝기로도 갈린다 (색만으로 구분하지 않는다 - 글자가
@@ -122,7 +129,12 @@ CHIPS = {
     "done": ("#e6edfe", "#0139cc"),
     "doing": (ACCENT_FILL, ON_ACCENT),
     "soft": ("#eef2f6", TEXT_MUTED),
-    "stale": ("#ffe8d6", "#8a3800"),
+    # 자료 품질 - 며칠 전에 끝난 스캔, 덜 센 곳, 견주기에서 뺀 곳. 위험이 아니라 "이 숫자를
+    # 그만큼 덜 믿으라" 는 뜻이라 돌빛 회색이다 (예전에는 경고 주황과 같은 알약이었다).
+    "stale": ("#ece7e2", "#57493d"),
+    # 변화 알약 - 새 폴더·목록에 없던 파일(는 쪽), 없어짐(준 쪽).
+    "change_up": ("#d5f5ef", "#0f5e57"),
+    "change_down": ("#e3e8ef", "#334155"),
     "unseen": ("#ffffff", "#3d4b57"),
     # 등급 알약 (홈의 '손볼 계정', 사용률 칸, 계정 상세). 기준 색의 옅은 바탕에 짙은 글자.
     "tier_normal": ("#e7f4e8", "#1e5e23"),
@@ -155,6 +167,7 @@ TOKEN_NAMES = (
     "PRIMARY_DISABLED", "PRIMARY_DISABLED_TEXT", "BUTTON_PRESSED",
     "DANGER", "DANGER_SOFT", "DANGER_BORDER", "TOOLTIP_BG", "TOOLTIP_TEXT",
     "GOOD_TEXT", "GOOD_SOFT", "WARN_SOFT",
+    "CHANGE_UP", "CHANGE_UP_FILL", "CHANGE_DOWN", "CHANGE_DOWN_FILL",
     "SCAN_DONE", "SCAN_DOING", "SCAN_WAITING", "SCAN_UNSEEN", "NIGHT_SLOTS",
     "CHIPS", "TIER_FILL", "TIER_TEXT", "ROW_TINTS", "TREEMAP",
 )
@@ -191,6 +204,10 @@ DARK_TOKENS = {
     "GOOD_TEXT": "#7bd389",
     "GOOD_SOFT": "#16291b",
     "WARN_SOFT": "#33240f",
+    "CHANGE_UP": "#5eead4",
+    "CHANGE_UP_FILL": "#2dd4bf",
+    "CHANGE_DOWN": "#cbd5e1",
+    "CHANGE_DOWN_FILL": "#64748b",
     "SCAN_DONE": _DARK_ACCENT,
     "SCAN_DOING": "#3f63b8",
     "SCAN_WAITING": "#2b3846",
@@ -200,7 +217,9 @@ DARK_TOKENS = {
         "done": ("#1c2d52", "#a9c2ff"),
         "doing": (_DARK_ACCENT_FILL, "#ffffff"),
         "soft": ("#212c38", _DARK_TEXT_MUTED),
-        "stale": ("#3a2512", "#ffb27a"),
+        "stale": ("#2c2824", "#d6cdc4"),
+        "change_up": ("#123a36", "#5eead4"),
+        "change_down": ("#243041", "#cbd5e1"),
         "unseen": ("#171f29", "#b7c3cf"),
         "tier_normal": ("#173022", "#7bd389"),
         "tier_warn": ("#3a3112", "#f2c94c"),

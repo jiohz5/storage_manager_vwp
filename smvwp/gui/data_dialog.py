@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from . import widgets
 from .. import data_inventory, formatting, i18n
 from ..scheduler import ThreadWorker, emit_safely
 
@@ -125,8 +126,12 @@ class DataFolderDialog(QDialog):
         self.tree.setUniformRowHeights(True)
         header = self.tree.header()
         header.setSectionResizeMode(COL_ITEM, QHeaderView.Stretch)
-        for column in (COL_SIZE, COL_COUNT, COL_SINCE, COL_KEEP):
+        for column in (COL_COUNT, COL_SINCE, COL_KEEP):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        # 크기 칸에는 가장 큰 것 대비 막대 - 무엇이 데이터 폴더를 먹는지 읽지 않고 보이게.
+        header.setSectionResizeMode(COL_SIZE, QHeaderView.Interactive)
+        self.tree.setColumnWidth(COL_SIZE, 180)
+        self.tree.setItemDelegateForColumn(COL_SIZE, widgets.CellDelegate(self.tree))
         root.addWidget(self.tree, 1)
 
         note = QLabel(i18n.t("data.note"))
@@ -162,11 +167,13 @@ class DataFolderDialog(QDialog):
             self.summary_label.setText(i18n.t("data.summary_empty", total=total))
 
         self.tree.clear()
+        biggest = max((item.size_bytes or 0 for item in inventory.items), default=0) or 1
         for item in inventory.items:
-            node = self._row(item)
+            node = self._row(item, biggest)
             self.tree.addTopLevelItem(node)
+            # 안쪽 줄(표마다 행 수)은 크기가 없거나 부모의 몫이라 부모 대비로.
             for child in item.children:
-                node.addChild(self._row(child))
+                node.addChild(self._row(child, item.size_bytes or 1))
         self.tree.expandAll()
 
     def _on_failed(self, message: str) -> None:
@@ -174,7 +181,7 @@ class DataFolderDialog(QDialog):
         self.summary_label.setVisible(True)
         self.summary_label.setText(i18n.t("data.read_failed", message=message))
 
-    def _row(self, item: data_inventory.Item) -> QTreeWidgetItem:
+    def _row(self, item: data_inventory.Item, scale: int = 0) -> QTreeWidgetItem:
         node = QTreeWidgetItem([
             i18n.t(item.key),
             formatting.format_bytes(item.size_bytes) if item.size_bytes is not None else "",
@@ -184,6 +191,9 @@ class DataFolderDialog(QDialog):
         ])
         for column in (COL_SIZE, COL_COUNT):
             node.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+        if item.size_bytes and scale:
+            node.setData(COL_SIZE, widgets.CellDelegate.BAR_ROLE,
+                         (min(1.0, item.size_bytes / scale), "accent"))
         return node
 
     def _copy_path(self) -> None:

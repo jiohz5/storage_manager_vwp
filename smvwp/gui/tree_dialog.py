@@ -402,7 +402,7 @@ class TreeDialog(QDialog):
             if node.previous_kb is None:
                 # '지난 스캔에 없던 것' / '목록에 없던 파일' 은 알약으로.
                 item.setData(COL_CHANGE, widgets.CellDelegate.CHIP_ROLE,
-                             (item.text(COL_CHANGE), "stale"))
+                             (item.text(COL_CHANGE), "change_up"))
             elif node.delta_kb:
                 item.setData(COL_CHANGE, widgets.CellDelegate.VALUE_ROLE, node.delta_kb)
         if node.compared and node.previous_kb is not None and node.delta_kb == 0:

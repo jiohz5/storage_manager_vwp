@@ -126,6 +126,34 @@ class ReadabilityTests(_BothModes):
                 self.check(theme.ink_on(color), color, 4.5, "night slot number")
 
 
+class ColorRolesTests(ReadabilityTests):
+    """색 하나에 뜻 하나 - 위험(사용률 등급), 변화(늘고 준 양), 자료 품질(오래된 스캔·덜
+    센 곳)을 다른 색으로.
+
+    주황이 다섯 가지를 겸했다: 경고 등급, 지난 스캔보다 늘었음, 눈에 띄는 큰 파일, 며칠
+    전에 끝난 스캔, 못 잰 곳. "주황 = 손봐야 함" 으로 읽은 사람이 그냥 는 폴더를 위험으로
+    봤다. 등급은 이미 초록·노랑·주황·빨강·보라를 다 쓰므로, 변화는 청록(는 것)과 회청
+    (준 것), 자료 품질은 돌빛 회색으로 둔다."""
+
+    def test_change_colors_read_on_cards(self):
+        for _ in self.modes():
+            self.check(theme.CHANGE_UP, theme.SURFACE, 4.5, "CHANGE_UP")
+            self.check(theme.CHANGE_DOWN, theme.SURFACE, 4.5, "CHANGE_DOWN")
+
+    def test_change_colors_are_not_tier_colors(self):
+        for _ in self.modes():
+            tier_colors = {theme.tier_color(t).lower() for t in tiers.LABELS} | {
+                theme.tier_text(t).lower() for t in tiers.LABELS}
+            for name in ("CHANGE_UP", "CHANGE_UP_FILL", "CHANGE_DOWN", "CHANGE_DOWN_FILL"):
+                self.assertNotIn(getattr(theme, name).lower(), tier_colors, name)
+
+    def test_quality_chips_are_not_risk_chips(self):
+        for _ in self.modes():
+            risk = {theme.CHIPS[kind] for kind in ("tier_warn", "tier_alert", "tier_emergency")}
+            for kind in ("stale", "change_up", "change_down"):
+                self.assertNotIn(theme.CHIPS[kind], risk, kind)
+
+
 class StylesheetTests(_BothModes):
     def test_the_stylesheet_uses_only_palette_values(self):
         """QSS 안에 박힌 색(`#ffffff`, `#e8eef4` ...)은 어두운 화면에서 혼자 밝게 남는다."""

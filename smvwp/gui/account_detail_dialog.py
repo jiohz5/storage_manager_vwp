@@ -419,7 +419,7 @@ class AccountDetailDialog(QDialog):
         if delta is not None:
             self.scan_delta.setText(formatting.format_kb_delta(delta))
             self.scan_delta.set_kind(
-                "tier_warn" if delta > 0 else "tier_normal" if delta < 0 else "soft"
+                "change_up" if delta > 0 else "change_down" if delta < 0 else "soft"
             )
             self.scan_delta.setToolTip(
                 i18n.t("detail.scan_delta", delta=formatting.format_kb_delta(delta))

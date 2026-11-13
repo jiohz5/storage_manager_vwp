@@ -27,6 +27,7 @@ from pathlib import Path
 
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
+    QHeaderView,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -93,9 +94,16 @@ class _LoadReader(ThreadWorker):
             }
 
 
-def _table(column_keys, height: int) -> QTableWidget:
+def _table(column_keys, height: int, bar_columns=()) -> QTableWidget:
     table = widgets.read_only_table(headers=[i18n.t(key) for key in column_keys])
     table.setMinimumHeight(height)
+    # 막대가 들어가는 칸 - 숫자 넷이 나란히 있으면 어느 줄이 큰지 읽어야 알았다.
+    if bar_columns:
+        cells = widgets.CellDelegate(table)
+        for column in bar_columns:
+            table.setItemDelegateForColumn(column, cells)
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Interactive)
+            table.setColumnWidth(column, 150)
     return table
 
 
@@ -151,13 +159,13 @@ class LoadDialog(QDialog):
         self.hours_caption = QLabel(i18n.t("load.hours_heading"))
         self.hours_caption.setObjectName("muted")
         root.addWidget(self.hours_caption)
-        self.hours_table = _table(HOUR_COLUMNS, 150)
+        self.hours_table = _table(HOUR_COLUMNS, 150, bar_columns=(1,))
         root.addWidget(self.hours_table)
 
         self.jobs_caption = QLabel(i18n.t("load.jobs_heading"))
         self.jobs_caption.setObjectName("muted")
         root.addWidget(self.jobs_caption)
-        self.jobs_table = _table(JOB_COLUMNS, 150)
+        self.jobs_table = _table(JOB_COLUMNS, 150, bar_columns=(2,))
         root.addWidget(self.jobs_table)
         self.jobs_note = QLabel(i18n.t("load.jobs_note"))
         self.jobs_note.setObjectName("caption")
@@ -167,7 +175,7 @@ class LoadDialog(QDialog):
         self.mounts_caption = QLabel(i18n.t("load.mounts_heading"))
         self.mounts_caption.setObjectName("muted")
         root.addWidget(self.mounts_caption)
-        self.mounts_table = _table(MOUNT_COLUMNS, 110)
+        self.mounts_table = _table(MOUNT_COLUMNS, 110, bar_columns=(1,))
         root.addWidget(self.mounts_table)
         self.mounts_note = QLabel(i18n.t("load.mounts_note"))
         self.mounts_note.setObjectName("caption")
@@ -236,7 +244,13 @@ class LoadDialog(QDialog):
                 # 사실 그 한가함 안에 우리 스캔이 들어 있다.
                 label += i18n.t("load.mixed_suffix")
             table.setItem(row, 0, QTableWidgetItem(label))
-            table.setItem(row, 1, _num(bucket.others_cpu.average, "%"))
+            busy = _num(bucket.others_cpu.average, "%")
+            if bucket.others_cpu.average is not None:
+                busy.setData(widgets.CellDelegate.BAR_ROLE, (
+                    min(1.0, bucket.others_cpu.average / 100),
+                    "attention" if bucket.crowded else "accent",
+                ))
+            table.setItem(row, 1, busy)
             table.setItem(row, 2, _num(bucket.load_avg.average))
             table.setItem(row, 3, _num(bucket.blocked_others.average))
             table.setItem(row, 4, _num(bucket.samples, digits=0))
@@ -254,6 +268,8 @@ class LoadDialog(QDialog):
     def _fill_jobs(self, rows) -> None:
         table = self.jobs_table
         table.setRowCount(len(rows))
+        # 한 작업이 여러 코어를 쓰면 100% 를 넘는다 - 가장 바쁜 작업이 칸을 다 채운다.
+        busiest = max((entry["cpu_peak"] or 0 for entry in rows), default=0) or 1
         for row, entry in enumerate(rows):
             name = str(entry["comm"] or "-")
             if entry["is_ours"]:
@@ -263,7 +279,10 @@ class LoadDialog(QDialog):
             if entry["cmdline"]:
                 job_item.setToolTip(str(entry["cmdline"]))
             table.setItem(row, 1, job_item)
-            table.setItem(row, 2, _num(entry["cpu_peak"], "%", digits=0))
+            peak = _num(entry["cpu_peak"], "%", digits=0)
+            if entry["cpu_peak"] is not None:
+                peak.setData(widgets.CellDelegate.BAR_ROLE, (entry["cpu_peak"] / busiest, "accent"))
+            table.setItem(row, 2, peak)
             table.setItem(row, 3, _num(entry["cpu_avg"], "%", digits=0))
             table.setItem(
                 row, 4,
@@ -281,9 +300,13 @@ class LoadDialog(QDialog):
     def _fill_mounts(self, rows) -> None:
         table = self.mounts_table
         table.setRowCount(len(rows))
+        most = max((entry["total_ops"] or 0 for entry in rows), default=0) or 1
         for row, entry in enumerate(rows):
             table.setItem(row, 0, QTableWidgetItem(str(entry["mount_point"])))
-            table.setItem(row, 1, _num(entry["total_ops"], digits=0))
+            ops = _num(entry["total_ops"], digits=0)
+            if entry["total_ops"] is not None:
+                ops.setData(widgets.CellDelegate.BAR_ROLE, (entry["total_ops"] / most, "accent"))
+            table.setItem(row, 1, ops)
             table.setItem(row, 2, _num(entry["rtt_avg"], "ms", digits=2))
             queue_item = _num(entry["queue_avg"], "ms", digits=2)
             # 대기가 왕복보다 크면 병목이 파일서버가 아니라 우리 쪽 슬롯이다.

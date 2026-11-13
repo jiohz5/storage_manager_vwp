@@ -49,8 +49,8 @@ def _font(painter: QPainter, size: int, bold: bool = False) -> QFont:
 class DeltaBar(QWidget):
     """끝난 두 바퀴의 계정 합계를 한 막대에.
 
-    지난번 합계까지는 회색, 늘어난 몫은 주의 색으로 이어 칠한다. 줄었으면 지금
-    합계까지 회색, 사라진 몫은 좋은 색 테두리의 옅은 칸이다. `+2.1 TB` 가 계정
+    지난번 합계까지는 회색, 늘어난 몫은 청록으로 이어 칠한다. 줄었으면 지금
+    합계까지 회색, 사라진 몫은 회청 점선 칸이다 (`theme.CHANGE_*`). `+2.1 TB` 가 계정
     30 TB 에서 얼마만큼인지가 글을 읽지 않고 보인다."""
 
     HEIGHT = 12
@@ -90,13 +90,13 @@ class DeltaBar(QWidget):
         painter.drawRoundedRect(QRectF(0, 0, width, self.HEIGHT), radius, radius)
         base = width * min(previous, current) / full
         if current > previous:
-            painter.setBrush(QColor(theme.tier_color(tiers.WARN)))
+            painter.setBrush(QColor(theme.CHANGE_UP_FILL))
             painter.drawRoundedRect(QRectF(0, 0, width, self.HEIGHT), radius, radius)
         elif current < previous:
-            soft = QColor(theme.GOOD_TEXT)
-            soft.setAlphaF(0.25)
+            soft = QColor(theme.CHANGE_DOWN_FILL)
+            soft.setAlphaF(0.3)
             painter.setBrush(soft)
-            painter.setPen(QPen(QColor(theme.GOOD_TEXT), 1, Qt.DashLine))
+            painter.setPen(QPen(QColor(theme.CHANGE_DOWN), 1, Qt.DashLine))
             painter.drawRoundedRect(QRectF(0.5, 0.5, width - 1, self.HEIGHT - 1), radius, radius)
             painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(theme.TEXT_FAINT))
@@ -215,7 +215,7 @@ class CollectStrip(QWidget):
 
 
 class ChangeList(QWidget):
-    """계정마다 지난 스캔 대비 증감 - 가운데 0 선을 두고 늘면 오른쪽, 줄면 왼쪽.
+    """계정마다 지난 스캔 대비 증감 - 가운데 0 선을 두고 늘면 오른쪽(청록), 줄면 왼쪽(회청).
 
     `(계정 id, 이름, 증감 KB, 설명)` 들. 가장 큰 변화가 반 폭을 다 쓴다. 줄을 누르면
     `chosen(계정 id)` - 홈은 그 계정의 용량 변화 탭을 연다."""
@@ -274,13 +274,13 @@ class ChangeList(QWidget):
             length = bar_width / 2 * min(1.0, abs(change) / scale)
             painter.setPen(Qt.NoPen)
             if change:
-                painter.setBrush(QColor(theme.tier_color(tiers.WARN) if change > 0 else theme.GOOD_TEXT))
+                painter.setBrush(QColor(theme.CHANGE_UP_FILL if change > 0 else theme.CHANGE_DOWN_FILL))
                 left = zero if change > 0 else zero - length
                 painter.drawRoundedRect(QRectF(left, middle - 5, max(2.0, length), 10), 3, 3)
             _font(painter, theme.FONT_CAPTION + 1, bold=True)
             painter.setPen(QColor(
-                theme.tier_text(tiers.WARN) if change > 0
-                else theme.GOOD_TEXT if change < 0 else theme.TEXT_MUTED
+                theme.CHANGE_UP if change > 0
+                else theme.CHANGE_DOWN if change < 0 else theme.TEXT_MUTED
             ))
             painter.drawText(
                 QRectF(self.width() - self.VALUE_WIDTH, top, self.VALUE_WIDTH - 4, self.ROW),
@@ -373,6 +373,8 @@ class ActionDelegate(QStyledItemDelegate):
         metric_width = QFontMetrics(metric_font).horizontalAdvance(metric)
         if card.get("metric_good"):
             metric_color = theme.GOOD_TEXT
+        elif card.get("metric_change"):
+            metric_color = theme.CHANGE_UP
         elif card.get("metric_tier"):
             metric_color = theme.tier_text(card["metric_tier"])
         else:

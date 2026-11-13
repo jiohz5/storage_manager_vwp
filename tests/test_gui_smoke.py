@@ -1803,10 +1803,13 @@ class GrowthPageSortTests(_GuiCase):
             {"path": f"{root}/up", "current_kb": 300 * self.GB, "previous_kb": 100 * self.GB},
             {"path": f"{root}/down", "current_kb": 100 * self.GB, "previous_kb": 900 * self.GB},
         ]), self.account)
+        # 변화 색이다 - 위험(등급) 색이 아니다 (`theme.CHANGE_*`).
         self.assertEqual(self.cell("down", GROWTH_DELTA).foreground().color().name(),
-                         QColor(theme.GOOD_TEXT).name())
+                         QColor(theme.CHANGE_DOWN).name())
         self.assertEqual(self.cell("up", GROWTH_DELTA).foreground().color().name(),
-                         QColor(theme.tier_text(tiers.WARN)).name())
+                         QColor(theme.CHANGE_UP).name())
+        self.assertNotEqual(QColor(theme.CHANGE_UP).name(),
+                            QColor(theme.tier_text(tiers.WARN)).name())
         self.assertEqual(self.page.bars.scale, 800 * self.GB)
 
     def test_the_focus_column_says_where_inside(self):
@@ -1832,7 +1835,7 @@ class GrowthPageSortTests(_GuiCase):
         sim = self.cell("sim", GROWTH_FOCUS)
         self.assertTrue(sim.text().startswith("regress_1107"), sim.text())
         # '새 폴더' 는 괄호 속 말이 아니라 알약이다 - 문장 전체는 툴팁에.
-        self.assertEqual(sim.data(CellDelegate.CHIP_ROLE), ("새 폴더", "done"))
+        self.assertEqual(sim.data(CellDelegate.CHIP_ROLE), ("새 폴더", "change_up"))
         self.assertIn("새 폴더", sim.toolTip())
         self.assertIn(f"{root}/sim/regress_1107", sim.toolTip())
         # 크게 변했는데 한 곳으로 모이지 않았으면 그렇다고 말한다.
@@ -2684,6 +2687,15 @@ class DataFolderDialogTests(_GuiCase):
         )
         self.assertEqual(scan_row.childCount(), 7)
         self.assertTrue(self.dialog.loading_row.isHidden())
+        # 크기는 막대로도 - 무엇이 데이터 폴더를 먹는지 읽지 않고 보이게.
+        from smvwp.gui.data_dialog import COL_SIZE
+        from smvwp.gui.widgets import CellDelegate
+
+        bars = [tree.topLevelItem(i).data(COL_SIZE, CellDelegate.BAR_ROLE)
+                for i in range(tree.topLevelItemCount())]
+        sized = [bar for bar in bars if bar]
+        self.assertTrue(sized)
+        self.assertAlmostEqual(max(bar[0] for bar in sized), 1.0)
         self.assertTrue(self.dialog.summary_label.text())
 
     def test_the_main_window_has_a_way_to_it(self):

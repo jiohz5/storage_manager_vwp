@@ -95,7 +95,7 @@ def card(action) -> dict:
     `metric_good` 이면 좋은 색 (비울 수 있는 양)."""
 
     title = action.account
-    metric, metric_tier, metric_good = "", None, False
+    metric, metric_tier, metric_good, metric_change = "", None, False, False
     if action.kind == priority.ACT_FULL:
         tier = tiers.classify(action.pct) if action.pct is not None else tiers.UNKNOWN
         chip = (tiers.label(tier), _TIER_CHIP.get(tier, "soft"))
@@ -120,7 +120,7 @@ def card(action) -> dict:
         metric_good = True
         detail = i18n.t("priority.detail.cleanup", count=action.count)
     elif action.kind == priority.ACT_BIG_FILE:
-        chip = (i18n.t("priority.chip.big_file"), "stale")
+        chip = (i18n.t("priority.chip.big_file"), "soft")
         metric = formatting.format_kb(action.size_kb)
         detail = i18n.t(
             "priority.detail.big_file", name=action.path.rsplit("/", 1)[-1],
@@ -132,13 +132,14 @@ def card(action) -> dict:
         detail = i18n.t("priority.detail.cold", name=action.path.rsplit("/", 1)[-1],
                         days=action.count)
     else:
-        chip = (i18n.t("priority.chip.surge"), "tier_warn")
+        chip = (i18n.t("priority.chip.surge"), "change_up")
         metric = formatting.format_kb_delta(action.delta_kb)
-        metric_tier = tiers.WARN
+        metric_change = True
         detail = i18n.t("priority.detail.surge", total=formatting.format_kb(action.size_kb))
     return {
         "chip": chip, "title": title, "metric": metric, "metric_tier": metric_tier,
-        "metric_good": metric_good, "detail": detail, "level": action.level,
+        "metric_good": metric_good, "metric_change": metric_change,
+        "detail": detail, "level": action.level,
     }
 
 

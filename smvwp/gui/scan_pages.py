@@ -190,7 +190,7 @@ def growth_change(row) -> Optional[int]:
 def growth_delta_item(row) -> QTableWidgetItem:
     """증감 칸 - 글자, 정렬 값, 막대 값, 색, 툴팁.
 
-    늘어난 것은 주의 색, 줄어든 것은 좋은 색 (정리한 곳이 보이게). 지난번에 못 잰
+    늘어난 것은 청록, 줄어든 것은 회청 (`theme.CHANGE_*` - 위험 색이 아니다). 지난번에 못 잰
     곳은 '지난번 못 잼' - 크기 전체를 증가로 치면 없던 급증이 생긴다. 지난번에
     나눠 잰 곳은 조각의 합과 견준 것이라 그렇다고 툴팁에 적는다."""
 
@@ -213,9 +213,9 @@ def growth_delta_item(row) -> QTableWidgetItem:
         if note == scan_store.PREVIOUS_PIECED:
             item.setToolTip(i18n.t("tree.note.previous_pieced"))
         if change > 0:
-            item.setForeground(QColor(theme.tier_text(tiers.WARN)))
+            item.setForeground(QColor(theme.CHANGE_UP))
         elif change < 0:
-            item.setForeground(QColor(theme.GOOD_TEXT))
+            item.setForeground(QColor(theme.CHANGE_DOWN))
         else:
             item.setForeground(QColor(theme.TEXT_MUTED))
     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -255,8 +255,8 @@ def growth_focus_item(row) -> QTableWidgetItem:
     # 새 폴더·없어짐·직접 있는 파일은 알약으로 세우고 칸의 글은 '어디 · 얼마' 만 둔다 -
     # 괄호 속 말로 두면 줄마다 읽어야 무슨 일인지 안다. 문장 전체는 툴팁에 있다.
     chip = {
-        scan_store.FOCUS_NEW: ("growth.chip.new", "done"),
-        scan_store.FOCUS_GONE: ("growth.chip.gone", "tier_normal"),
+        scan_store.FOCUS_NEW: ("growth.chip.new", "change_up"),
+        scan_store.FOCUS_GONE: ("growth.chip.gone", "change_down"),
         scan_store.FOCUS_FILES: ("growth.chip.files", "soft"),
     }.get(note)
     if chip is not None:
@@ -383,7 +383,7 @@ def scan_warning_chips(entry, account) -> list:
     chips = []
     if entry.partial_paths:
         chips.append((
-            i18n.t("scan.band.partial", count=len(entry.partial_paths)), "tier_warn",
+            i18n.t("scan.band.partial", count=len(entry.partial_paths)), "stale",
             i18n.t("scan.partial_warning", count=len(entry.partial_paths)) + "\n" + "\n".join(
                 formatting.relative_path(path, account.path) for path in entry.partial_paths[:10]
             ),
@@ -510,7 +510,7 @@ class SummaryPage(QWidget):
                 i18n.t("digest.delta_detail", count=digest.accounts_compared),
                 # 늘어난 것만 물들인다. 줄어든 것은 좋은 소식이라 경고가 아니다.
                 color=(
-                    theme.tier_text(tiers.WARN) if digest.total_delta_kb > 0 else None
+                    theme.CHANGE_UP if digest.total_delta_kb > 0 else None
                 ),
             )
 
@@ -948,8 +948,8 @@ class GrowthPage(QWidget):
         else:
             band.set_value(
                 formatting.format_kb_delta(change),
-                theme.tier_text(tiers.WARN) if change > 0
-                else theme.GOOD_TEXT if change < 0 else theme.TEXT_MUTED,
+                theme.CHANGE_UP if change > 0
+                else theme.CHANGE_DOWN if change < 0 else theme.TEXT_MUTED,
             )
             # 어느 두 스캔인지는 바로 밑 설명 줄에 있다 - 띠에는 두 합계만.
             band.sub.setText(i18n.t(
@@ -1106,7 +1106,7 @@ class LargeFilesPage(QWidget):
                 change_item = QTableWidgetItem(formatting.format_large_file_change(item))
                 if item.is_new_to_the_list:
                     change_item.setData(
-                        widgets.CellDelegate.CHIP_ROLE, (change_item.text(), "stale")
+                        widgets.CellDelegate.CHIP_ROLE, (change_item.text(), "change_up")
                     )
             else:
                 change_item = widgets.NumericItem(
@@ -1152,8 +1152,8 @@ class LargeFilesPage(QWidget):
         legend = large_files_legend()
         counts = (
             ("large.chip.dominant", "tier_alert", sum(1 for item in shown if item.dominates_account)),
-            ("large.chip.grew", "tier_warn", sum(1 for item in shown if item.grew_sharply)),
-            ("large.chip.new", "stale", sum(1 for item in shown if item.is_new_to_the_list)),
+            ("large.chip.grew", "change_up", sum(1 for item in shown if item.grew_sharply)),
+            ("large.chip.new", "change_up", sum(1 for item in shown if item.is_new_to_the_list)),
         )
         band.set_chips([
             (i18n.t(key, count=count), kind, legend) for key, kind, count in counts if count
