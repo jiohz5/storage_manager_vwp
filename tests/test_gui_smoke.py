@@ -2116,6 +2116,11 @@ class HomeOverviewTests(_GuiCase):
         with patch.object(theme, "save_mode") as saved:
             self.window.dark_action.trigger()
         _app().processEvents()
+        # 바꿔 낀 표 칸 위젯은 Qt 가 `deleteLater` 로 지운다 - 리눅스 오프스크린의
+        # `processEvents()` 는 그 지우기를 처리하지 않아 옛 알약이 남아 보였다 (CI).
+        from PyQt5.QtCore import QCoreApplication, QEvent
+
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         saved.assert_called_once_with(theme.DARK)
         self.assertTrue(theme.is_dark())
         self.assertTrue(self.window.dark_action.isChecked())

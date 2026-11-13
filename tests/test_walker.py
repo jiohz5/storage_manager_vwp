@@ -326,8 +326,11 @@ class HardlinkTests(unittest.TestCase):
         outcome = walker.walk_tree(str(self.root), max_depth=9)
         sizes = {p.replace("\\", "/"): kb for p, kb in outcome.entries}
         root = str(self.root).replace("\\", "/")
-        # 두 번 셌다면 루트 합계가 두 배 가까이 나온다.
-        self.assertLess(sizes[root], sizes[f"{root}/a"] * 2)
+        file_kb = walker.disk_blocks(os.stat(self.root / "a" / "original.bin")) * 512 // 1024
+        # 두 번 셌다면 루트 합계에 파일이 두 번 든다. 어느 폴더 몫이 되는지는 먼저 만난
+        # 쪽이다 (깊이 우선이라 `b` 일 수 있다 - `du` 도 먼저 만난 경로에 센다).
+        self.assertLess(sizes[root], 2 * file_kb)
+        self.assertGreaterEqual(max(sizes[f"{root}/a"], sizes[f"{root}/b"]), file_kb)
         self.assertEqual(outcome.file_count, 1)
 
 
