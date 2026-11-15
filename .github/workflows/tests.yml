@@ -13,6 +13,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
@@ -48,5 +51,7 @@ jobs:
       - name: Tests (forward)
         run: python -m pytest tests -q -p no:cacheprovider
 
+      # 정순이 실패해도 돈다 - 한 번의 실행으로 두 순서의 실패를 다 본다.
       - name: Tests (reverse)
+        if: ${{ !cancelled() }}
         run: python -m pytest $(ls tests/test_*.py | sort -r) -q -p no:cacheprovider

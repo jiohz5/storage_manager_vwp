@@ -82,6 +82,16 @@ class RoundTripTests(HomeViewCase):
         self.assertEqual([a.kind for a in loaded.plan.actions], [a.kind for a in direct.plan.actions])
         self.assertEqual(loaded.newest, direct.newest)
 
+    def test_nothing_is_lost_on_the_way(self):
+        """몇 칸만 견주면 새로 생긴 칸이 빠져도 모른다 - 통째로 견준다."""
+
+        direct = dashboard.read_dashboard(self.data_dir, self.config)
+        home_view.write(self.data_dir, self.config, data=direct)   # 추세 창은 '지금' 까지라 같은 것을 쓴다
+        loaded = home_view.read(self.data_dir, self.config)
+        for name in ("samples", "forecasts", "trends", "plan", "forecast_failed", "newest"):
+            self.assertEqual(home_view._encode(getattr(loaded, name)),
+                             home_view._encode(getattr(direct, name)), name)
+
     def test_the_window_does_not_open_the_db_when_the_file_is_good(self):
         self.write()
         with patch("smvwp.dashboard.read_dashboard", side_effect=AssertionError("DB 를 열었다")):
@@ -124,6 +134,23 @@ class FallbackTests(HomeViewCase):
         later = datetime.now(timezone.utc) + timedelta(hours=2)
         with patch("smvwp.home_view._now", return_value=later):
             self.assertIsNone(home_view.read(self.data_dir, self.config))
+
+    def test_a_file_older_than_what_the_window_already_knows(self):
+        """창이 방금 본 표본보다 파일이 옛것이면 DB 에서 읽는다.
+
+        수집은 표본을 DB 에 넣고 한참 뒤(알림·보고서·홈 계산)에야 파일을 쓴다. 그 사이에
+        창이 '남이 방금 수집했다' 를 보고 홈을 읽으면 지난번 파일을 집었고, 창과 cron 의
+        주기가 같아 그 창은 **계속 한 바퀴(15분) 늦은 홈**을 보였다. 창의 수집이 파일을
+        못 썼을 때(view 폴더 권한)도 방금 수집한 것 대신 남이 쓴 옛 파일을 보였다."""
+
+        self.write()
+        shown = home_view.read(self.data_dir, self.config).newest
+        newer = (datetime.fromisoformat(shown) + timedelta(minutes=15)).isoformat()
+        with patch("smvwp.dashboard.read_dashboard", wraps=dashboard.read_dashboard) as direct:
+            home_view.load(self.data_dir, self.config, at_least=newer)
+        direct.assert_called_once()
+        with patch("smvwp.dashboard.read_dashboard", side_effect=AssertionError("DB 를 열었다")):
+            home_view.load(self.data_dir, self.config, at_least=shown)
 
     def test_a_broken_file(self):
         home_view.view_path(self.data_dir).parent.mkdir(parents=True, exist_ok=True)

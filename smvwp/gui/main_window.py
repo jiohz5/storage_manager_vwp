@@ -1031,14 +1031,17 @@ class MainWindow(QMainWindow):
         dialog.status_message.connect(self.status_bar_label.setText)
         dialog.exec_()
 
-    def _refresh_table_from_store(self) -> None:
+    def _refresh_table_from_store(self, at_least: Optional[str] = None) -> None:
         """대시보드 데이터를 **요청만** 한다. 실제 읽기는 백그라운드에서 돈다.
 
         예전에는 여기서 DB를 열고 FULL 예측까지 계산했다. 15분마다 수집이
         끝날 때 불리므로, 데이터 디렉터리가 NFS 위면 사용자는 15분마다 한 번씩
-        멈추는 창을 보게 됐다. 결과는 `_on_dashboard_ready` 가 받는다."""
+        멈추는 창을 보게 됐다. 결과는 `_on_dashboard_ready` 가 받는다.
 
-        self._dashboard_worker.refresh_async()
+        `at_least` 는 창이 방금 본 가장 새 표본 시각 - 홈 결과 파일이 그보다 옛것이면
+        작업자가 DB 에서 읽는다 (`home_view.load`)."""
+
+        self._dashboard_worker.refresh_async(at_least)
         # 단계가 오기 전에는 '읽고 있다' 만 보여 준다 (막대가 흐른다).
         self.loading_bar.setRange(0, 0)
         self.loading_label.setText(i18n.t("dashboard.loading_start"))
@@ -1067,7 +1070,7 @@ class MainWindow(QMainWindow):
         self._dashboard_newest = getattr(data, "newest", None)
         wanted, self._newest_wanted = self._newest_wanted, None
         if wanted is not None and not dashboard.already_shows(self._dashboard_newest, wanted):
-            self._refresh_table_from_store()
+            self._refresh_table_from_store(wanted)
         if data.forecast_failed:
             # 예측 칸이 비는 이유가 "표본이 모자라서"인지 "계산이 터져서"인지
             # 화면만 봐서는 구분이 안 된다. 후자면 말해 준다.
@@ -1764,7 +1767,10 @@ class MainWindow(QMainWindow):
             self.status_bar_label.setText(i18n.t("dashboard.collected_elsewhere"))
             self._on_collected_elsewhere(self._scheduler.newest_elsewhere())
             return
-        self._refresh_table_from_store()
+        # 방금 수집한 것보다 옛 홈을 보이지 않게, 그 시각을 알려 준다.
+        self._refresh_table_from_store(
+            max((r.collected_at for r in records), key=dashboard._utc, default=None)
+        )
         failed = sum(1 for r in records if not r.ok)
         if failed:
             self.status_bar_label.setText(
@@ -1784,7 +1790,7 @@ class MainWindow(QMainWindow):
             self._newest_wanted = newest
             return
         if not dashboard.already_shows(self._dashboard_newest, newest):
-            self._refresh_table_from_store()
+            self._refresh_table_from_store(newest)
 
     def _on_collection_failed(self, message: str) -> None:
         self.status_bar_label.setText(i18n.t("dashboard.collect_error", message=message))

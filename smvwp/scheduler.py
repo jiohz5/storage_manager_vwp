@@ -308,10 +308,15 @@ class DashboardWorker(ThreadWorker):
         # 세대가 바뀌어야 달라지는 것 (`dashboard.read_dashboard` 의 cache).
         # 이 작업자만 쓴다 - 한 번에 하나만 돈다.
         self._settled: dict = {}
+        # 창이 이미 아는 가장 새 표본 시각 - 결과 파일이 그보다 옛것이면 DB 에서 읽는다
+        # (`home_view.load` 의 at_least). 읽을 때마다 창이 알려 준다.
+        self.at_least: Optional[str] = None
 
-    def refresh_async(self) -> bool:
+    def refresh_async(self, at_least: Optional[str] = None) -> bool:
         """읽기를 시작한다. 이미 돌고 있으면 끝난 뒤 한 번 더 읽는다."""
 
+        if at_least is not None:
+            self.at_least = at_least
         return self.start()
 
     def _work(self):
@@ -323,6 +328,7 @@ class DashboardWorker(ThreadWorker):
             self._data_dir, self._get_config(),
             on_step=lambda index, total, key: emit_safely(self, "progress", index, total, key),
             cache=self._settled,
+            at_least=self.at_least,
         )
 
 

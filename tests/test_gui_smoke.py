@@ -2671,6 +2671,8 @@ class CollectedElsewhereTests(_GuiCase):
         self.reads.reset_mock()
         self.skipped("2026-10-16T03:15:00+00:00")
         self.reads.assert_called_once()
+        # 그 시각을 알려 준다 - 홈 결과 파일이 그보다 옛것이면 DB 에서 읽게 (`home_view`).
+        self.assertEqual(self.reads.call_args[0], ("2026-10-16T03:15:00+00:00",))
 
     def test_while_the_home_is_still_reading_it_decides_afterwards(self):
         """창을 열 때는 대개 홈 읽기가 아직 돌고 있다. 그 읽기가 남의 표본을 담았으면

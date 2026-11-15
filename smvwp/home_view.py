@@ -173,10 +173,24 @@ def read(data_dir: Path, config) -> Optional["dashboard.DashboardData"]:
         return None
 
 
-def load(data_dir: Path, config, on_step=None, cache=None) -> "dashboard.DashboardData":
-    """창이 홈을 읽는 길 - 결과 파일이 믿을 만하면 그것, 아니면 DB."""
+def load(data_dir: Path, config, on_step=None, cache=None,
+         at_least: Optional[str] = None) -> "dashboard.DashboardData":
+    """창이 홈을 읽는 길 - 결과 파일이 믿을 만하면 그것, 아니면 DB.
+
+    `at_least` 는 창이 이미 아는 가장 새 표본 시각이다 (방금 수집했거나, 남이 수집한 것을
+    봤다). 파일이 그보다 옛것이면 DB 에서 읽는다 - 수집은 표본을 DB 에 넣고 한참 뒤에야
+    파일을 쓰므로, 그 사이에 읽으면 지난번 파일을 집는다. 창과 cron 의 주기가 같아 한 번
+    그 틈에 걸린 창은 계속 한 바퀴 늦은 홈을 보였을 것이다.
+
+    어느 길로 읽었는지 기록에 남긴다 - 실기에서 파일이 실제로 쓰이는지 알 수 있어야 한다."""
 
     data = read(data_dir, config)
+    if data is not None and at_least and not dashboard.already_shows(data.newest, at_least):
+        logger.info("홈 결과 파일이 방금 본 표본(%s)보다 옛것(%s)이라 DB 에서 읽습니다",
+                    at_least, data.newest)
+        data = None
     if data is not None:
+        logger.info("홈을 결과 파일에서 읽었습니다 (표본 %s)", data.newest)
         return data
+    logger.info("홈을 DB 에서 읽습니다 (결과 파일이 없거나 믿을 수 없음: %s)", view_path(data_dir))
     return dashboard.read_dashboard(data_dir, config, on_step=on_step, cache=cache)
