@@ -57,6 +57,9 @@ class EvidenceRow:
     path: str = ""
     # 눈에 띄게 칠할지 (위험한 줄만).
     warn: bool = False
+    # 크기 칸의 숫자 `(칸 번호, KB)` - 창이 그 칸에 가는 막대를 그린다 (표에서 가장 큰
+    # 줄이 가득). `cells` 는 글이라 "260.0 GB" 와 "22.0 GB" 가 한 글자 차이로 보였다.
+    size: Optional[tuple] = None
 
 
 @dataclass
@@ -367,6 +370,7 @@ def _cleanup_rows(guide: Guide, detail) -> None:
                 item.mirror_path or "-",
             ],
             path=item.run_path,
+            size=(1, item.reclaimable_kb),
         ))
     for item in items[:COMMANDS_SHOWN]:
         if item.mirror_path:
@@ -405,6 +409,7 @@ def _growth_rows(guide: Guide, detail, title_key: str) -> None:
                 else i18n.t("common.none"),
             ],
             path=row["path"],
+            size=(1, size),
         ))
     for row in rows[:COMMANDS_SHOWN]:
         guide.commands.append(f"du -sh {_q(row['path'])}")
@@ -426,7 +431,7 @@ def _shared_rows(guide: Guide, action) -> None:
             name,
             formatting.format_kb(freeable) if freeable else dash,
             f"{count:,}" if count else dash,
-        ]))
+        ], size=(1, freeable) if freeable else None))
 
 
 def _full(guide: Guide, action, detail) -> None:
@@ -508,6 +513,7 @@ def _no_backup(guide: Guide, action, detail) -> None:
                 missing or i18n.t("common.none"),
             ],
             path=item.run_path,
+            size=(2, item.backup_size_kb or item.run_size_kb),
             warn=item.status == health.MISSING,
         ))
     for item in items[:COMMANDS_SHOWN]:
@@ -562,6 +568,7 @@ def _big_file(guide: Guide, action, detail) -> None:
                 formatting.format_large_file_change(item),
             ],
             path=item.path,
+            size=(1, item.size_kb),
             # 이 줄이 가리키는 그 파일.
             warn=item.path == action.path,
         ))

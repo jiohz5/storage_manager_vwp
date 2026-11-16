@@ -321,6 +321,8 @@ class ActionDialog(QDialog):
         self.evidence = widgets.read_only_table(0, stretch_column=None)
         self.evidence.setSelectionMode(QTableWidget.SingleSelection)
         self.evidence.itemSelectionChanged.connect(self._sync_copy_button)
+        # 크기 칸의 막대 (`EvidenceRow.size`) - 다른 용량 표와 같은 그림.
+        self.evidence.setItemDelegate(widgets.CellDelegate(self.evidence))
         right.addWidget(self.evidence, 1)
 
         commands_head = QHBoxLayout()
@@ -468,9 +470,15 @@ class ActionDialog(QDialog):
         header.setSectionResizeMode(last if wide_last else 0, QHeaderView.Stretch)
         table.setRowCount(len(guide.evidence_rows))
         warn = QColor(theme.tier_text(tiers.WARN))
+        biggest = max((evidence.size[1] or 0 for evidence in guide.evidence_rows
+                       if evidence.size), default=0)
         for row, evidence in enumerate(guide.evidence_rows):
             for column, text in enumerate(evidence.cells):
                 item = QTableWidgetItem(text)
+                if biggest > 0 and evidence.size and evidence.size[0] == column \
+                        and evidence.size[1]:
+                    item.setData(widgets.CellDelegate.BAR_ROLE,
+                                 (max(0.0, evidence.size[1] / biggest), "accent"))
                 if column == 0:
                     item.setData(Qt.UserRole, evidence.path)
                     if evidence.path:

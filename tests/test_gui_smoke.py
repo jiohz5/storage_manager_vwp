@@ -1542,6 +1542,35 @@ class ActionDialogTests(_GuiCase):
         dialog = self.dialog(guide=action_guide.for_unscanned(["a", "b"]))
         self.assertTrue(dialog.usage_bar.isHidden())
 
+    def test_the_size_column_carries_a_bar(self):
+        """근거 표가 글자뿐이라 "260.0 GB" 와 "22.0 GB" 가 한 글자 차이로 보였다.
+        가장 큰 줄이 가득 차는 막대를 크기 칸에 그린다."""
+
+        from smvwp import health
+        from smvwp.gui import widgets
+
+        detail = self.sampled()
+        detail.health.append(health.RunHealth(
+            self.account.account_id, self.account.name,
+            self.account.path + "/task/02_run", "task / 02_run",
+            run_size_kb=30 * self.GB, backup_size_kb=30 * self.GB,
+            mirror_path="/backup/task/02_run", mirror_size_kb=30 * self.GB,
+            status=health.BACKED_UP, match_by=health.MATCH_ITEMS,
+        ))
+        dialog = self.dialog(action=self.full())
+        dialog._on_detail(detail)
+        table = dialog.evidence
+        self.assertIsInstance(table.itemDelegate(), widgets.CellDelegate)
+        bars = [table.item(row, 1).data(widgets.CellDelegate.BAR_ROLE)
+                for row in range(table.rowCount())]
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[0], (1.0, "accent"))
+        self.assertAlmostEqual(bars[1][0], 0.1)
+        # 다른 칸에는 없다.
+        self.assertIsNone(table.item(0, 0).data(widgets.CellDelegate.BAR_ROLE))
+        self.assertIsNone(table.item(0, 2).data(widgets.CellDelegate.BAR_ROLE))
+        self.assertFalse(table.grab().isNull())
+
     def test_steps_are_separate_numbered_rows(self):
         dialog = self.dialog(action=self.full())
         self.assertEqual(dialog.steps.count(), len(dialog.guide.steps))
