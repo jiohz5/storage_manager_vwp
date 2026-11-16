@@ -124,7 +124,28 @@ def predict(
 ) -> Prediction:
     """창 안의 표본으로 FULL 도달까지 남은 시간을 추정한다."""
 
-    usable = _usable_samples(samples, now, window_hours)
+    return _predict(_usable_samples(samples, now, window_hours), min_samples, max_years)
+
+
+def _within(usable: List, now: datetime, window_hours: float) -> List:
+    """이미 추린 `(시각, 표본)` 줄(오래된 것부터)에서 더 짧은 창의 것만.
+
+    `_usable_samples` 를 창마다 부르면 표본의 시각 문자열을 창 수만큼 다시 푼다 -
+    홈 한 번에 계정 100개 x 30일이면 115만 번이었고, 예측 시간의 대부분이었다.
+    가장 긴 창으로 한 번 추린 뒤 여기서 잘라 쓴다 (같은 답: `collected >= cutoff`)."""
+
+    cutoff = now - timedelta(hours=window_hours)
+    low, high = 0, len(usable)
+    while low < high:
+        middle = (low + high) // 2
+        if usable[middle][0] < cutoff:
+            low = middle + 1
+        else:
+            high = middle
+    return usable[low:]
+
+
+def _predict(usable: List, min_samples: int, max_years: int = 10) -> Prediction:
     if len(usable) < min_samples:
         return Prediction(ok=False, sample_count=len(usable), reason=REASON_INSUFFICIENT)
 
@@ -171,7 +192,10 @@ def measure_surge(samples: Sequence, now: datetime, window_hours: float) -> Opti
     회귀가 아니라 실제 관측값의 차이를 쓴다 - "얼마나 늘었나"는 추정이 아니라
     사실이어야 하기 때문."""
 
-    usable = _usable_samples(samples, now, window_hours)
+    return _surge(_usable_samples(samples, now, window_hours))
+
+
+def _surge(usable: List) -> Optional[int]:
     if len(usable) < 2:
         return None
     return int(usable[-1][1].used_kb - usable[0][1].used_kb)
@@ -190,29 +214,21 @@ def build_forecast(
             filesystem = sample.filesystem
             break
 
-    imminent = predict(
-        samples,
-        now,
-        window_hours=settings.full_prediction_window_hours,
-        min_samples=settings.full_prediction_min_samples,
-        max_years=settings.full_prediction_max_years,
-    )
-    short_trend = predict(
-        samples,
-        now,
-        window_hours=settings.trend_short_days * 24,
-        min_samples=settings.trend_short_min_samples,
-        max_years=settings.full_prediction_max_years,
-    )
-    long_trend = predict(
-        samples,
-        now,
-        window_hours=settings.trend_long_days * 24,
-        min_samples=settings.trend_long_min_samples,
-        max_years=settings.full_prediction_max_years,
-    )
+    # 시각 문자열은 **한 번만** 푼다 - 가장 긴 창으로 추리고 나머지는 잘라 쓴다 (`_within`).
+    urgent_hours = settings.full_prediction_window_hours
+    short_hours = settings.trend_short_days * 24
+    long_hours = settings.trend_long_days * 24
+    usable = _usable_samples(samples, now, max(urgent_hours, short_hours, long_hours))
+    urgent = _within(usable, now, urgent_hours)
+    max_years = settings.full_prediction_max_years
 
-    surge_kb = measure_surge(samples, now, settings.full_prediction_window_hours)
+    imminent = _predict(urgent, settings.full_prediction_min_samples, max_years)
+    short_trend = _predict(_within(usable, now, short_hours),
+                           settings.trend_short_min_samples, max_years)
+    long_trend = _predict(_within(usable, now, long_hours),
+                          settings.trend_long_min_samples, max_years)
+
+    surge_kb = _surge(urgent)
     is_surge = surge_kb is not None and surge_kb >= settings.capacity_surge_min_kb
 
     return CapacityForecast(

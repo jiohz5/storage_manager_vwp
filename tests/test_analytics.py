@@ -147,6 +147,58 @@ class SurgeTests(unittest.TestCase):
         self.assertLess(analytics.measure_surge(samples, NOW, window_hours=3), 0)
 
 
+class ForecastParsesOnceTests(unittest.TestCase):
+    """계정 하나의 예측은 표본의 시각을 **한 번만** 푼다.
+
+    예전에는 급한 예측·단기·장기·급증이 저마다 모든 표본의 시각 문자열을 풀었다 -
+    홈 한 번에 계정 100개 x 30일이면 115만 번, 예측 시간의 대부분이었다. 가장 긴
+    창으로 한 번 추리고 나머지는 잘라 쓴다. 답은 따로 낸 것과 같아야 한다."""
+
+    def samples(self):
+        import random
+
+        rng = random.Random(7)
+        settings = config_module.Settings()
+        made = []
+        used = 400 * GB_KB
+        for minutes in range(40 * 24 * 60, 0, -45):     # 장기 창(30일)보다 오래된 것까지
+            used += rng.randint(-2, 9) * 1024
+            made.append(_sample(minutes, used, ok=rng.random() > 0.03))
+        # 창의 끝에 정확히 걸린 표본들 (경계는 '이상' 이다).
+        for hours in (settings.full_prediction_window_hours, settings.trend_short_days * 24,
+                      settings.trend_long_days * 24):
+            made.append(_sample(hours * 60, used))
+        made.append(SampleRecord(account_id="acct", collected_at="깨진 시각", ok=True,
+                                 used_kb=used, avail_kb=1, total_kb=2))
+        made.append(_sample(-30, used))                  # 미래의 표본은 버린다
+        rng.shuffle(made)                                # 순서는 상관없어야 한다
+        return settings, made
+
+    def test_same_answer_as_asking_each_window_separately(self):
+        settings, samples = self.samples()
+        forecast = analytics.build_forecast("acct", samples, settings, NOW)
+        years = settings.full_prediction_max_years
+        self.assertEqual(forecast.imminent, analytics.predict(
+            samples, NOW, settings.full_prediction_window_hours,
+            settings.full_prediction_min_samples, years))
+        self.assertEqual(forecast.short_trend, analytics.predict(
+            samples, NOW, settings.trend_short_days * 24, settings.trend_short_min_samples, years))
+        self.assertEqual(forecast.long_trend, analytics.predict(
+            samples, NOW, settings.trend_long_days * 24, settings.trend_long_min_samples, years))
+        self.assertEqual(forecast.surge_kb, analytics.measure_surge(
+            samples, NOW, settings.full_prediction_window_hours))
+        self.assertTrue(forecast.long_trend.sample_count > forecast.short_trend.sample_count
+                        > forecast.imminent.sample_count > 0)
+
+    def test_each_time_is_parsed_once(self):
+        from unittest.mock import patch
+
+        settings, samples = self.samples()
+        with patch("smvwp.analytics._parse_time", wraps=analytics._parse_time) as parse:
+            analytics.build_forecast("acct", samples, settings, NOW)
+        self.assertLessEqual(parse.call_count, len(samples))
+
+
 class ForecastGroupingTests(unittest.TestCase):
     def test_same_filesystem_is_grouped(self):
         a = analytics.CapacityForecast(account_id="a", filesystem="/dev/sda1")
