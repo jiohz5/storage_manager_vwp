@@ -428,7 +428,7 @@ smvwp_cli.py load --days 30 --by mem
 나올 뿐이라 어떤 작업인지 알아보려면 필요하지만, 그 명령줄에는 다른 사용자의
 작업 내용(프로젝트 이름, 파일 경로 등)이 그대로 들어갑니다.
 
-남길지는 운영하는 쪽이 정할 일이라 스위치를 뒀습니다. 끄면 프로세스 이름과
+남길지는 운영하는 쪽이 정할 일이라 스위치(`record_process_cmdline`)를 뒀습니다. 끄면 프로세스 이름과
 사용자만 남습니다.
 
 ```
@@ -494,6 +494,7 @@ smvwp_cli.py scan --stop
 
 | 증상 | 볼 곳 |
 |---|---|
+| 무엇이 이상한지부터 모름 | `smvwp_cli.py status` - 수집·홈 결과 파일·야간 스캔·요약을 한 번에, 할 일까지 |
 | 아무것도 안 쌓임 | GUI 상세 스캔 탭의 **cron 표시 줄** |
 | 밤 스캔만 안 돎 | 같은 줄 (야간 항목이 빠졌는지) |
 | 진행이 더딤 | `smvwp_cli.py scan --status` |
@@ -518,6 +519,40 @@ df -P /계정경로1 /계정경로2 /계정경로3 | awk 'NR>1{print $1}' | sort
 ```
 
 그 수만큼 계정관리 설정의 `야간 동시 스캔` 을 올리면 그만큼 밤이 짧아진다.
+
+---
+
+## 화면에 없는 설정 - `config.json` 의 `settings`
+
+대부분은 기본값 그대로 두면 된다. 바꾸려면 `<데이터 폴더>/config.json` 의 `settings`
+에 이름과 값을 넣는다 (모르는 이름은 무시되고, 범위를 벗어난 값은 읽을 때 멈춘다).
+화면(설정 창)에서 바꿀 수 있는 것은 여기 적지 않았다. `tests/test_settings_documented.py`
+가 설정이 생길 때 여기나 화면에 자리가 있는지 지킨다.
+
+| 설정 | 기본 | 뜻 |
+|---|---|---|
+| `notification_min_tier` | `warn` | 이 등급 이상이 될 때만 알린다 |
+| `notification_timeout_seconds` | 10 | 알림 명령 하나를 기다리는 초 |
+| `df_timeout_seconds` | 10 | 계정 하나의 `df` 를 기다리는 초 - 넘으면 그 계정은 '응답 없음' |
+| `detail_task_timeout_seconds` | 900 | 야간 스캔에서 폴더 하나를 재는 예산 - 넘으면 아래 폴더로 쪼갠다 |
+| `detail_scan_keep_generations` | 2 | 계정마다 남기는 스캔 세대 수 (비교에 둘이 필요하다) |
+| `detail_scan_top_n` | 15 | 스캔 탭 '많이 변한 곳' 에 싣는 줄 수 |
+| `growth_list_max_depth` | 0 | '많이 변한 곳' 을 몇 단계 아래까지 - 1 이상이면 부모와 자식이 겹쳐 합이 부풀 수 있다 |
+| `growth_alert_enabled` | true | 야간 스캔 뒤 '많이 늘었다' 알림을 보낼지 |
+| `capacity_surge_min_kb` | 100GB | 최근 3시간 `df` 로 본 급증 문턱 (스캔 두 번 사이의 '많이 늘었다' 와는 다른 물음) |
+| `load_sample_interval_seconds` | 30 | 야간 스캔 중 서버 부하를 재는 간격 |
+| `server_sample_retention_days` | 90 | 15분마다의 서버 부하 표본을 남기는 날 |
+| `weekly_report_weekday` | 4 | 주간 보고서를 만드는 요일 (0=월 … 6=일) |
+| `report_retention_days` | 365 | 보고서 파일을 남기는 날 |
+| `full_prediction_enabled` | true | FULL 예측(언제 가득 차나)을 낼지 |
+| `full_prediction_min_samples` | 4 | 급한 예측에 필요한 최소 표본 수 |
+| `full_warn_hours` / `full_critical_hours` | 6 / 2 | 이 시간 안에 가득 찰 것으로 보이면 경고 / 위험 |
+| `trend_short_days` / `trend_short_min_samples` | 7 / 24 | 단기 추세의 창과 최소 표본 (6시간치) |
+| `trend_long_days` / `trend_long_min_samples` | 30 / 96 | 장기 추세의 창과 최소 표본 (하루치) |
+| `full_prediction_max_years` | 10 | 이보다 먼 예측은 '예측 불가' 로 |
+| `freshness_stale_multiplier` | 4 | 마지막 표본이 수집 간격의 N 배보다 낡으면 '오래됨' |
+| `freshness_min_coverage_pct` | 50 | 창 안에 와야 할 표본의 이 % 도 안 왔으면 수집기가 빠진 것으로 본다 |
+| `freshness_min_expected_samples` | 8 | 와야 할 표본이 이보다 적으면 위 판정을 하지 않는다 |
 
 ---
 

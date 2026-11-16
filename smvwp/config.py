@@ -270,8 +270,6 @@ class Settings:
     # 보고서 / 정리 후보 기준
     weekly_report_weekday: int = 4  # 월=0 ... 금=4 (Python weekday 기준)
     cleanup_min_size_kb: int = 100 * 1024 * 1024  # 100GB
-    cleanup_min_age_days: int = 30
-    cleanup_idle_days: int = 30
     report_retention_days: int = 365
     # 검색 인덱스 (계정별 opt-in, 기본 꺼짐)
     search_result_limit: int = 500
@@ -401,8 +399,6 @@ _NUMBER_RANGES = (
     ("immediate_notify_pct", 0, 100, "0이면 끔"),
     ("weekly_report_weekday", 0, 6, "0=월 ~ 6=일"),
     ("cleanup_min_size_kb", 0, None, ""),
-    ("cleanup_min_age_days", 0, None, ""),
-    ("cleanup_idle_days", 0, None, ""),
     ("report_retention_days", 1, None, ""),
     ("search_result_limit", 1, 10000, ""),
     ("growth_alert_min_kb", 0, None, ""),
