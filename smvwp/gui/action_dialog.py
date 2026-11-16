@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QPainter
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -57,6 +57,164 @@ LEVEL_TIERS = {
 
 # 왼쪽 글 칸의 폭. 한 줄이 이보다 길면 읽는 눈이 줄 끝에서 길을 잃는다.
 TEXT_COLUMN_WIDTH = 400
+
+
+class BeforeAfterBar(QWidget):
+    """지금 사용률과 '정리하면 여기까지' 를 굵은 막대 하나로.
+
+    안내 창 왼쪽은 글 세 덩어리였다. 가장 먼저 알고 싶은 "얼마나 찼고, 하라는 대로
+    하면 얼마나 내려가나" 가 문장 속 숫자 둘이라 찾아 읽어야 했다. 찬 만큼을 등급
+    색으로, 정리하면 비는 몫을 그 끝에 옅은 빗금으로 그린다."""
+
+    BAR_HEIGHT = 14
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pct = None
+        self.after_pct = None
+        self.setStyleSheet("background: transparent;")
+
+    def set_values(self, pct, after_pct=None) -> None:
+        self.pct = pct
+        # 0.1%p 도 안 내려가는 정리는 막대에서 보이지 않는다 - 숫자도 붙이지 않는다.
+        self.after_pct = after_pct if (
+            pct is not None and after_pct is not None and pct - after_pct >= 0.1) else None
+        self.setVisible(pct is not None)
+        self.setToolTip(self.caption())
+        self.update()
+
+    def caption(self) -> str:
+        if self.pct is None:
+            return ""
+        if self.after_pct is None:
+            return i18n.t("guide.bar.now", pct=f"{self.pct:.1f}")
+        return i18n.t("guide.bar.now_after", pct=f"{self.pct:.1f}",
+                      after=f"{self.after_pct:.1f}")
+
+    def sizeHint(self) -> QSize:
+        return QSize(TEXT_COLUMN_WIDTH - 12, 44)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(160, 44)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 규약
+        if self.pct is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        width = self.width() - 2
+        top = 2
+        radius = self.BAR_HEIGHT / 2
+        tier = tiers.classify(self.pct)
+        fill = QColor(theme.tier_color(tier))
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(theme.BORDER))
+        track = QRectF(1, top, width, self.BAR_HEIGHT)
+        painter.drawRoundedRect(track, radius, radius)
+
+        now_x = width * max(0.0, min(1.0, self.pct / 100.0))
+        painter.setClipRect(QRectF(1, top, max(now_x, self.BAR_HEIGHT), self.BAR_HEIGHT))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(track, radius, radius)
+        painter.setClipping(False)
+
+        after_x = None
+        if self.after_pct is not None:
+            after_x = width * max(0.0, min(1.0, self.after_pct / 100.0))
+            # 비는 몫 - 바탕색을 반쯤 덮어 옅게 하고 빗금을 긋는다 (색만으로 가르지 않는다).
+            freed = QRectF(1 + after_x, top, now_x - after_x, self.BAR_HEIGHT)
+            painter.setClipRect(freed)
+            veil = QColor(theme.SURFACE)
+            veil.setAlphaF(0.62)
+            painter.setBrush(veil)
+            painter.drawRect(freed)
+            painter.setBrush(Qt.NoBrush)
+            pen = painter.pen()
+            painter.setPen(QColor(fill.red(), fill.green(), fill.blue(), 170))
+            step = 6
+            x = freed.left() - self.BAR_HEIGHT
+            while x < freed.right():
+                painter.drawLine(int(x), int(top + self.BAR_HEIGHT), int(x + self.BAR_HEIGHT), int(top))
+                x += step
+            painter.setPen(pen)
+            painter.setClipping(False)
+            # 정리 뒤의 자리 - 가는 세로 금.
+            painter.setPen(QColor(theme.TEXT))
+            painter.drawLine(int(1 + after_x), top - 1, int(1 + after_x), top + self.BAR_HEIGHT + 1)
+
+        # 숫자 - 지금은 굵게, 정리 뒤는 그 자리 아래에.
+        font = painter.font()
+        font.setPixelSize(theme.FONT_CAPTION)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        base = top + self.BAR_HEIGHT + 4
+        height = metrics.height()
+        now_text = i18n.t("guide.bar.now", pct=f"{self.pct:.1f}")
+        now_width = metrics.horizontalAdvance(now_text)
+        now_left = min(max(1.0, 1 + now_x - now_width), width - now_width)
+        painter.setPen(QColor(theme.tier_text(tier)))
+        painter.drawText(QRectF(now_left, base, now_width + 2, height),
+                         Qt.AlignLeft | Qt.AlignVCenter, now_text)
+        if after_x is not None:
+            font.setBold(False)
+            painter.setFont(font)
+            metrics = painter.fontMetrics()
+            after_text = i18n.t("guide.bar.after", after=f"{self.after_pct:.1f}")
+            after_width = metrics.horizontalAdvance(after_text)
+            after_left = max(1.0, 1 + after_x - after_width / 2)
+            # 두 글이 겹치면 '정리 뒤' 를 왼쪽으로 민다. 그래도 자리가 없으면 툴팁에만.
+            if after_left + after_width + 8 > now_left:
+                after_left = now_left - after_width - 8
+            if after_left >= 0:
+                painter.setPen(QColor(theme.TEXT_MUTED))
+                painter.drawText(QRectF(after_left, base, after_width + 2, height),
+                                 Qt.AlignLeft | Qt.AlignVCenter, after_text)
+        painter.end()
+
+
+class StepList(QWidget):
+    """할 일을 번호 동그라미와 함께 한 줄씩 - `1. … 2. …` 한 덩어리 글 대신."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._steps = []
+        self._box = QVBoxLayout(self)
+        self._box.setContentsMargins(0, 2, 0, 0)
+        self._box.setSpacing(7)
+
+    def set_steps(self, steps) -> None:
+        self._steps = list(steps)
+        widgets.clear_layout(self._box)
+        for index, step in enumerate(self._steps, 1):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            number = QLabel(str(index))
+            number.setFixedSize(22, 22)
+            number.setAlignment(Qt.AlignCenter)
+            number.setStyleSheet(
+                f"background: {theme.ACCENT_SOFT}; color: {theme.ACCENT}; border-radius: 11px;"
+                f" font-weight: bold; font-size: {theme.FONT_CAPTION}px;"
+            )
+            row.addWidget(number, 0, Qt.AlignTop)
+            body = QLabel(step)
+            body.setWordWrap(True)
+            body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            row.addWidget(body, 1)
+            holder = QWidget()
+            holder.setObjectName("subPage")
+            holder.setLayout(row)
+            row.setContentsMargins(0, 0, 0, 0)
+            self._box.addWidget(holder)
+
+    def count(self) -> int:
+        return len(self._steps)
+
+    def text(self) -> str:
+        """복사·시험용 - 번호를 붙인 한 덩어리."""
+
+        return "\n".join(f"{index}. {step}" for index, step in enumerate(self._steps, 1))
 
 
 class ActionDialog(QDialog):
@@ -114,9 +272,16 @@ class ActionDialog(QDialog):
         text_box = QVBoxLayout(text)
         text_box.setContentsMargins(0, 0, 6, 0)
         text_box.setSpacing(6)
+        self.usage_bar = BeforeAfterBar()
+        text_box.addWidget(self.usage_bar)
         self.situation = self._section(text_box, "guide.section.situation")
         self.why = self._section(text_box, "guide.section.why")
-        self.steps = self._section(text_box, "guide.section.steps")
+        steps_title = QLabel(i18n.t("guide.section.steps"))
+        steps_title.setObjectName("sectionTitle")
+        text_box.addSpacing(4)
+        text_box.addWidget(steps_title)
+        self.steps = StepList()
+        text_box.addWidget(self.steps)
         self.warnings = QLabel()
         self.warnings.setObjectName("captionWarn")
         self.warnings.setWordWrap(True)
@@ -177,6 +342,11 @@ class ActionDialog(QDialog):
         self.commands.setFont(mono)
         self.commands.setFixedHeight(112)
         right.addWidget(self.commands)
+        # 근거 표가 없는 안내는 명령 칸이 위로 붙는다 - 표가 빠진 자리가 비어 명령이
+        # 창 가운데에 떠 있었다.
+        self.right_filler = QWidget()
+        self.right_filler.setObjectName("subPage")
+        right.addWidget(self.right_filler, 1)
         body.addWidget(self.right_panel, 1)
 
         # -- 동작 ----------------------------------------------------------
@@ -230,9 +400,8 @@ class ActionDialog(QDialog):
 
         self.situation.setText("\n".join(guide.situation))
         self.why.setText(guide.why)
-        self.steps.setText(
-            "\n".join(f"{index}. {step}" for index, step in enumerate(guide.steps, 1))
-        )
+        self.steps.set_steps(guide.steps)
+        self.usage_bar.set_values(guide.pct, guide.after_pct)
         self.warnings.setText("\n".join(guide.warnings))
         self.warnings.setVisible(bool(guide.warnings))
 
@@ -273,6 +442,7 @@ class ActionDialog(QDialog):
         self.evidence_title.setText(guide.evidence_title)
         for widget in (self.evidence_title, table):
             widget.setVisible(visible)
+        self.right_filler.setVisible(not visible)
 
         if guide.loading:
             self.evidence_note.setText(i18n.t("guide.loading"))

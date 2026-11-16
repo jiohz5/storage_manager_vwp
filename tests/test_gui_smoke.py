@@ -1490,6 +1490,78 @@ class ActionDialogTests(_GuiCase):
         )]
         return made
 
+    def sampled(self, pct=96.0, total_gb=1200):
+        from smvwp import store, tiers
+
+        made = self.detail()
+        total = total_gb * self.GB
+        used = int(total * pct / 100)
+        made.sample = store.SampleRecord(
+            account_id=self.account.account_id, collected_at="2026-11-17T00:00:00+00:00",
+            ok=True, total_kb=total, used_kb=used, avail_kb=total - used, byte_pct=pct,
+            byte_tier=tiers.classify(pct), overall_tier=tiers.classify(pct),
+        )
+        return made
+
+    def test_the_bar_shows_now_and_where_the_cleanup_would_take_it(self):
+        """왼쪽이 글 세 덩어리였다 - "얼마나 찼고 정리하면 얼마나 내려가나" 를 문장에서
+        찾아 읽어야 했다. 막대 하나로 먼저 보인다."""
+
+        from smvwp import action_guide
+
+        action = self.full()
+        before = action_guide.build(action)
+        self.assertEqual(before.pct, 96.0)
+        self.assertIsNone(before.after_pct)          # 스토리지 크기를 아직 모른다
+
+        guide = action_guide.build(action, self.sampled())
+        self.assertAlmostEqual(guide.after_pct, 71.0, places=1)   # 1200GB 에서 300GB 비움
+
+        dialog = self.dialog(action=action)
+        self.assertFalse(dialog.usage_bar.isHidden())
+        self.assertNotIn("71.0", dialog.usage_bar.caption())
+        dialog._on_detail(self.sampled())
+        self.assertIn("96.0", dialog.usage_bar.caption())
+        self.assertIn("71.0", dialog.usage_bar.caption())
+        self.assertFalse(dialog.usage_bar.grab().isNull())
+
+    def test_the_bar_never_promises_more_than_there_is(self):
+        from smvwp import action_guide
+
+        action = self.full()
+        action.reclaimable_kb = 5000 * self.GB        # 스토리지보다 큰 정리 가능량
+        self.assertEqual(action_guide.build(action, self.sampled()).after_pct, 0.0)
+        action.reclaimable_kb = 0
+        self.assertIsNone(action_guide.build(action, self.sampled()).after_pct)
+        action.reclaimable_kb = None
+        self.assertIsNone(action_guide.build(action, self.sampled()).after_pct)
+
+    def test_a_guide_without_a_percentage_has_no_bar(self):
+        from smvwp import action_guide
+
+        dialog = self.dialog(guide=action_guide.for_unscanned(["a", "b"]))
+        self.assertTrue(dialog.usage_bar.isHidden())
+
+    def test_steps_are_separate_numbered_rows(self):
+        dialog = self.dialog(action=self.full())
+        self.assertEqual(dialog.steps.count(), len(dialog.guide.steps))
+        self.assertGreaterEqual(dialog.steps.count(), 2)
+        dialog._on_detail(self.sampled())             # 다시 그려도 줄이 겹쳐 쌓이지 않는다
+        _app().processEvents()
+        self.assertEqual(dialog.steps.layout().count(), len(dialog.guide.steps))
+
+    def test_commands_sit_at_the_top_when_there_is_no_table(self):
+        """근거 표가 없는 안내는 표가 빠진 자리가 비어 명령 칸이 창 가운데에 떠 있었다."""
+
+        from smvwp import action_guide
+
+        guide = action_guide.Guide(kind="x", level=2, headline="h", commands=["ls -la /a"])
+        dialog = self.dialog(guide=guide)
+        self.assertFalse(dialog.right_panel.isHidden())
+        self.assertTrue(dialog.evidence.isHidden())
+        self.assertFalse(dialog.right_filler.isHidden())
+        self.assertLess(dialog.commands.geometry().top(), dialog.right_panel.height() / 2)
+
     def test_it_shows_the_level_and_the_same_sentence_as_the_list(self):
         from smvwp import action_guide, i18n
 

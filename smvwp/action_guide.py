@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import shlex
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from . import formatting, health, i18n, priority, tiers
 
@@ -80,6 +80,10 @@ class Guide:
     path: str = ""
     # 근거를 아직 못 받았다.
     loading: bool = False
+    # 지금 사용률과, 안내대로 정리하면 내려갈 사용률 - 창이 막대 하나로 그린다
+    # ("96% 인데 정리하면 71%" 를 글에서 찾아 읽지 않게). 모르면 None.
+    pct: Optional[float] = None
+    after_pct: Optional[float] = None
 
     @property
     def level_text(self) -> str:
@@ -242,6 +246,7 @@ def build(action, detail=None) -> Guide:
     }.get(action.kind)
     if builder is not None:
         builder(guide, action, detail)
+    _usage_bar(guide, action, detail)
     if detail is not None and detail.failures:
         names = ", ".join(i18n.t(f"detail.part.{part}") for part in detail.failures)
         guide.warnings.append(i18n.t("guide.partial", parts=names))
@@ -285,6 +290,25 @@ def _q(path: str) -> str:
 
 def _rel(path: str, guide: Guide) -> str:
     return formatting.relative_path(path, guide.account_path)
+
+
+def _usage_bar(guide: Guide, action, detail) -> None:
+    """막대에 쓸 두 숫자. 사용률은 줄이 알던 것, 없으면 방금 읽은 표본의 것.
+
+    '정리 뒤' 는 **이 줄이 말하는 정리 가능량을 다 비웠을 때** 다. 스토리지 크기를
+    알아야 낼 수 있어 근거를 읽은 뒤에만 나온다. 같은 스토리지를 여럿이 쓰는 줄은
+    `reclaimable_kb` 가 이미 그 합이다 (`priority`)."""
+
+    sample = detail.sample if detail is not None else None
+    guide.pct = action.pct
+    if guide.pct is None and sample is not None:
+        guide.pct = sample.byte_pct
+    total = getattr(sample, "total_kb", None)
+    used = getattr(sample, "used_kb", None)
+    freed = action.reclaimable_kb
+    if guide.pct is None or not total or used is None or not freed or freed <= 0:
+        return
+    guide.after_pct = max(0.0, min(guide.pct, (used - freed) * 100.0 / total))
 
 
 def _usage_facts(guide: Guide, detail) -> None:
