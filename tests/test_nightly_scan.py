@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from smvwp import config as config_module
 from smvwp import detail_scan
-from smvwp import nightly_scan, scan_lock, scan_store
+from smvwp import nightly_scan, scan_lock, scan_status, scan_store
 from tests import support
 
 
@@ -436,7 +436,7 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
         self.run_at(datetime(2026, 8, 1, 23, 0))
         cache = {}
         # 야간 스캔이 남긴 요약이 없을 때 (업데이트 뒤 첫 밤 전) - 창이 스스로 읽는 쪽을 본다.
-        with patch("smvwp.nightly_scan._stored_summary", return_value=None), \
+        with patch("smvwp.scan_status._stored_summary", return_value=None), \
                 patch("smvwp.nightly_scan.scan_store.growth_delta",
                       wraps=scan_store.growth_delta) as growth:
             first = nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
@@ -472,9 +472,9 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
 
         self.run_at(datetime(2026, 7, 31, 23, 0))
         self.run_at(datetime(2026, 8, 1, 23, 0))
-        with patch("smvwp.nightly_scan._stored_summary", return_value=None):
+        with patch("smvwp.scan_status._stored_summary", return_value=None):
             computed = self.snapshot_parts()
-        with patch("smvwp.nightly_scan._settled_parts", side_effect=AssertionError("결과 표를 읽었다")):
+        with patch("smvwp.scan_status._settled_parts", side_effect=AssertionError("결과 표를 읽었다")):
             stored = self.snapshot_parts()
         # 변화가 몰린 곳(`focus`)은 야간 스캔이 남긴 요약에만 있다 - 그 폴더 아래 기록을
         # 두 세대 모두 읽어야 해서 창이 스스로 읽을 때는 붙이지 않는다. 나머지는 같다.
@@ -495,27 +495,27 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
             with self.subTest(name):
                 self.config = config_module.load_config(self.data_dir)   # 바꾸기 전 설정에서
                 change()
-                with patch("smvwp.nightly_scan._settled_parts",
+                with patch("smvwp.scan_status._settled_parts",
                            wraps=nightly_scan._settled_parts) as parts:
                     self.snapshot_parts()
                 self.assertEqual(parts.call_count, 1)
 
     def test_a_newer_generation_or_format_reads_the_results_again(self):
         self.run_at(datetime(2026, 7, 31, 23, 0))
-        with patch.object(nightly_scan, "SUMMARY_FORMAT", nightly_scan.SUMMARY_FORMAT + 1), \
-                patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+        with patch.object(scan_status, "SUMMARY_FORMAT", nightly_scan.SUMMARY_FORMAT + 1), \
+                patch("smvwp.scan_status._settled_parts", wraps=nightly_scan._settled_parts) as parts:
             self.snapshot_parts()
         self.assertEqual(parts.call_count, 1)
 
         with scan_store.session(self.data_dir) as conn:   # 요약을 남기기 전에 끝난 세대
             scan_store.mark_generation_completed(conn, self.account.account_id, 2)
-        with patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+        with patch("smvwp.scan_status._settled_parts", wraps=nightly_scan._settled_parts) as parts:
             self.snapshot_parts()
         self.assertEqual(parts.call_count, 1)
 
     def test_the_scan_saves_a_summary_only_when_the_generation_changed(self):
         self.run_at(datetime(2026, 7, 31, 23, 0))
-        with patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+        with patch("smvwp.scan_status._settled_parts", wraps=nightly_scan._settled_parts) as parts:
             nightly_scan._save_summaries(self.data_dir, self.config)
         self.assertEqual(parts.call_count, 0)
 
@@ -524,7 +524,7 @@ class NightlyScanOrchestratorTests(unittest.TestCase):
 
         self.run_at(datetime(2026, 7, 31, 23, 0))
         cache = {}
-        with patch("smvwp.nightly_scan._stored_summary", wraps=nightly_scan._stored_summary) as read:
+        with patch("smvwp.scan_status._stored_summary", wraps=nightly_scan._stored_summary) as read:
             nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
             nightly_scan.get_status_snapshot(self.data_dir, self.config, cache=cache)
         self.assertEqual(read.call_count, 1)

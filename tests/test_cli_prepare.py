@@ -56,14 +56,14 @@ class PrepareTests(unittest.TestCase):
         self.assertIn("헬스체크", out)
         self.assertIn("스캔 탭 요약", out)
         with patch("smvwp.scan_store.tree_entries", side_effect=AssertionError("대조를 다시 했다")), \
-                patch("smvwp.nightly_scan._settled_parts", side_effect=AssertionError("결과 표를 읽었다")):
+                patch("smvwp.scan_status._settled_parts", side_effect=AssertionError("결과 표를 읽었다")):
             health.check_all(self.data_dir, self.config)
             snapshot = nightly_scan.get_status_snapshot(self.data_dir, self.config)
         self.assertTrue(all(entry.top_paths for entry in snapshot.accounts))
 
     def test_running_it_again_has_nothing_new_to_leave(self):
         self.prepare()
-        with patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+        with patch("smvwp.scan_status._settled_parts", wraps=nightly_scan._settled_parts) as parts:
             code, out, _ = self.prepare()
         self.assertEqual(code, 0)
         self.assertEqual(parts.call_count, 0)

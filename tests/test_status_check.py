@@ -146,7 +146,7 @@ class OutdatedSummaryCountTests(StatusCase):
         self.assertEqual(nightly_scan.outdated_summaries(self.data_dir, self.config), 0)
         self.complete(2)   # 새 세대가 끝났는데 요약을 아직 안 남겼다
         self.assertEqual(nightly_scan.outdated_summaries(self.data_dir, self.config), 1)
-        with patch("smvwp.nightly_scan.SUMMARY_FORMAT", 999):   # 판이 바뀌었다
+        with patch("smvwp.scan_status.SUMMARY_FORMAT", 999):   # 판이 바뀌었다
             nightly_scan.save_summaries(self.data_dir, self.config)
         self.assertEqual(nightly_scan.outdated_summaries(self.data_dir, self.config), 1)
 

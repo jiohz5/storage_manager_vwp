@@ -220,7 +220,7 @@ class RememberedScanPartsTests(unittest.TestCase):
         from smvwp import nightly_scan, scan_store
 
         with patch("smvwp.scan_store.tree_entries", wraps=scan_store.tree_entries) as trees, \
-                patch("smvwp.nightly_scan._settled_parts", wraps=nightly_scan._settled_parts) as parts:
+                patch("smvwp.scan_status._settled_parts", wraps=nightly_scan._settled_parts) as parts:
             dashboard.read_dashboard(self.data_dir, self.config, cache=cache)
         return trees.call_count + parts.call_count
 
