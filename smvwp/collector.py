@@ -19,6 +19,7 @@ DESIGN.md 1부 3절 "00:00~24:00 (15분 간격) — 초경량 df/inode/quota 표
 from __future__ import annotations
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -199,12 +200,34 @@ def collect_account(
     )
 
 
+# 한꺼번에 `df` 를 묻는 계정 수.
+#
+# 예전에는 계정을 하나씩 돌았다 - 계정마다 `df` 두 번(용량·inode)이라 계정 100개면
+# 200번을 줄 서서 불렀다. 더 나쁜 것은 파일서버가 답하지 않을 때다: 계정마다 제한
+# 시간(기본 10초)을 통째로 기다려 100개면 17분, 수집 간격(15분)을 넘겨 다음 수집과
+# 겹쳤다. 여덟씩 물으면 그것이 2분 남짓이다.
+#
+# `df` 는 자식 프로세스를 기다리는 일이라 스레드로 충분하다 (GIL 을 놓는다). 여덟은
+# 장비에 부담이 없는 수다 - `df` 하나는 statfs 한 번이다.
+COLLECT_WORKERS = 8
+
+
 def collect_all(
     accounts: List[Account],
     df_timeout_seconds: int = 10,
     quota_command: Optional[List[str]] = None,
 ) -> List[SampleRecord]:
-    return [
-        collect_account(account, df_timeout_seconds=df_timeout_seconds, quota_command=quota_command)
-        for account in accounts
-    ]
+    """모든 계정의 표본을 **계정 순서대로** 돌려준다 (묻는 것은 여럿이 함께)."""
+
+    def one(account: Account) -> SampleRecord:
+        return collect_account(
+            account, df_timeout_seconds=df_timeout_seconds, quota_command=quota_command
+        )
+
+    accounts = list(accounts)
+    if len(accounts) < 2:
+        return [one(account) for account in accounts]
+    with ThreadPoolExecutor(
+        max_workers=min(COLLECT_WORKERS, len(accounts)), thread_name_prefix="smvwp-df"
+    ) as pool:
+        return list(pool.map(one, accounts))

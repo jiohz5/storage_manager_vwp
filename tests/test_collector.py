@@ -107,5 +107,85 @@ class CollectAccountTests(unittest.TestCase):
         self.assertEqual(record.overall_tier, tiers.ALERT)
 
 
+class CollectAllTests(unittest.TestCase):
+    """계정을 여럿이 함께 묻는다.
+
+    예전에는 하나씩 돌았다. 계정마다 `df` 두 번이라 100개면 200번을 줄 서서 불렀고,
+    파일서버가 답하지 않으면 계정마다 제한 시간(10초)을 통째로 기다려 17분 - 수집
+    간격(15분)을 넘겨 다음 수집과 겹쳤다."""
+
+    def accounts(self, count):
+        return [Account(name=f"p{index}", path=f"/user/p{index}", account_id=f"a{index}")
+                for index in range(count)]
+
+    def test_accounts_are_asked_together(self):
+        import threading
+
+        from smvwp.store import SampleRecord
+
+        # 둘이 동시에 들어와야 지나가는 문. 하나씩 돌면 첫 계정이 혼자 기다리다 깨진다.
+        gate = threading.Barrier(2, timeout=10)
+
+        def slow(account, **_kwargs):
+            gate.wait()
+            return SampleRecord(account_id=account.account_id, collected_at="t", ok=True)
+
+        with patch("smvwp.collector.collect_account", side_effect=slow):
+            records = collector.collect_all(self.accounts(6))
+        self.assertEqual(len(records), 6)
+
+    def test_results_keep_the_account_order(self):
+        import time
+
+        from smvwp.store import SampleRecord
+
+        def uneven(account, **_kwargs):
+            time.sleep(0.05 if account.account_id == "a0" else 0)   # 첫 계정이 가장 늦게 끝난다
+            return SampleRecord(account_id=account.account_id, collected_at="t", ok=True)
+
+        with patch("smvwp.collector.collect_account", side_effect=uneven):
+            records = collector.collect_all(self.accounts(12))
+        self.assertEqual([record.account_id for record in records],
+                         [f"a{index}" for index in range(12)])
+
+    def test_never_more_than_the_limit_at_once(self):
+        import threading
+        import time
+
+        from smvwp.store import SampleRecord
+
+        lock, state = threading.Lock(), {"now": 0, "most": 0}
+
+        def counted(account, **_kwargs):
+            with lock:
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+            time.sleep(0.01)
+            with lock:
+                state["now"] -= 1
+            return SampleRecord(account_id=account.account_id, collected_at="t", ok=True)
+
+        with patch("smvwp.collector.collect_account", side_effect=counted):
+            collector.collect_all(self.accounts(40))
+        self.assertLessEqual(state["most"], collector.COLLECT_WORKERS)
+
+    def test_one_failing_account_does_not_stop_the_others(self):
+        def run(args, *_args, **kwargs):
+            if args[-1] == "/user/p1":
+                raise subprocess.TimeoutExpired(args, kwargs.get("timeout"))
+            return _completed(DF_INODES_OUTPUT if "-Pi" in args else DF_BYTES_OUTPUT)
+
+        with patch("smvwp.collector.subprocess.run", side_effect=run):
+            records = collector.collect_all(self.accounts(3))
+        self.assertEqual([record.ok for record in records], [True, False, True])
+
+    def test_nothing_and_one(self):
+        self.assertEqual(collector.collect_all([]), [])
+        with patch("smvwp.collector.ThreadPoolExecutor",
+                   side_effect=AssertionError("계정 하나에 스레드를 띄웠다")), \
+                patch("smvwp.collector.collect_account", return_value="x"):
+            self.assertEqual(collector.collect_all(self.accounts(1)), ["x"])
+
+
 if __name__ == "__main__":
     unittest.main()
