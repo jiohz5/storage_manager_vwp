@@ -53,6 +53,14 @@ _TYPES = {
 }
 
 
+# 파일을 쓰지 않는 까닭 (`problem`) - `smvwp_cli.py status` 가 보여 준다.
+PROBLEM_MISSING = "없음"
+PROBLEM_BROKEN = "깨짐"
+PROBLEM_FORMAT = "다른 판"
+PROBLEM_ACCOUNTS = "다른 계정 설정"
+PROBLEM_STALE = "낡음"
+
+
 class _Refused(ValueError):
     """정해 둔 모양 밖의 것이 들어 있다."""
 
@@ -134,24 +142,49 @@ def write(data_dir: Path, config, data: Optional["dashboard.DashboardData"] = No
     return path
 
 
+def _payload(data_dir: Path):
+    """`(payload, 문제)` - 읽지 못했으면 payload 는 None."""
+
+    path = view_path(data_dir)
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except FileNotFoundError:
+        return None, PROBLEM_MISSING
+    except (OSError, ValueError):
+        logger.warning("홈 결과 파일을 읽지 못해 DB 에서 읽습니다: %s", path)
+        return None, PROBLEM_BROKEN
+
+
+def _problem_of(payload, config) -> Optional[str]:
+    try:
+        if payload.get("format") != FORMAT:
+            return PROBLEM_FORMAT
+        if payload.get("fingerprint") != fingerprint(config):
+            return PROBLEM_ACCOUNTS
+        written = datetime.fromisoformat(payload["written_at"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return PROBLEM_BROKEN
+    allowed = timedelta(seconds=2 * max(60, int(config.settings.collector_interval_seconds)))
+    if _now() - written > allowed:
+        return PROBLEM_STALE
+    return None
+
+
+def problem(data_dir: Path, config) -> Optional[str]:
+    """창이 이 파일을 쓰지 않을 까닭 (`PROBLEM_*`), 쓸 수 있으면 None (속 모양까지는 안 본다)."""
+
+    payload, trouble = _payload(data_dir)
+    return trouble or _problem_of(payload, config)
+
+
 def read(data_dir: Path, config) -> Optional["dashboard.DashboardData"]:
     """믿을 수 있는 파일이면 그 홈, 아니면 None (부르는 쪽이 DB 로 간다)."""
 
     path = view_path(data_dir)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError):
-        logger.warning("홈 결과 파일을 읽지 못해 DB 에서 읽습니다: %s", path)
+    payload, trouble = _payload(data_dir)
+    if trouble or _problem_of(payload, config):
         return None
     try:
-        if payload.get("format") != FORMAT or payload.get("fingerprint") != fingerprint(config):
-            return None
-        written = datetime.fromisoformat(payload["written_at"])
-        allowed = timedelta(seconds=2 * max(60, int(config.settings.collector_interval_seconds)))
-        if _now() - written > allowed:
-            return None
         body = payload["data"]
         plan = _decode(body.get("plan"))
         if plan is not None:

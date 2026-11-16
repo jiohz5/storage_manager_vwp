@@ -56,6 +56,7 @@ GUI 없이 수집만 하려면 아래 하위 명령은 GUI 툴킷 없이도 동�
 
   ./smvwp_cli.py collect
   ./smvwp_cli.py load                    # 쌓인 서버 부하 이력 보기
+  ./smvwp_cli.py status                  # 지금 제대로 돌고 있나
   ./smvwp_cli.py usage                   # 누가 이 도구를 얼마나 쓰는지
   ./smvwp_cli.py scan
 """
@@ -412,6 +413,28 @@ def command_load(args) -> int:
     return 0
 
 
+# -- status ----------------------------------------------------------------
+
+def command_status(args) -> int:
+    """지금 이 도구가 제대로 돌고 있나 - 판·수집·홈 결과 파일·야간 스캔·요약·DB 크기.
+
+    읽기만 한다. 문제가 하나라도 있으면 1 (주의만 있으면 0)."""
+
+    from smvwp import status_check
+
+    data_dir = _resolve_or_fail(args.data_dir)
+    try:
+        config = config_module.load_config(data_dir)
+    except config_module.ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    items = status_check.gather(data_dir, config)
+    verdict = status_check.worst(items)
+    print(f"== Storage Manager 상태: {verdict} ==")
+    print(status_check.render(items))
+    return 1 if verdict == status_check.BAD else 0
+
+
 # -- usage -----------------------------------------------------------------
 #
 # 이 도구를 어떻게 안착시킬지가 아직 미지수다 - 몇 명이 쓸지, 무엇을 보러
@@ -764,6 +787,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=15, help="작업 목록 줄 수 (기본 15)"
     )
     load.set_defaults(func=command_load)
+
+    status = sub.add_parser("status", help="지금 제대로 돌고 있나 (수집·홈 결과 파일·야간 스캔)")
+    _add_data_dir(status)
+    status.set_defaults(func=command_status)
 
     usage = sub.add_parser("usage", help="누가 이 도구를 얼마나 쓰는지")
     _add_data_dir(usage)

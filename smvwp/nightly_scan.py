@@ -1361,6 +1361,30 @@ def _summary_key(account_id: str, generation: int, top_n: int, max_depth: int) -
     return json.dumps([SUMMARY_FORMAT, account_id, generation, top_n, max_depth])
 
 
+def outdated_summaries(data_dir: Path, config: config_module.AppConfig) -> int:
+    """남겨 둔 스캔 탭 요약이 지금 판·설정·세대와 맞지 않는 계정 수 (`smvwp_cli.py status`).
+
+    0 이 아니면 창이 그 계정들을 열 때마다 스스로 읽는다 - 업데이트 뒤 `prepare` 를 안
+    돌렸거나 야간 스캔이 요약을 못 남겼다."""
+
+    settings = config.settings
+    with scan_store.session(data_dir) as conn:
+        states = scan_store.account_states(conn)
+        saved = {
+            row["account_id"]: row["input_key"]
+            for row in conn.execute("SELECT account_id, input_key FROM scan_summaries")
+        }
+    count = 0
+    for account in config.accounts:
+        state = states.get(account.account_id)
+        generation = state.last_completed_generation if state else None
+        if generation and saved.get(account.account_id) != _summary_key(
+                account.account_id, generation, settings.detail_scan_top_n,
+                settings.growth_list_max_depth):
+            count += 1
+    return count
+
+
 def _save_summaries(data_dir: Path, config: config_module.AppConfig) -> None:
     """야간 스캔이 끝날 때 - 실패해도 창이 스스로 읽으므로 기록만 한다."""
 
