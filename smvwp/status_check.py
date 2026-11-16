@@ -79,6 +79,29 @@ def _collection(data_dir: Path, settings, now: datetime) -> Item:
     return Item("collect", "마지막 수집", WARN if late else OK, _ago(newest, now), hint)
 
 
+_STAGE_NAMES = {"df": "df", "save": "저장", "server": "서버 부하", "notify": "알림",
+                "forecast": "예측", "reports": "보고서", "home": "홈"}
+
+
+def _cycle_time(data_dir: Path, settings) -> Item:
+    """마지막 수집 한 바퀴가 어디에 시간을 썼나 (`cycle.read_timing`)."""
+
+    from . import cycle
+
+    timing = cycle.read_timing(data_dir)
+    if timing is None:
+        return Item("cycle_time", "수집 걸린 시간", INFO, "기록 없음 (다음 수집 뒤에 생깁니다)")
+    parts = sorted(timing["seconds"].items(), key=lambda pair: -pair[1])
+    shown = " · ".join(f"{_STAGE_NAMES.get(name, name)} {value:.1f}"
+                       for name, value in parts if value >= 0.05) or "모두 0.1초 미만"
+    interval = max(60, int(settings.collector_interval_seconds))
+    slow = timing["total"] > interval / 2
+    return Item("cycle_time", "수집 걸린 시간", WARN if slow else OK,
+                f"{timing['total']:.1f}초  ({shown})",
+                f"수집 간격({interval // 60}분)의 절반을 넘습니다 - 가장 큰 단계부터 보세요"
+                if slow else "")
+
+
 _HOME_HINTS = {
     home_view.PROBLEM_MISSING: "다음 수집(smvwp_cli.py collect) 뒤에 생깁니다",
     home_view.PROBLEM_STALE: "수집이 멈췄습니다 - cron 을 확인하세요",
@@ -144,6 +167,7 @@ def gather(data_dir: Path, config, now: Optional[datetime] = None) -> List[Item]
                       f"{len(enabled)}개 켜짐 / 전체 {len(config.accounts)}개",
                       "" if enabled else "GUI 의 '계정 관리' 에서 계정을 더하세요"))
     items.append(_collection(data_dir, config.settings, now))
+    items.append(_cycle_time(data_dir, config.settings))
     items.append(_home_file(data_dir, config))
     items.append(_night_scan(data_dir, now))
 

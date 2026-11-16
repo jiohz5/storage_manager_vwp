@@ -132,5 +132,51 @@ class RunCollectionCycleTests(unittest.TestCase):
             self.assertIn("new", left[0].read_text(encoding="utf-8"))
 
 
+class CycleTimingTests(unittest.TestCase):
+    """한 바퀴가 어디에 시간을 썼나를 남긴다 - `smvwp_cli.py status` 가 읽는다.
+
+    "수집이 DB 를 여러 번 연다" 를 줄이려다 세어 보니 평소 7~8번이었다. 고칠 값어치가
+    있는지는 실기에서 어느 단계가 느린지를 봐야 알아서, 재는 것부터 두었다."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.data_dir = Path(tmp.name) / "data"
+        self.config = config_module.load_config(self.data_dir)
+
+    def test_a_cycle_leaves_its_timing(self):
+        from smvwp import cycle
+
+        self.assertIsNone(cycle.read_timing(self.data_dir))
+        with patch("smvwp.cycle.collector.collect_all", return_value=[]):
+            run_collection_cycle(self.data_dir, self.config)
+        timing = cycle.read_timing(self.data_dir)
+        self.assertIsNotNone(timing)
+        for stage in ("df", "save", "notify", "forecast", "reports", "home"):
+            self.assertIn(stage, timing["seconds"])
+        self.assertLessEqual(set(timing["seconds"]), set(cycle.STAGES))
+        self.assertGreaterEqual(timing["total"] + 0.01, sum(timing["seconds"].values()))
+
+    def test_a_failed_stage_is_still_timed_and_the_cycle_goes_on(self):
+        from smvwp import cycle
+
+        with patch("smvwp.cycle.collector.collect_all", return_value=[]), \
+                patch("smvwp.cycle.reports.ensure_scheduled", side_effect=RuntimeError("x")):
+            run_collection_cycle(self.data_dir, self.config)
+        timing = cycle.read_timing(self.data_dir)
+        self.assertIn("reports", timing["seconds"])
+        self.assertIn("home", timing["seconds"])
+
+    def test_a_broken_file_reads_as_nothing(self):
+        from smvwp import cycle
+
+        path = cycle.timing_path(self.data_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for text in ("", "{", "[]", '{"total": "x", "seconds": {}, "finished_at": ""}',
+                     '{"total": 1, "seconds": 3, "finished_at": ""}'):
+            path.write_text(text, encoding="utf-8")
+            self.assertIsNone(cycle.read_timing(self.data_dir), text)
+
+
 if __name__ == "__main__":
     unittest.main()

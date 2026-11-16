@@ -66,6 +66,36 @@ class CollectionTests(StatusCase):
         self.assertIn("cron", item.hint)
 
 
+class CycleTimeTests(StatusCase):
+    def timed(self, total, **seconds):
+        import json
+
+        from smvwp import cycle
+
+        path = cycle.timing_path(self.data_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"finished_at": self.now.isoformat(), "host": "h",
+                                    "total": total, "seconds": seconds}), encoding="utf-8")
+
+    def test_no_record_yet_is_not_a_warning(self):
+        self.assertEqual(self.items()["cycle_time"].level, status_check.INFO)
+
+    def test_shows_the_biggest_stage_first(self):
+        self.timed(12.5, df=1.0, home=11.0, save=0.01)
+        item = self.items()["cycle_time"]
+        self.assertEqual(item.level, status_check.OK)
+        self.assertIn("12.5초", item.value)
+        self.assertLess(item.value.index("홈 11.0"), item.value.index("df 1.0"))
+        self.assertNotIn("저장", item.value)
+
+    def test_a_cycle_longer_than_half_the_interval_warns(self):
+        interval = self.config.settings.collector_interval_seconds
+        self.timed(interval / 2 + 1, df=interval / 2)
+        item = self.items()["cycle_time"]
+        self.assertEqual(item.level, status_check.WARN)
+        self.assertIn("절반", item.hint)
+
+
 class HomeFileTests(StatusCase):
     def test_no_file_yet_says_when_it_comes(self):
         self.collected(5)
@@ -139,7 +169,7 @@ class CommandTests(StatusCase):
         self.collected(5)
         home_view.write(self.data_dir, self.config)
         code, text = self.run_cli()
-        for label in ("판", "마지막 수집", "홈 결과 파일", "야간 스캔", "DB"):
+        for label in ("판", "마지막 수집", "수집 걸린 시간", "홈 결과 파일", "야간 스캔", "DB"):
             self.assertIn(label, text)
         self.assertNotIn("문제", text.split("\n", 1)[1] if code == 0 else "")
 
