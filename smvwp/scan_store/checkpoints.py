@@ -364,12 +364,16 @@ def mark_error(conn: sqlite3.Connection, checkpoint_id: int, message: str) -> No
     conn.commit()
 
 
-def mark_split(conn: sqlite3.Connection, checkpoint_id: int) -> None:
+def mark_split(conn: sqlite3.Connection, checkpoint_id: int, commit: bool = True) -> None:
+    """`commit=False` 면 뒤따르는 `insert_children` 의 커밋에 함께 실린다 - '쪼갰다' 만
+    남고 자식이 없으면 그 아래는 이 바퀴에서 아무도 재지 않는다."""
+
     conn.execute(
         "UPDATE scan_checkpoints SET status = 'split', scanned_at = ? WHERE id = ?",
         (utc_now_iso(), checkpoint_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def insert_children(conn: sqlite3.Connection, parent: sqlite3.Row, child_paths: List[str]) -> None:

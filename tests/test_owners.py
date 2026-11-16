@@ -68,6 +68,56 @@ class StoreTests(OwnersCase):
         self.assertEqual(self.owners(1), [])
         self.assertEqual(len(self.owners(3)), 1)
 
+    def test_a_checkpoint_that_died_before_it_was_marked_is_not_counted_twice(self):
+        """사람별 합계는 **더하는** 것이다. 예전에는 더한 것을 커밋한 뒤 완료 표시를
+        따로 커밋해서, 그 사이에 죽은 체크포인트를 다시 재면 같은 몫이 두 번 들어갔다."""
+
+        from unittest.mock import patch
+
+        top = "/acct/a"
+        made = outcome({top: 900 * GB}, {1001: (800 * GB, 10)}, top)
+        made.largest_files = [(5 * GB, top + "/big")]
+
+        def measure(conn):
+            checkpoint = scan_store.next_pending(conn, "a1", scan_store.BASELINE, 1)
+            with patch("smvwp.detail_scan.measure_tree", return_value=made), \
+                    patch("smvwp.detail_scan.os.path.lexists", return_value=True):
+                detail_scan.process_one_checkpoint(conn, checkpoint, 60, generation=1)
+
+        with scan_store.session(self.data_dir) as conn:
+            scan_store.seed_checkpoints(conn, "a1", scan_store.BASELINE, 1, [top])
+            with patch("smvwp.detail_scan.scan_store.mark_done", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    measure(conn)
+        # 죽은 뒤 - 아무것도 남지 않았고 체크포인트는 그대로 기다린다.
+        self.assertEqual(self.owners(1), [])
+        with scan_store.session(self.data_dir) as conn:
+            self.assertEqual(list(scan_store.largest_files(conn, "a1", 1)), [])
+            measure(conn)
+        found = {row["uid"]: (row["size_kb"], row["file_count"]) for row in self.owners(1)}
+        self.assertEqual(found, {1001: (800 * GB, 10)})
+
+    def test_a_split_and_its_children_are_saved_together(self):
+        """'쪼갰다' 만 남고 자식이 없으면 그 아래는 이 바퀴에서 아무도 재지 않는다."""
+
+        from unittest.mock import patch
+
+        top = "/acct/a"
+        with scan_store.session(self.data_dir) as conn:
+            scan_store.seed_checkpoints(conn, "a1", scan_store.BASELINE, 1, [top])
+            checkpoint = scan_store.next_pending(conn, "a1", scan_store.BASELINE, 1)
+            with patch("smvwp.detail_scan.measure_tree", return_value=support.cut({})), \
+                    patch("smvwp.detail_scan.list_immediate_subdirs", return_value=[top + "/x"]), \
+                    patch("smvwp.detail_scan.os.path.lexists", return_value=True), \
+                    patch("smvwp.detail_scan.scan_store.insert_children",
+                          side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    detail_scan.process_one_checkpoint(conn, checkpoint, 60, generation=1)
+        with scan_store.session(self.data_dir) as conn:
+            again = scan_store.next_pending(conn, "a1", scan_store.BASELINE, 1)
+        self.assertIsNotNone(again)
+        self.assertEqual(again["path"], top)
+
     def test_an_unknown_uid_keeps_its_number(self):
         self.assertEqual(detail_scan.owner_name(987654), "987654")
 

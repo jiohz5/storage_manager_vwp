@@ -404,7 +404,6 @@ def process_one_checkpoint(
     """
 
     generation = generation if generation is not None else checkpoint["generation"]
-    account_id = checkpoint["account_id"]
     path = checkpoint["path"]
 
     outcome = measure_tree(
@@ -420,21 +419,42 @@ def process_one_checkpoint(
         scan_store.mark_done(conn, checkpoint["id"], size_kb=0)
         return scan_store.STATUS_DONE
 
+    # 잰 것과 체크포인트의 상태 표시를 **한 트랜잭션**에 넣는다.
+    #
+    # 예전에는 폴더·큰 파일·사람별·상태 표시가 저마다 커밋했다. 사람별 합계는 더하는
+    # 것이라, 그것을 커밋한 뒤 상태 표시 전에 프로세스가 죽으면(야간 창 끝의 kill, 장비
+    # 재시작) 그 체크포인트를 다시 재며 같은 몫을 한 번 더 더했다. '쪼갰다' 표시와 자식
+    # 넣기 사이도 같았다 - 표시만 남으면 그 아래를 이 바퀴에서 아무도 재지 않는다.
+    # 덤으로 NFS 위 커밋(저널 왕복)이 체크포인트마다 넷에서 하나로 준다.
+    try:
+        return _save_outcome(conn, checkpoint, outcome, generation, timeout_seconds)
+    except BaseException:
+        # 반쯤 넣은 것을 남기지 않는다 - 부르는 쪽이 이 연결로 다음 것을 커밋하면
+        # 함께 실려 버린다.
+        conn.rollback()
+        raise
+
+
+def _save_outcome(conn, checkpoint, outcome, generation, timeout_seconds) -> str:
+    account_id = checkpoint["account_id"]
+    path = checkpoint["path"]
+
     if outcome.entries:
         scan_store.save_tree_entries(
             conn, account_id, generation, outcome.entries, path,
-            details=getattr(outcome, "details", None),
+            details=getattr(outcome, "details", None), commit=False,
         )
     # 큰 파일은 시간 초과로 잘렸어도 이미 본 만큼은 쓸모가 있다. 완주 여부와
     # 무관하게 남긴다 - `entries` 와 같은 이유다.
     if outcome.largest_files:
-        scan_store.save_large_files(conn, account_id, generation, outcome.largest_files)
+        scan_store.save_large_files(conn, account_id, generation, outcome.largest_files,
+                                    commit=False)
     # 사람별 사용량 - 이 체크포인트가 측정 단위로 낸 것의 몫 (끊겼으면 끝난 하위 폴더의
     # 것만 - 남은 자식은 다시 재며 그때 더한다).
     owners = getattr(outcome, "owners", None)
     if owners:
         scan_store.add_owners(conn, account_id, generation, owners,
-                              {uid: owner_name(uid) for uid in owners})
+                              {uid: owner_name(uid) for uid in owners}, commit=False)
 
     if outcome.completed:
         scan_store.mark_done(
@@ -454,7 +474,7 @@ def process_one_checkpoint(
             if child.rstrip("/") not in measured
         ]
         if remaining:
-            scan_store.mark_split(conn, checkpoint["id"])
+            scan_store.mark_split(conn, checkpoint["id"], commit=False)
             scan_store.insert_children(conn, checkpoint, remaining)
             return scan_store.STATUS_SPLIT
         # 자식은 다 쟀는데 루트 줄이 안 나온 경우 - 합계는 자식들로 낼 수 있다.

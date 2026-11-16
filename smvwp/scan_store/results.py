@@ -61,6 +61,7 @@ def save_tree_entries(
     entries: List["tuple"],
     root_path: str,
     details: Optional[dict] = None,
+    commit: bool = True,
 ) -> int:
     """`du -k`가 준 (경로, KB) 목록을 기준선 결과로 저장한다.
 
@@ -111,7 +112,8 @@ def save_tree_entries(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return len(rows)
 
 
@@ -453,7 +455,8 @@ def change_focus(
 
 
 def save_large_files(
-    conn: sqlite3.Connection, account_id: str, generation: int, entries
+    conn: sqlite3.Connection, account_id: str, generation: int, entries,
+    commit: bool = True,
 ) -> int:
     """순회가 붙잡은 `(KB, 경로)` 목록을 저장한다.
 
@@ -472,7 +475,8 @@ def save_large_files(
         "(account_id, generation, path, size_kb, recorded_at) VALUES (?, ?, ?, ?, ?)",
         rows,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return len(rows)
 
 
@@ -884,8 +888,12 @@ def prune_folder_history(conn: sqlite3.Connection, retention_days: int, now=None
 # -- 사람(파일 주인)별 사용량 -------------------------------------------------
 
 def add_owners(conn: sqlite3.Connection, account_id: str, generation: int,
-               owners: Dict[int, tuple], names: Dict[int, str]) -> None:
-    """측정 단위 하나의 주인별 `{uid: (KB, 파일 수)}` 를 그 세대의 합에 더한다."""
+               owners: Dict[int, tuple], names: Dict[int, str], commit: bool = True) -> None:
+    """측정 단위 하나의 주인별 `{uid: (KB, 파일 수)}` 를 그 세대의 합에 더한다.
+
+    **더하는 것이라 두 번 하면 두 배가 된다** (폴더 크기·큰 파일은 덮어쓴다). 그래서
+    `process_one_checkpoint` 는 `commit=False` 로 불러 체크포인트의 완료 표시와 한
+    트랜잭션에 넣는다 - 따로 커밋하면 그 사이에 죽은 체크포인트를 다시 재며 또 더한다."""
 
     if not owners:
         return
@@ -899,7 +907,8 @@ def add_owners(conn: sqlite3.Connection, account_id: str, generation: int,
             for uid, (size_kb, count) in owners.items()
         ],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def owner_totals(conn: sqlite3.Connection, account_id: str, generation: int,
