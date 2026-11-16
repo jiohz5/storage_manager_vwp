@@ -2,6 +2,7 @@
 
 저장소 루트에서 돌린다 (pytest 가 모으지 않는 수동 실험이다):
     python3 tests/read_cost.py <빈 디렉터리> [--accounts 20] [--days 90] [--cold] [--code <저장소>]
+    python3 tests/read_cost.py <만들어 둔 디렉터리> --reuse     (데이터를 다시 만들지 않는다)
 
 <빈 디렉터리> 에 시험 데이터를 만들고(계정마다 표본 N일 x 15분, 스캔 결과 2세대),
 DESIGN.md "NFS 위에서 창이 느렸던 이유" 의 표와 같은 경로를 잰다. 그 디렉터리를
@@ -276,7 +277,8 @@ def fill_working_generation(data_dir):
 
     with scan_store.session(data_dir) as conn:
         conn.execute(
-            "INSERT INTO baseline_results SELECT account_id, 3, path, size_kb, completed_at, depth"
+            "INSERT INTO baseline_results (account_id, generation, path, size_kb, completed_at, depth)"
+            " SELECT account_id, 3, path, size_kb, completed_at, depth"
             " FROM baseline_results WHERE generation = 2 AND rowid % 2 = 0")
         conn.commit()
 
@@ -293,18 +295,28 @@ def main() -> int:
     parser.add_argument("--cold", action="store_true", help="경로마다 DB 파일을 캐시에서 내린다 (리눅스)")
     parser.add_argument("--code", type=Path, default=Path(__file__).resolve().parents[1],
                         help="잴 코드가 있는 저장소 (기본: 이 파일이 든 저장소)")
+    parser.add_argument("--reuse", action="store_true",
+                        help="이미 만들어 둔 디렉터리를 그대로 잰다 (코드 앞뒤를 견줄 때)")
     args = parser.parse_args()
     root = args.directory
     root.mkdir(parents=True, exist_ok=True)
-    if any(root.iterdir()):
-        print(f"{root} 가 비어 있지 않습니다 - 빈 디렉터리를 주세요.", file=sys.stderr)
+    if any(root.iterdir()) and not args.reuse:
+        print(f"{root} 가 비어 있지 않습니다 - 빈 디렉터리를 주거나 --reuse 를 붙이세요.",
+              file=sys.stderr)
         return 2
 
     _load(args.code.resolve())
     from smvwp import account_detail, dashboard, data_inventory, freshness, health, nightly_scan
 
     started = time.perf_counter()
-    data_dir, config = build(root, args.accounts, args.days)
+    if args.reuse:
+        data_dir = root / "data"
+        config = config_module.load_config(data_dir)
+        with scan_store.session(data_dir) as conn:   # 지난번에 채운 작업 세대를 걷는다
+            conn.execute("DELETE FROM baseline_results WHERE generation = 3")
+            conn.commit()
+    else:
+        data_dir, config = build(root, args.accounts, args.days)
     built = time.perf_counter() - started
     mount = _mount_of(data_dir)
     SETTINGS.update(cold=args.cold, data_dir=data_dir, mount=mount[0] if mount else None)
@@ -351,6 +363,20 @@ def main() -> int:
                 for account in config.accounts
             ])
             store.prune_old_samples(conn, config.settings.sample_retention_days)
+    # cron 수집 한 바퀴의 뒤쪽 - 프로세스가 새로 뜨므로 기억(cache)이 없다.
+    try:
+        from smvwp import cycle as cycle_module, forecast_notify, home_view
+    except ImportError:
+        cycle_module = forecast_notify = home_view = None
+    tail = getattr(cycle_module, "forecast_and_home", None)
+    if tail is not None:
+        with measure("수집: 예측 알림 + 홈 결과 파일"):
+            tail(data_dir, config)
+    elif home_view is not None:
+        with measure("수집: 예측 알림 + 홈 결과 파일"):
+            forecasts = forecast_notify.build_forecasts(data_dir, config)
+            forecast_notify.notify_forecasts(data_dir, config, forecasts)
+            home_view.write(data_dir, config)
     fill_working_generation(data_dir)
     nightly_scan.get_status_snapshot(data_dir, config, cache=scan_tab)
     with measure("스캔 중 다음 읽기 (5초마다)"):

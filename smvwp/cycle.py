@@ -73,6 +73,61 @@ class _Stopwatch:
             logger.exception("수집 시간 기록을 쓰지 못했습니다")
 
 
+def forecast_and_home(data_dir: Path, config: config_module.AppConfig,
+                      watch: Optional[_Stopwatch] = None, write: bool = True):
+    """홈 한 장을 **한 번** 계산해 FULL 예측 알림과 홈 결과 파일이 나눠 쓴다.
+
+    예전에는 예측 알림이 계정마다 30일 표본을 읽어 예측을 내고, 바로 뒤에 홈 결과
+    파일을 만들면서 같은 표본을 또 읽어 같은 예측을 다시 냈다. cron 수집은 프로세스가
+    매번 새로 떠서 기억해 둔 것도 없다 - 15분마다 가장 무거운 읽기를 두 번 했다
+    (계정 100개·90일 실측: 79MB -> 42MB, `tests/read_cost.py`).
+
+    계산한 홈(`DashboardData`)을 돌려준다 (못 했으면 None). `write=False` 면 파일은
+    쓰지 않는다 - 부르는 쪽이 나중에 `_write_home` 으로 쓴다. 어느 단계가 실패해도
+    이미 저장된 df 표본은 남아야 하므로 예외를 삼킨다.
+    """
+
+    from . import dashboard
+
+    watch = watch or _Stopwatch()
+    home = None
+    try:
+        with watch.stage("home"):
+            home = dashboard.read_dashboard(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("홈을 계산하지 못했습니다 (창은 DB 에서 읽습니다)")
+
+    try:
+        with watch.stage("forecast"):
+            if home is not None and not home.forecast_failed:
+                forecasts = [
+                    home.forecasts[account.account_id]
+                    for account in config_module.enabled_accounts(config)
+                    if account.account_id in home.forecasts
+                ]
+            else:
+                # 홈 계산이 안 됐어도 알림은 따로 해 본다.
+                forecasts = forecast_notify.build_forecasts(data_dir, config)
+            forecast_notify.notify_forecasts(data_dir, config, forecasts)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("FULL 예측 알림 실패 (수집 결과는 이미 저장됨)")
+
+    if write:
+        _write_home(data_dir, config, home, watch)
+    return home
+
+
+def _write_home(data_dir: Path, config, home, watch: _Stopwatch) -> None:
+    try:
+        from . import home_view
+
+        with watch.stage("home"):
+            # `home` 이 없으면 (계산 실패) `write` 가 한 번 더 읽어 본다.
+            home_view.write(data_dir, config, home)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("홈 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
+
+
 def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> List[store.SampleRecord]:
     settings = config.settings
     accounts = config_module.enabled_accounts(config)
@@ -174,15 +229,7 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
         logger.exception("오래된 알림 정리 실패 (수집 결과는 이미 저장됨)")
     watch.seconds["notify"] = time.monotonic() - notify_started
 
-    # 예측/급증 알림은 수집이 끝난 뒤 별도로 처리한다. 여기서 실패해도 이미
-    # 저장된 df 표본은 그대로 남아야 하므로 예외를 삼킨다 - 예측은 부가
-    # 정보이고, 수집 자체가 이 사이클의 본질이다.
-    try:
-        with watch.stage("forecast"):
-            forecasts = forecast_notify.build_forecasts(data_dir, config)
-            forecast_notify.notify_forecasts(data_dir, config, forecasts)
-    except Exception:  # pragma: no cover - 방어적 처리
-        logger.exception("FULL 예측 알림 실패 (수집 결과는 이미 저장됨)")
+    home = forecast_and_home(data_dir, config, watch, write=False)
 
     # 밀린 보고서가 있으면 여기서 만든다.
     #
@@ -200,14 +247,8 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
         logger.exception("보고서 생성 실패 (수집 결과는 이미 저장됨)")
 
     # 홈 한 장을 파일로 - 창은 이것만 읽는다 (`home_view`). 실패하면 창이 예전처럼 DB 에서
-    # 읽을 뿐이다.
-    try:
-        from . import home_view
-
-        with watch.stage("home"):
-            home_view.write(data_dir, config)
-    except Exception:  # pragma: no cover - 방어적 처리
-        logger.exception("홈 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
+    # 읽을 뿐이다. 보고서 뒤에 쓰는 것은 예전 순서 그대로다.
+    _write_home(data_dir, config, home, watch)
 
     watch.save(data_dir)
 

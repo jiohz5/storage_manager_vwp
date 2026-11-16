@@ -132,6 +132,60 @@ class RunCollectionCycleTests(unittest.TestCase):
             self.assertIn("new", left[0].read_text(encoding="utf-8"))
 
 
+class OneHomeCalculationTests(unittest.TestCase):
+    """예측 알림과 홈 결과 파일이 홈 계산 하나를 나눠 쓴다.
+
+    예전에는 예측 알림이 계정마다 30일 표본을 읽고, 바로 뒤에 홈 결과 파일을 만들면서
+    같은 것을 또 읽었다. cron 수집은 매번 새 프로세스라 15분마다 가장 무거운 읽기가
+    두 번이었다 (계정 100개·90일: 79MB -> 42MB)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.data_dir = root / "data"
+        self.config = config_module.load_config(self.data_dir)
+        for name in ("a", "b"):
+            (root / name).mkdir()
+            config_module.add_account(self.config, name, str(root / name))
+        self.config.accounts[1].enabled = False
+        config_module.save_config(self.data_dir, self.config)
+
+    def run_cycle(self):
+        with patch("smvwp.cycle.collector.collect_all", return_value=[]):
+            run_collection_cycle(self.data_dir, self.config)
+
+    def test_the_history_is_read_once(self):
+        from smvwp import dashboard, forecast_notify, home_view
+
+        with patch("smvwp.dashboard._read_history", wraps=dashboard._read_history) as history, \
+                patch("smvwp.forecast_notify.build_forecasts",
+                      wraps=forecast_notify.build_forecasts) as build, \
+                patch("smvwp.cycle.forecast_notify.notify_forecasts",
+                      wraps=forecast_notify.notify_forecasts) as notify:
+            self.run_cycle()
+        self.assertEqual(history.call_count, 1)
+        # 예측은 한 번, 그 이력을 받아서 낸다 (스스로 DB 를 읽는 길로 가지 않는다).
+        self.assertEqual(build.call_count, 1)
+        self.assertIsNotNone(build.call_args.kwargs.get("history"))
+        # 알림은 켜진 계정의 예측만 받는다 (예전과 같다).
+        forecasts = notify.call_args[0][2]
+        self.assertEqual([item.account_id for item in forecasts],
+                         [self.config.accounts[0].account_id])
+        self.assertIsNone(home_view.problem(self.data_dir, self.config))
+
+    def test_alerts_still_go_out_when_the_home_cannot_be_calculated(self):
+        from smvwp import forecast_notify
+
+        with patch("smvwp.dashboard.read_dashboard", side_effect=RuntimeError("x")), \
+                patch("smvwp.cycle.forecast_notify.build_forecasts",
+                      wraps=forecast_notify.build_forecasts) as build, \
+                patch("smvwp.cycle.forecast_notify.notify_forecasts", return_value=0) as notify:
+            self.run_cycle()
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(notify.call_count, 1)
+
+
 class CycleTimingTests(unittest.TestCase):
     """한 바퀴가 어디에 시간을 썼나를 남긴다 - `smvwp_cli.py status` 가 읽는다.
 
