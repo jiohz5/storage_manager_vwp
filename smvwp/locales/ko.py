@@ -478,6 +478,7 @@ STRINGS = {
     "data.count.rows": "{count}줄",
     "data.count.files": "파일 {count}개",
     "data.count.accounts": "계정 {count}개",
+    "data.count.more": "{count}줄 넘음",
     "data.keep.days": "{days}일",
     "data.keep.generations": "최근 세대 {count}개",
     "data.keep.forever": "지우지 않음",

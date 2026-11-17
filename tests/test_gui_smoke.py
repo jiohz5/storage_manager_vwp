@@ -2849,6 +2849,15 @@ class DataFolderDialogTests(_GuiCase):
         self.assertAlmostEqual(max(bar[0] for bar in sized), 1.0)
         self.assertTrue(self.dialog.summary_label.text())
 
+    def test_a_count_cut_at_the_cap_says_so(self):
+        from smvwp import data_inventory, i18n
+        from smvwp.gui.data_dialog import count_text
+
+        item = data_inventory.Item(key="data.scan.results", count=100000, count_more=True)
+        self.assertEqual(count_text(item), i18n.t("data.count.more", count="100,000"))
+        item.count_more = False
+        self.assertEqual(count_text(item), i18n.t("data.count.rows", count="100,000"))
+
     def test_the_main_window_has_a_way_to_it(self):
         from smvwp.gui.main_window import MainWindow
 

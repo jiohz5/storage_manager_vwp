@@ -42,6 +42,7 @@ class Item:
     size_bytes: Optional[int] = None   # 파일 단위로만 안다 - DB 안의 종류는 None
     count: Optional[int] = None
     count_unit: str = "rows"           # "rows" | "files" | "accounts"
+    count_more: bool = False           # 행이 `count`(= COUNT_CAP) 보다 많다 - 끝까지 세지 않았다
     oldest: Optional[str] = None       # ISO (UTC)
     keep: str = KEEP_CURRENT
     keep_value: Optional[int] = None
@@ -143,7 +144,7 @@ def _samples_item(data_dir: Path, settings) -> Item:
     if not path.exists():
         return item
     with store.session(data_dir) as conn:
-        item.count, item.oldest = _count_and_oldest(conn, "samples", "collected_at")
+        item.count, item.count_more, item.oldest = _count_and_oldest(conn, "samples", "collected_at")
     return item
 
 
@@ -155,28 +156,30 @@ def _scan_item(data_dir: Path, settings) -> Item:
     if not path.exists():
         return item
     with scan_store.session(data_dir) as conn:
-        runs, first_run = _count_and_oldest(conn, "scan_runs", "started_at")
-        results, _ = _count_and_oldest(conn, "baseline_results", None)
-        checkpoints, _ = _count_and_oldest(conn, "scan_checkpoints", None)
-        large, _ = _count_and_oldest(conn, "baseline_large_files", None)
-        loads, first_load = _count_and_oldest(conn, "scan_load_samples", "sampled_at")
-        servers, first_server = _count_and_oldest(conn, "server_samples", "sampled_at")
-        usage, first_usage = _count_and_oldest(conn, "usage_events", "happened_at")
+        runs = _count_and_oldest(conn, "scan_runs", "started_at")
+        results = _count_and_oldest(conn, "baseline_results", None)
+        checkpoints = _count_and_oldest(conn, "scan_checkpoints", None)
+        large = _count_and_oldest(conn, "baseline_large_files", None)
+        loads = _count_and_oldest(conn, "scan_load_samples", "sampled_at")
+        servers = _count_and_oldest(conn, "server_samples", "sampled_at")
+        usage = _count_and_oldest(conn, "usage_events", "happened_at")
+    first_run = runs[2]
     keep_generations = settings.detail_scan_keep_generations
+
+    def child(key, counted, keep, keep_value=None, oldest=None):
+        count, more, first = counted
+        return Item(key=key, count=count, count_more=more, oldest=oldest or first,
+                    keep=keep, keep_value=keep_value)
+
     item.children = [
-        Item(key="data.scan.results", count=results, oldest=first_run,
-             keep=KEEP_GENERATIONS, keep_value=keep_generations),
-        Item(key="data.scan.checkpoints", count=checkpoints,
-             keep=KEEP_GENERATIONS, keep_value=keep_generations),
-        Item(key="data.scan.large_files", count=large,
-             keep=KEEP_GENERATIONS, keep_value=keep_generations),
-        Item(key="data.scan.runs", count=runs, oldest=first_run, keep=KEEP_FOREVER),
-        Item(key="data.scan.load_samples", count=loads, oldest=first_load,
-             keep=KEEP_DAYS, keep_value=settings.load_sample_retention_days),
-        Item(key="data.scan.server_samples", count=servers, oldest=first_server,
-             keep=KEEP_DAYS, keep_value=settings.server_sample_retention_days),
-        Item(key="data.scan.usage", count=usage, oldest=first_usage,
-             keep=KEEP_DAYS, keep_value=usage_log.DEFAULT_RETENTION_DAYS),
+        child("data.scan.results", results, KEEP_GENERATIONS, keep_generations, oldest=first_run),
+        child("data.scan.checkpoints", checkpoints, KEEP_GENERATIONS, keep_generations),
+        child("data.scan.large_files", large, KEEP_GENERATIONS, keep_generations),
+        child("data.scan.runs", runs, KEEP_FOREVER),
+        child("data.scan.load_samples", loads, KEEP_DAYS, settings.load_sample_retention_days),
+        child("data.scan.server_samples", servers, KEEP_DAYS,
+              settings.server_sample_retention_days),
+        child("data.scan.usage", usage, KEEP_DAYS, usage_log.DEFAULT_RETENTION_DAYS),
     ]
     item.oldest = first_run
     return item
@@ -190,7 +193,7 @@ def _search_item(data_dir: Path) -> Item:
     if not path.exists():
         return item
     with search_index.session(data_dir) as conn:
-        item.count, _ = _count_and_oldest(conn, "search_entries", None)
+        item.count, item.count_more, _ = _count_and_oldest(conn, "search_entries", None)
     return item
 
 
@@ -233,16 +236,33 @@ def _db_size(path: Path) -> int:
     return sum(_size(Path(str(path) + suffix)) for suffix in ("", "-journal", "-wal", "-shm"))
 
 
+# 행은 여기까지만 센다. 그 너머는 "넘음" 이라고만 한다.
+#
+# 끝까지 세면 표 전체(또는 가장 작은 인덱스 전체)를 읽는다 - 스캔 DB 가 5GB 면 창을
+# 한 번 여는 데 600MB 였다 (`tests/read_cost.py`). 이 창이 답하려는 것은 "무엇이
+# 자리를 차지하나, 언제부터 쌓였나" 이고 그것은 파일 크기와 가장 오래된 시각이
+# 말한다. 수십만 줄이 정확히 몇 줄인지는 그 값을 치를 만큼 쓸모 있지 않다.
+# 근삿값(페이지 수로 어림 등)은 내지 않는다 - 지운 자리가 많으면 크게 빗나간다.
+COUNT_CAP = 100_000
+
+
 def _count_and_oldest(conn, table: str, stamp_column: Optional[str]):
+    """`(행 수, 상한을 넘었나, 가장 이른 시각)`. 표가 없으면 `(None, False, None)`."""
+
     try:
+        count = conn.execute(
+            f"SELECT COUNT(*) FROM (SELECT 1 FROM {table} LIMIT ?)", (COUNT_CAP + 1,)
+        ).fetchone()[0]
+        oldest = None
         if stamp_column:
-            row = conn.execute(f"SELECT COUNT(*), MIN({stamp_column}) FROM {table}").fetchone()
-            return row[0], row[1]
-        return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], None
+            oldest = conn.execute(f"SELECT MIN({stamp_column}) FROM {table}").fetchone()[0]
     except sqlite3.OperationalError as exc:
         if sqlite_db.is_busy(exc):
             raise
-        return None, None   # 그 표가 아직 없다 (예전 DB)
+        return None, False, None   # 그 표가 아직 없다 (예전 DB)
+    if count > COUNT_CAP:
+        return COUNT_CAP, True, oldest
+    return count, False, oldest
 
 
 def _walk(folder: Path):

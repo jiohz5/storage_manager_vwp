@@ -52,6 +52,8 @@ def count_text(item: data_inventory.Item) -> str:
         return i18n.t("data.failed")
     if item.count is None:
         return ""
+    if item.count_more:
+        return i18n.t("data.count.more", count=f"{item.count:,}")
     return i18n.t(f"data.count.{item.count_unit}", count=f"{item.count:,}")
 
 

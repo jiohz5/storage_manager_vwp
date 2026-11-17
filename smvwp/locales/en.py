@@ -458,6 +458,7 @@ STRINGS = {
     "data.count.rows": "{count} rows",
     "data.count.files": "{count} files",
     "data.count.accounts": "{count} accounts",
+    "data.count.more": "Over {count} rows",
     "data.keep.days": "{days} days",
     "data.keep.generations": "last {count} generations",
     "data.keep.forever": "kept",

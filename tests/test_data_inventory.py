@@ -93,6 +93,23 @@ class FilledFolderTests(_Case):
         self.assertEqual(steps, [(i + 1, len(data_inventory.STEPS), key)
                                  for i, key in enumerate(data_inventory.STEPS)])
 
+    def test_rows_are_counted_only_up_to_the_cap(self):
+        # 스캔 DB 가 5GB 면 표마다 끝까지 세는 것만으로 600MB 를 읽었다. 상한까지만 세고
+        # 그 너머는 "넘음" 이라고만 한다 - 지어낸 근삿값은 내지 않는다.
+        with patch.object(data_inventory, "COUNT_CAP", 2):
+            items = self.items(data_inventory.build(self.data_dir, self.config))
+        samples = items["data.item.samples"]
+        self.assertEqual((samples.count, samples.count_more), (2, True))
+        self.assertEqual(samples.oldest, self.first_sample.isoformat())
+        runs = next(child for child in items["data.item.scan"].children
+                    if child.key == "data.scan.runs")
+        self.assertEqual((runs.count, runs.count_more), (1, False))
+
+        with patch.object(data_inventory, "COUNT_CAP", 3):
+            items = self.items(data_inventory.build(self.data_dir, self.config))
+        self.assertEqual((items["data.item.samples"].count, items["data.item.samples"].count_more),
+                         (3, False))
+
     def test_one_part_failing_still_shows_the_rest(self):
         with patch.object(data_inventory, "_samples_item", side_effect=OSError("stale handle")):
             inventory = data_inventory.build(self.data_dir, self.config)
