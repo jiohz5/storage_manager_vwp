@@ -28,6 +28,32 @@ DF_INODES_UNKNOWN_OUTPUT = (
     "nfsserver:/vol         -       -       -     - /user/project_a\n"
 )
 
+# `df -k --output=source,size,used,avail,pcent,itotal,iused,iavail,ipcent,target`
+DF_COMBINED_OUTPUT = (
+    "Filesystem     1K-blocks     Used    Avail Use%  Inodes  IUsed   IFree IUse% Mounted on\n"
+    "/dev/sda1      103080332 45678900 52145432  47% 6553600 123456 6430144    2% /user/project a\n"
+)
+
+DF_COMBINED_NFS_OUTPUT = (
+    "Filesystem     1K-blocks     Used    Avail Use% Inodes IUsed IFree IUse% Mounted on\n"
+    "nfsserver:/vol 103080332 45678900 52145432  47%      -     -     -     - /user/project_a\n"
+)
+
+
+def _df(combined=None, bytes_output=DF_BYTES_OUTPUT, inode_output=DF_INODES_OUTPUT, calls=None):
+    """`--output` 은 combined 로 (없으면 그런 옵션이 없다는 df), -Pk·-Pi 는 예전 출력으로."""
+
+    def run(args, *_args, **_kwargs):
+        if calls is not None:
+            calls.append(list(args))
+        if any(arg.startswith("--output") for arg in args):
+            if combined is None:
+                return _completed("", returncode=1, stderr="df: unrecognized option '--output'")
+            return _completed(combined)
+        return _completed(inode_output if "-Pi" in args else bytes_output)
+
+    return run
+
 
 class QueryBytesTests(unittest.TestCase):
     @patch("smvwp.collector.subprocess.run")
@@ -72,13 +98,75 @@ class QueryInodesTests(unittest.TestCase):
         self.assertIsNone(result.pct)
 
 
+class QueryUsageTests(unittest.TestCase):
+    """용량과 inode 를 `df` 한 번에 묻는다 (예전에는 계정마다 두 번)."""
+
+    def test_one_df_answers_both(self):
+        calls = []
+        with patch("smvwp.collector.subprocess.run", side_effect=_df(DF_COMBINED_OUTPUT, calls=calls)):
+            byte_result, inode_result = collector.query_usage("/user/project a")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((byte_result.filesystem, byte_result.mount_point),
+                         ("/dev/sda1", "/user/project a"))
+        self.assertEqual((byte_result.total_kb, byte_result.used_kb, byte_result.avail_kb,
+                          byte_result.pct), (103080332, 45678900, 52145432, 47.0))
+        self.assertEqual((inode_result.total, inode_result.used, inode_result.avail,
+                          inode_result.pct), (6553600, 123456, 6430144, 2.0))
+        self.assertEqual(inode_result.mount_point, "/user/project a")
+
+    def test_unreported_inodes_stay_unknown(self):
+        with patch("smvwp.collector.subprocess.run", side_effect=_df(DF_COMBINED_NFS_OUTPUT)):
+            byte_result, inode_result = collector.query_usage("/user/project_a")
+        self.assertEqual(byte_result.pct, 47.0)
+        self.assertIsNone(inode_result.total)
+        self.assertIsNone(inode_result.pct)
+
+    def test_df_without_output_option_asks_twice_as_before(self):
+        calls = []
+        with patch("smvwp.collector.subprocess.run", side_effect=_df(None, calls=calls)):
+            byte_result, inode_result = collector.query_usage("/user/project_a")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual((byte_result.pct, inode_result.pct), (47.0, 2.0))
+
+    def test_odd_output_asks_twice_as_before(self):
+        odd = DF_COMBINED_OUTPUT.replace("47%", "-")
+        with patch("smvwp.collector.subprocess.run", side_effect=_df(odd)):
+            byte_result, inode_result = collector.query_usage("/user/project_a")
+        self.assertEqual((byte_result.pct, inode_result.pct), (47.0, 2.0))
+
+    def test_timeout_is_not_asked_again(self):
+        calls = []
+
+        def hung(args, *_args, **kwargs):
+            calls.append(args)
+            raise subprocess.TimeoutExpired(args, kwargs.get("timeout"))
+
+        with patch("smvwp.collector.subprocess.run", side_effect=hung):
+            with self.assertRaises(collector.CollectorError):
+                collector.query_usage("/slow/mount")
+        self.assertEqual(len(calls), 1)
+
+    def test_real_failure_keeps_the_old_message(self):
+        def denied(args, *_args, **_kwargs):
+            return _completed("", returncode=1, stderr="df: /user/x: Permission denied")
+
+        with patch("smvwp.collector.subprocess.run", side_effect=denied):
+            with self.assertRaisesRegex(collector.CollectorError, "Permission denied"):
+                collector.query_usage("/user/x")
+
+
 class CollectAccountTests(unittest.TestCase):
+    def test_one_df_per_account(self):
+        calls = []
+        with patch("smvwp.collector.subprocess.run", side_effect=_df(DF_COMBINED_OUTPUT, calls=calls)):
+            record = collector.collect_account(Account(name="project_a", path="/user/project_a"))
+        self.assertTrue(record.ok)
+        self.assertEqual((record.byte_pct, record.inode_pct), (47.0, 2.0))
+        self.assertEqual(len(calls), 1)
+
     @patch("smvwp.collector.subprocess.run")
     def test_success_sets_ok_and_tiers(self, mock_run):
-        mock_run.side_effect = [
-            _completed(DF_BYTES_OUTPUT),
-            _completed(DF_INODES_OUTPUT),
-        ]
+        mock_run.side_effect = _df()
         account = Account(name="project_a", path="/user/project_a")
         record = collector.collect_account(account)
         self.assertTrue(record.ok)
@@ -99,7 +187,7 @@ class CollectAccountTests(unittest.TestCase):
     def test_overall_tier_is_worse_of_byte_and_inode(self, mock_run):
         byte_output = DF_BYTES_OUTPUT.replace("47%", "96%")
         inode_output = DF_INODES_OUTPUT  # 2%, normal
-        mock_run.side_effect = [_completed(byte_output), _completed(inode_output)]
+        mock_run.side_effect = _df(bytes_output=byte_output, inode_output=inode_output)
         account = Account(name="project_a", path="/user/project_a")
         record = collector.collect_account(account)
         self.assertEqual(record.byte_tier, tiers.ALERT)

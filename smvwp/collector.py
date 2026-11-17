@@ -22,7 +22,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from . import procio
 from . import quota as quota_module
@@ -33,6 +33,10 @@ from .store import SampleRecord
 
 class CollectorError(Exception):
     pass
+
+
+class DfTimeout(CollectorError):
+    """`df` 가 제한 시간 안에 끝나지 않았다 - 다른 방법으로 다시 묻지 않는다."""
 
 
 @dataclass
@@ -63,7 +67,7 @@ def _run_df(args: List[str], timeout: int) -> str:
     except FileNotFoundError as exc:
         raise CollectorError("df 명령을 찾을 수 없습니다") from exc
     except subprocess.TimeoutExpired as exc:
-        raise CollectorError(f"df 명령이 {timeout}초 내에 끝나지 않았습니다") from exc
+        raise DfTimeout(f"df 명령이 {timeout}초 내에 끝나지 않았습니다") from exc
 
     if proc.returncode != 0:
         message = (proc.stderr or proc.stdout or "").strip()
@@ -140,6 +144,68 @@ def query_inodes(path: str, timeout: int = 10) -> DfInodeResult:
     )
 
 
+# 용량과 inode 를 `df` 한 번에 묻는 열. GNU coreutils 8.21 부터 있다 (RHEL 7 이
+# 8.22, RHEL 8 이 8.30). 마운트 지점은 공백이 있을 수 있어 맨 끝에 둔다.
+DF_OUTPUT_COLUMNS = "source,size,used,avail,pcent,itotal,iused,iavail,ipcent,target"
+
+
+def _parse_combined(output: str) -> Optional[Tuple[DfBytesResult, DfInodeResult]]:
+    """`df -k --output=...` 출력을 푼다. 모양이 다르면 None (예전 두 번 묻기로)."""
+
+    lines = [line for line in output.splitlines() if line.strip()]
+    if len(lines) != 2:
+        return None
+    parts = lines[1].split(None, 9)
+    if len(parts) != 10:
+        return None
+    source, size, used, avail, pcent, itotal, iused, iavail, ipcent, target = parts
+
+    def _maybe_int(value: str) -> Optional[int]:
+        try:
+            return int(value)
+        except ValueError:
+            return None
+
+    def _maybe_pct(value: str) -> Optional[float]:
+        try:
+            return float(value.rstrip("%"))
+        except ValueError:
+            return None
+
+    total_kb, used_kb, avail_kb = _maybe_int(size), _maybe_int(used), _maybe_int(avail)
+    pct = _maybe_pct(pcent)
+    if total_kb is None or used_kb is None or avail_kb is None or pct is None:
+        return None
+    return (
+        DfBytesResult(filesystem=source, mount_point=target, total_kb=total_kb,
+                      used_kb=used_kb, avail_kb=avail_kb, pct=pct),
+        DfInodeResult(filesystem=source, mount_point=target, total=_maybe_int(itotal),
+                      used=_maybe_int(iused), avail=_maybe_int(iavail),
+                      pct=_maybe_pct(ipcent)),
+    )
+
+
+def query_usage(path: str, timeout: int = 10) -> Tuple[DfBytesResult, DfInodeResult]:
+    """용량과 inode 를 `df` 한 번으로 묻는다.
+
+    예전에는 계정마다 `df -Pk` 와 `df -Pi` 두 번이었다. `--output` 이 없는 `df`
+    (GNU 가 아니거나 아주 오래된 것)나 출력 모양이 다르면 예전 두 번으로 묻는다.
+    제한 시간을 넘긴 것은 다시 묻지 않는다 - 파일서버가 답하지 않는데 두 번
+    기다리면 수집이 그만큼 늦는다."""
+
+    try:
+        output = _run_df(["df", "-k", f"--output={DF_OUTPUT_COLUMNS}", "--", path], timeout)
+    except DfTimeout:
+        raise
+    except CollectorError:
+        output = None
+    if output is not None:
+        parsed = _parse_combined(output)
+        if parsed is not None:
+            return parsed
+    return query_bytes(path, timeout=timeout), query_inodes(path, timeout=timeout)
+
+
 def collect_account(
     account: Account,
     df_timeout_seconds: int = 10,
@@ -151,8 +217,7 @@ def collect_account(
 
     collected_at = datetime.now(timezone.utc).isoformat()
     try:
-        byte_result = query_bytes(account.path, timeout=df_timeout_seconds)
-        inode_result = query_inodes(account.path, timeout=df_timeout_seconds)
+        byte_result, inode_result = query_usage(account.path, timeout=df_timeout_seconds)
     except CollectorError as exc:
         return SampleRecord(
             account_id=account.account_id,
