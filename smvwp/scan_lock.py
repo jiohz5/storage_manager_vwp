@@ -219,16 +219,32 @@ def acquire_lock(data_dir: Path, triggered_by: str) -> str:
     raise LockBusyError("잠금을 얻지 못했습니다")  # pragma: no cover - 위에서 끝난다
 
 
+# 잠금 파일을 지우려다 "남이 쓰는 중" 이면 다시 해 보는 횟수와 간격.
+#
+# 윈도는 남이 열고 있는 파일을 지우지 못한다 (WinError 32). 잠금을 기다리는 쪽은
+# 짧은 간격으로 잠금 파일을 읽으므로, 푸는 순간이 그 읽기와 겹치면 지우기가 실패해
+# 잠금이 남았다. 리눅스(NFS 포함)는 열린 파일도 지운다 - 실기에서는 첫 번에 된다.
+RELEASE_TRIES = 5
+RELEASE_RETRY_SECONDS = 0.05
+
+
 def release_lock(data_dir: Path, run_id: str) -> None:
     """이 run_id가 쥔 잠금일 때만 지운다 (그 사이 다른 실행이 잠금을 새로
     얻었다면 건드리지 않는다 - 남의 잠금을 실수로 지우지 않기 위한 안전망)."""
 
     info = read_lock(data_dir)
-    if info is not None and info.run_id == run_id:
+    if info is None or info.run_id != run_id:
+        return
+    for attempt in range(RELEASE_TRIES):
         try:
             lock_file(data_dir).unlink()
+            return
         except FileNotFoundError:
-            pass
+            return
+        except PermissionError:
+            if attempt == RELEASE_TRIES - 1:
+                raise
+            time.sleep(RELEASE_RETRY_SECONDS)
 
 
 def request_stop(data_dir: Path, run_id: str) -> None:

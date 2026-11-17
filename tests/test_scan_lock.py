@@ -46,6 +46,41 @@ class AcquireReleaseLockTests(unittest.TestCase):
             info = scan_lock.read_lock(data_dir)
             self.assertEqual(info.run_id, second_run_id)
 
+    def test_release_survives_someone_reading_the_lock_at_that_moment(self):
+        """윈도에서는 남이 열고 있는 파일을 지우지 못한다 (WinError 32).
+
+        기다리는 cron 이 잠금을 읽는 바로 그 순간 풀면 지우기가 실패해 잠금이
+        남았다 - 기다리던 쪽은 끝내 못 잡고 물러났다 (test_scan_conflict 가
+        가끔 깨지던 까닭). 잠깐 뒤 다시 지운다."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            run_id = scan_lock.acquire_lock(data_dir, "gui")
+            real_unlink = Path.unlink
+            tries = []
+
+            def busy_once(path, *args, **kwargs):
+                tries.append(path)
+                if len(tries) == 1:
+                    raise PermissionError(32, "being used by another process")
+                return real_unlink(path, *args, **kwargs)
+
+            with patch.object(Path, "unlink", busy_once), \
+                    patch("smvwp.scan_lock.time.sleep"):
+                scan_lock.release_lock(data_dir, run_id)
+            self.assertFalse(scan_lock.lock_file(data_dir).exists())
+            self.assertEqual(len(tries), 2)
+
+    def test_release_gives_up_after_a_few_tries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            run_id = scan_lock.acquire_lock(data_dir, "gui")
+            with patch.object(Path, "unlink", side_effect=PermissionError(13, "denied")), \
+                    patch("smvwp.scan_lock.time.sleep") as slept:
+                with self.assertRaises(PermissionError):
+                    scan_lock.release_lock(data_dir, run_id)
+            self.assertEqual(slept.call_count, scan_lock.RELEASE_TRIES - 1)
+
 
 class OtherHostTests(unittest.TestCase):
     """데이터 디렉터리는 NFS 에서 여러 장비가 함께 본다.
