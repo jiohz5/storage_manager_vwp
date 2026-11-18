@@ -435,6 +435,32 @@ def command_status(args) -> int:
     return 1 if verdict == status_check.BAD else 0
 
 
+def command_diagnose(args) -> int:
+    """실기 확인 항목을 한 번에 읽어 보고서 파일 하나로 (`smvwp.field_check`).
+
+    읽기만 한다. 보고서는 지금 폴더(못 쓰면 집 폴더)에 남고, 그 파일을 그대로
+    개발 쪽에 붙여 주면 된다 - 돌려주는 법은 보고서 맨 위에 있다."""
+
+    from smvwp import field_check
+
+    data_dir = _resolve_or_fail(args.data_dir)
+    try:
+        config = config_module.load_config(data_dir)
+    except config_module.ConfigError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print("실기 점검 중... (읽기만 합니다, 보통 1분 안)", flush=True)
+    text = field_check.build(data_dir, config)
+    target = Path(args.out) if args.out else field_check.default_report_path()
+    written = field_check.write(text, target)
+    summary = text.split("== 요약 ==", 1)[1].split("\n== ", 1)[0]
+    print("== 요약 ==" + summary.rstrip())
+    print("")
+    print(f"보고서: {written}")
+    print("이 파일을 통째로 Claude 에게 붙여 주세요 (복사가 안 되면 위 '요약' 만).")
+    return 0
+
+
 # -- usage -----------------------------------------------------------------
 #
 # 이 도구를 어떻게 안착시킬지가 아직 미지수다 - 몇 명이 쓸지, 무엇을 보러
@@ -791,6 +817,13 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="지금 제대로 돌고 있나 (수집·홈 결과 파일·야간 스캔)")
     _add_data_dir(status)
     status.set_defaults(func=command_status)
+
+    diagnose = sub.add_parser(
+        "diagnose", help="실기 확인 항목을 한 번에 읽어 보고서 파일로 (읽기 전용)"
+    )
+    _add_data_dir(diagnose)
+    diagnose.add_argument("--out", help="보고서 파일 (기본: 지금 폴더의 smvwp_check_<호스트>_<시각>.txt)")
+    diagnose.set_defaults(func=command_diagnose)
 
     usage = sub.add_parser("usage", help="누가 이 도구를 얼마나 쓰는지")
     _add_data_dir(usage)

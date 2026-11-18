@@ -501,6 +501,21 @@ smvwp_cli.py scan --stop
 | 진행이 더딤 | `smvwp_cli.py scan --status` |
 | 환경 자체가 의심스러움 | `./run.csh --diagnose` |
 | 성능을 재고 싶음 | `smvwp_cli.py probe --path <경로>` (`PROBE_CODES.md`) |
+| 개발 쪽에 상황을 알려야 함 | `smvwp_cli.py diagnose` - 아래 |
+
+### 개발 쪽에 넘길 점검 보고서 - `smvwp_cli.py diagnose`
+
+    $STORAGE_MANAGER_PYTHON_BIN smvwp_cli.py diagnose
+
+한 번 돌리면 지금 폴더에 `smvwp_check_<호스트>_<시각>.txt` 가 남는다 (못 쓰면 집
+폴더, `--out <파일>` 로 정할 수 있다). 화면에는 요약만 나온다. 상태·수집 한 바퀴의
+시간·`df` 한 번 묻기가 되는지·홈 결과 파일과 창이 그것을 읽었는지·최근 야간 실행과
+다음 순서·서버 부하 표본·데이터 폴더에 쌓인 것·PyQt5/PySide6·cron·로그의 ERROR 를
+모은다. **읽기만 한다** (보통 1분 안, 바깥 명령에는 모두 제한 시간).
+
+파일을 통째로 붙여 주면 된다. 돌려주는 법은 파일 맨 위에 있다 - 복사가 안 되면
+'요약' 절만 옮겨 적어도 된다. 계정 이름·호스트 이름은 들어가고, 계정 경로·파일 이름·
+남의 프로세스 명령줄은 넣지 않는다.
 
 ---
 
