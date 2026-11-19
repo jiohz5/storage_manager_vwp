@@ -3001,5 +3001,152 @@ class SearchPinTests(_GuiCase):
             self.assertTrue(dialog._prompt_for_pin())
 
 
+class PathTableTests(_GuiCase):
+    """큰 파일·용량 변화 표에서 바로 손대기 - 터미널, 주인, 목록 넘기기, 잘리지 않는 크기.
+
+    표에서 찾아도 경로를 손으로 옮겨 cd 해야 했고, 공용 계정이라 누구 것인지 몰라
+    말할 사람을 몰랐고, 목록을 남에게 넘길 길이 없었다. 실기 글꼴에서는 크기의
+    단위가 잘렸다 ('1.2 T…')."""
+
+    TB = 1024 ** 3
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui import path_actions
+        from smvwp.gui.scan_pages import LargeFilesPage
+
+        path_actions.OwnerLookup._known.clear()
+        self.root = Path(self.config.accounts[0].path)
+        (self.root / "run").mkdir()
+        self.file = self.root / "run" / "huge.bin"
+        self.file.write_bytes(b"x")
+        self.page = LargeFilesPage()
+        self.page.retranslate()
+        self.addCleanup(self.page.close)
+
+    def show(self, *extra):
+        from smvwp import large_files
+
+        rows = [(str(self.file), 3 * self.TB, 3 * self.TB)] + list(extra)
+        files = large_files.build(rows, 10 * self.TB)
+        self.page.show_files(files, "proj", str(self.root), 10 * self.TB)
+
+    def wait_owners(self):
+        import time
+
+        from smvwp.gui.scan_pages import LARGE_OWNER
+
+        table = self.page.table
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            _app().processEvents()
+            texts = [table.item(row, LARGE_OWNER).text() for row in range(table.rowCount())]
+            if "…" not in texts:
+                return texts
+            time.sleep(0.02)
+        self.fail(f"주인 칸이 채워지지 않았다: {texts}")
+
+    def test_owner_column_is_filled_from_the_files(self):
+        from smvwp.detail_scan import owner_name
+        from smvwp import i18n
+
+        i18n.set_language("ko")
+        self.show((str(self.root / "gone.bin"), self.TB, self.TB))
+        expected = owner_name(os.lstat(self.file).st_uid)
+        texts = self.wait_owners()
+        by_path = {self.page.paths.path_at(row): texts[row] for row in range(len(texts))}
+        self.assertEqual(by_path[str(self.file)], expected)
+        self.assertEqual(by_path[str(self.root / "gone.bin")], i18n.t("paths.owner.gone"))
+
+    def test_double_click_opens_mate_terminal_in_the_files_folder(self):
+        from smvwp.gui import path_actions
+
+        self.show()
+        which = {"mate-terminal": "/usr/bin/mate-terminal"}
+        with patch("shutil.which", side_effect=which.get), \
+                patch("subprocess.Popen") as popen:
+            self.page.table.cellDoubleClicked.emit(0, 0)
+        argv = popen.call_args[0][0]
+        self.assertEqual(argv, ["/usr/bin/mate-terminal",
+                                f"--working-directory={self.file.parent}"])
+        self.assertTrue(popen.call_args[1]["start_new_session"])
+        self.assertEqual(path_actions.folder_for("/a/b", False), "/a/b")
+
+    def test_no_terminal_copies_the_folder_and_says_so(self):
+        from PyQt5.QtWidgets import QApplication
+
+        self.show()
+        with patch("shutil.which", return_value=None), \
+                patch("smvwp.gui.path_actions.QMessageBox.information") as told:
+            self.page.table.cellDoubleClicked.emit(0, 0)
+        self.assertEqual(QApplication.clipboard().text(), str(self.file.parent))
+        self.assertIn(str(self.file.parent), told.call_args[0][2])
+
+    def test_the_list_carries_size_owner_and_full_path(self):
+        from PyQt5.QtWidgets import QApplication
+
+        self.show()
+        owners = self.wait_owners()
+        self.page.paths.copy_btn.click()
+        text = QApplication.clipboard().text()
+        self.assertIn("proj", text.splitlines()[0])
+        row = [line for line in text.splitlines() if str(self.file) in line]
+        self.assertEqual(len(row), 1, text)
+        self.assertIn("3.0 TB", row[0])
+        self.assertIn(owners[0], row[0])
+        self.assertTrue(row[0].rstrip().endswith(str(self.file)))
+
+    def test_the_list_can_be_saved_to_a_file(self):
+        self.show()
+        self.wait_owners()
+        target = Path(self.tmp.name) / "list.txt"
+        with patch("smvwp.gui.path_actions.QFileDialog.getSaveFileName",
+                   return_value=(str(target), "")):
+            self.page.paths.save_btn.click()
+        self.assertIn(str(self.file), target.read_text(encoding="utf-8"))
+
+    def test_size_column_is_wide_enough_for_the_unit(self):
+        from smvwp.gui import widgets
+        from smvwp.gui.scan_pages import LARGE_SIZE
+
+        self.page.table.setColumnWidth(LARGE_SIZE, 40)
+        self.show()
+        table = self.page.table
+        text = table.item(0, LARGE_SIZE).text()
+        needed = table.fontMetrics().horizontalAdvance(text) + widgets.CellDelegate.BAR_MIN
+        self.assertGreaterEqual(table.columnWidth(LARGE_SIZE), needed)
+
+    def test_growth_table_has_the_same(self):
+        import time
+
+        from smvwp.gui.scan_pages import GROWTH_OWNER, GrowthPage
+        from smvwp.nightly_scan import AccountScanSnapshot, StatusSnapshot
+
+        page = GrowthPage()
+        page.retranslate()
+        self.addCleanup(page.close)
+        account = self.config.accounts[0]
+        entry = AccountScanSnapshot(
+            account_id=account.account_id, account_name=account.name,
+            last_completed_generation=3, top_paths=[], pending_baseline_count=0,
+            growth=[{"path": str(self.root / "run"), "current_kb": 5 * self.TB,
+                     "previous_kb": self.TB}],
+            current_scan_at="2026-10-01T00:00:00+00:00",
+            previous_scan_at="2026-09-30T00:00:00+00:00",
+        )
+        page.show_account(StatusSnapshot(is_running=False, window_description="",
+                                         latest_run=None, accounts=[entry]), account)
+        self.assertEqual(page.paths.path_at(0), str(self.root / "run"))
+        deadline = time.monotonic() + 5
+        while page.table.item(0, GROWTH_OWNER).text() == "…" and time.monotonic() < deadline:
+            _app().processEvents()
+            time.sleep(0.02)
+        self.assertNotEqual(page.table.item(0, GROWTH_OWNER).text(), "…")
+        with patch("shutil.which", side_effect={"mate-terminal": "mate-terminal"}.get), \
+                patch("subprocess.Popen") as popen:
+            page.table.cellDoubleClicked.emit(0, 0)
+        self.assertEqual(popen.call_args[0][0][1], f"--working-directory={self.root / 'run'}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

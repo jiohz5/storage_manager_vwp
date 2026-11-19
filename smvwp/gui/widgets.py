@@ -448,9 +448,12 @@ class CellDelegate(QStyledItemDelegate):
             )
         elif text:
             painter.setPen(ink)
+            # 들어가는 글은 줄이지 않는다. 막대 옆 숫자는 칸을 글 폭에 딱 맞춰 그리는데,
+            # 폭을 정수로 넘기면 Qt 가 '1.2 TB' 를 '1.2 T…' 로 줄였다 (단위가 잘렸다).
+            fits = metrics.horizontalAdvance(text) <= rect.width() + 1
             painter.drawText(
                 rect, (Qt.AlignRight if right else Qt.AlignLeft) | Qt.AlignVCenter,
-                metrics.elidedText(text, opt.textElideMode, int(rect.width())),
+                text if fits else metrics.elidedText(text, opt.textElideMode, int(rect.width())),
             )
         painter.restore()
 

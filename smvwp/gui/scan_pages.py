@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .. import formatting, i18n, large_files, scan_digest, scan_store, tiers
-from . import theme, visuals, widgets
+from . import path_actions, theme, visuals, widgets
 
 # 세부 탭. 순서가 곧 화면 순서다 - 현황(`overview_page`)이 먼저 열린다.
 TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.tab.growth",
@@ -60,9 +60,12 @@ FINDING_TABS = {
 FINDING_ACCOUNT_ROLE = Qt.UserRole
 FINDING_TAB_ROLE = Qt.UserRole + 1
 
+# 주인 칸은 맨 끝 - 앞 칸 번호를 바꾸지 않는다. 화면을 그릴 때 stat 해서 채운다
+# (`path_actions`) - 공용 계정이라 누구에게 말할지 알아야 손을 쓴다.
 GROWTH_COLUMN_KEYS = ["scan.col.path", "scan.col.current_size", "scan.col.delta",
-                      "scan.col.trend", "scan.col.focus"]
-(GROWTH_PATH, GROWTH_SIZE, GROWTH_DELTA, GROWTH_TREND, GROWTH_FOCUS) = range(5)
+                      "scan.col.trend", "scan.col.focus", "paths.col.owner"]
+(GROWTH_PATH, GROWTH_SIZE, GROWTH_DELTA, GROWTH_TREND, GROWTH_FOCUS,
+ GROWTH_OWNER) = range(6)
 
 # 가장 큰 파일 표. 디렉터리 합계만 보면 "파일 하나가 유난히 크다"를 놓친다 -
 # 300GB 짜리 디렉터리가 고른 파일 3천 개인지 한 파일이 280GB 인지 구분되지
@@ -72,8 +75,9 @@ LARGE_COLUMN_KEYS = [
     "large.col.size",
     "large.col.share",
     "large.col.change",
+    "paths.col.owner",
 ]
-(LARGE_PATH, LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE) = range(4)
+(LARGE_PATH, LARGE_SIZE, LARGE_SHARE, LARGE_CHANGE, LARGE_OWNER) = range(5)
 
 # 화면에 띄우는 줄 수. 반쪽 폭을 나눠 쓸 때는 12 줄로 묶었는데, 탭을 통째로
 # 쓰게 된 뒤로는 묶을 까닭이 없다. 저장소가 계정마다 20 개쯤 남기므로 사실상
@@ -174,7 +178,7 @@ def _root_note(root) -> str:
 def _path_item(path, root) -> QTableWidgetItem:
     """계정 기준으로 줄인 경로 칸. 줄였으면 전체 경로를 툴팁에 둔다."""
 
-    item = QTableWidgetItem(formatting.relative_path(path, root))
+    item = path_actions.path_item(formatting.relative_path(path, root), path)
     if item.text() != path:
         item.setToolTip(path)
     return item
@@ -826,6 +830,7 @@ class GrowthPage(QWidget):
         # 계정 바로 아래 폴더의 장기 이력 (`folder_history`) - "언제부터 이렇게 늘었나".
         header.setSectionResizeMode(GROWTH_TREND, QHeaderView.Fixed)
         table.setColumnWidth(GROWTH_TREND, 80 if compact else 110)
+        header.setSectionResizeMode(GROWTH_OWNER, QHeaderView.ResizeToContents)
         self.bars = widgets.ChangeBarDelegate(table)
         table.setItemDelegateForColumn(GROWTH_DELTA, self.bars)
         self.cells = widgets.CellDelegate(table)
@@ -841,6 +846,14 @@ class GrowthPage(QWidget):
         self._sort_touched = False
         header.sectionClicked.connect(self._on_header_clicked)
         self.table = table
+        self._account_name = ""
+        # 두 번 누르면 그 폴더에서 터미널, 주인 칸, 목록 복사·저장 (`path_actions`).
+        self.paths = path_actions.PathTable(
+            table, GROWTH_PATH, GROWTH_OWNER, title=self.caption.text,
+            file_stem=lambda: f"smvwp_{self._account_name}_growth")
+        at = layout.indexOf(self.caption)
+        layout.removeWidget(self.caption)
+        layout.insertLayout(at, self.paths.bar(self.caption))
         layout.addWidget(table, 1)
         # 줄이 몇 개뿐이면 표가 줄 수만큼만 서고 남는 자리는 바탕이다 - 빈 흰 면이
         # 화면 반을 차지하지 않게 (`fit_table`).
@@ -861,6 +874,7 @@ class GrowthPage(QWidget):
             self.caption.setText(i18n.t("scan.select_account"))
             return
 
+        self._account_name = account.name
         entry = _entry_for(snapshot, account.account_id)
         if entry is None or entry.last_completed_generation is None:
             table.setRowCount(0)
@@ -899,6 +913,9 @@ class GrowthPage(QWidget):
         if not self._sort_touched:
             table.sortItems(default_column, Qt.DescendingOrder)
         table.setSortingEnabled(True)
+        self.paths.start_owners()
+        path_actions.fit_text_column(table, GROWTH_SIZE, widgets.CellDelegate.BAR_MIN + 10)
+        path_actions.fit_text_column(table, GROWTH_DELTA)
         fit_table(table)
 
     def _show_growth(self, entry, account, notice: str) -> int:
@@ -1024,9 +1041,18 @@ class LargeFilesPage(QWidget):
         for column, width in widths:
             header.setSectionResizeMode(column, QHeaderView.Interactive)
             table.setColumnWidth(column, width)
+        header.setSectionResizeMode(LARGE_OWNER, QHeaderView.ResizeToContents)
         self.cells = widgets.ChangeBarDelegate(table)
         table.setItemDelegate(self.cells)
         self.table = table
+        self._account_name = ""
+        # 두 번 누르면 그 파일이 든 폴더에서 터미널, 주인 칸, 목록 복사·저장.
+        self.paths = path_actions.PathTable(
+            table, LARGE_PATH, LARGE_OWNER, title=self.caption.text,
+            file_stem=lambda: f"smvwp_{self._account_name}_large")
+        at = layout.indexOf(self.caption)
+        layout.removeWidget(self.caption)
+        layout.insertLayout(at, self.paths.bar(self.caption))
         layout.addWidget(table, 1)
         layout.addStretch(0)
 
@@ -1063,6 +1089,7 @@ class LargeFilesPage(QWidget):
             self.caption.setText(i18n.t("large.none", account=account_name))
             return
 
+        self._account_name = account_name
         shown = files[:limit or LARGE_ROWS_SHOWN]
         entry = SimpleNamespace(current_measured_kb=total_kb)
         notable = sum(1 for item in shown if item.is_notable)
@@ -1080,7 +1107,8 @@ class LargeFilesPage(QWidget):
         )
         self.cells.scale = max((abs(item.delta_kb or 0) for item in shown if item.compared), default=0)
         for row, item in enumerate(shown):
-            path_item = QTableWidgetItem(formatting.relative_path(item.path, root))
+            path_item = path_actions.path_item(
+                formatting.relative_path(item.path, root), item.path, is_file=True)
             reasons = large_file_reasons(item)
             # 줄여 보여 준 경로는 전체를 툴팁에 둔다 - 사람이 그 경로로 가야 한다.
             tip = reasons + ([item.path] if path_item.text() != item.path else [])
@@ -1124,6 +1152,10 @@ class LargeFilesPage(QWidget):
             # 눈에 띄는 것만, 그 까닭이 된 칸에 색을 준다. 전부 칠하면 아무것도
             # 강조되지 않는다.
             mark_large_file_row(table, row, item, LARGE_PATH, LARGE_SHARE, LARGE_CHANGE)
+        self.paths.start_owners()
+        path_actions.fit_text_column(table, LARGE_SIZE, widgets.CellDelegate.BAR_MIN + 10)
+        path_actions.fit_text_column(table, LARGE_SHARE, widgets.CellDelegate.BAR_MIN + 10)
+        path_actions.fit_text_column(table, LARGE_CHANGE)
         fit_table(table)
 
     def _show_band(self, entry, shown, root: str) -> None:

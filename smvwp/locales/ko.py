@@ -629,6 +629,29 @@ STRINGS = {
         "주황 칸이 눈에 띈 까닭입니다 - 계정 비중 {share}% 이상 · 지난 스캔의 {ratio}배 이상 · "
         "지난 목록에 없던 파일"
     ),
+    "paths.col.owner": "주인",
+    "paths.hint": "두 번 누르면 그 자리에서 터미널",
+    "paths.table_tip": (
+        "줄을 두 번 누르면 그 폴더(파일이면 그 파일이 든 폴더)에서 터미널(mate-terminal)이 "
+        "열립니다. 오른쪽 버튼으로 경로를 복사할 수 있습니다. 이 도구는 아무것도 지우지 않습니다 - "
+        "정리는 주인과 이야기한 뒤 터미널에서 직접 하세요."
+    ),
+    "paths.menu.terminal": "여기서 터미널 열기",
+    "paths.menu.copy": "전체 경로 복사",
+    "paths.btn.copy": "목록 복사",
+    "paths.btn.copy_tip": "표 전체를 글로 복사합니다 (크기·주인·전체 경로). 메신저나 메일에 붙여 넣으세요.",
+    "paths.btn.save": "파일로 저장",
+    "paths.btn.save_tip": "표 전체를 .txt 파일로 저장합니다 (크기·주인·전체 경로).",
+    "paths.save.title": "목록 저장",
+    "paths.save.failed": "저장하지 못했습니다: {error}",
+    "paths.report.path": "전체 경로",
+    "paths.report.made": "만든 때: {stamp} (Storage Manager)",
+    "paths.owner.gone": "없음",
+    "paths.terminal.title": "터미널",
+    "paths.terminal.none": (
+        "터미널 프로그램(mate-terminal 등)을 찾지 못했습니다.\n"
+        "경로를 복사해 두었습니다 - 터미널에서 cd 뒤에 붙여 넣으세요:\n\n{path}"
+    ),
     "large.col.path": "파일",
     "large.col.size": "크기",
     "large.col.share": "계정 비중",

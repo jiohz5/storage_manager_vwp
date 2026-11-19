@@ -610,6 +610,29 @@ STRINGS = {
         "Orange cells are why a file stands out - {share}% or more of the account, "
         "{ratio}x the last scan or more, not in the last list"
     ),
+    "paths.col.owner": "Owner",
+    "paths.hint": "Double-click to open a terminal there",
+    "paths.table_tip": (
+        "Double-click a row to open a terminal (mate-terminal) in that folder (for a file, the "
+        "folder it is in). Right-click to copy the path. This tool never deletes anything - "
+        "talk to the owner, then clean up from the terminal yourself."
+    ),
+    "paths.menu.terminal": "Open a terminal here",
+    "paths.menu.copy": "Copy full path",
+    "paths.btn.copy": "Copy list",
+    "paths.btn.copy_tip": "Copy the whole table as text (size, owner, full path) to paste into chat or mail.",
+    "paths.btn.save": "Save to file",
+    "paths.btn.save_tip": "Save the whole table as a .txt file (size, owner, full path).",
+    "paths.save.title": "Save list",
+    "paths.save.failed": "Could not save: {error}",
+    "paths.report.path": "Full path",
+    "paths.report.made": "Made: {stamp} (Storage Manager)",
+    "paths.owner.gone": "gone",
+    "paths.terminal.title": "Terminal",
+    "paths.terminal.none": (
+        "No terminal program (mate-terminal etc.) was found.\n"
+        "The path is copied - paste it after cd in a terminal:\n\n{path}"
+    ),
     "large.col.path": "File",
     "large.col.size": "Size",
     "large.col.share": "Share of account",
