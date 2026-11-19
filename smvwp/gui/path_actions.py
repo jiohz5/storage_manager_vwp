@@ -10,6 +10,10 @@
 - 남에게 "이것 좀 보고 지워 달라" 고 하려면 목록을 넘겨야 하는데, 복사도 저장도
   안 됐다.
 
+경로 목록이 있는 표에는 늘 **목록 보기** 단추가 있다 - 표 전체를 글로 펼친 창
+(`ListViewer`)이 떠서 마우스로 골라 긁거나 모두 복사하고, 필요하면 거기서 파일로
+저장한다. 바로 복사하던 단추는 무엇이 복사됐는지 보이지 않았다.
+
 ## 지키는 것
 
 - **이 도구는 지우지 않는다.** 터미널을 그 폴더에서 열어 줄 뿐이고, 무엇을 할지는
@@ -31,15 +35,19 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFontDatabase
 from PyQt5.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QTableWidgetItem,
+    QVBoxLayout,
 )
 
 from .. import i18n
@@ -161,6 +169,7 @@ class PathTable:
         self._file_stem = file_stem
         self.owners = OwnerLookup(table)
         self.owners.found.connect(self._fill_owner)
+        self.viewer: Optional["ListViewer"] = None
         table.cellDoubleClicked.connect(self._on_double_click)
         table.setContextMenuPolicy(Qt.CustomContextMenu)
         table.customContextMenuRequested.connect(self._on_menu)
@@ -263,22 +272,19 @@ class PathTable:
     def copy_report(self) -> None:
         QApplication.clipboard().setText(self.report_text())
 
+    def show_list(self) -> "ListViewer":
+        """표 전체를 글로 펼친 창을 띄운다 (창을 막지 않는다 - 표를 보며 같이 쓴다)."""
+
+        if self.viewer is not None:
+            self.viewer.close()
+        self.viewer = ListViewer(self.report_text(), self._title(), self._file_stem(),
+                                 self.table.window())
+        self.viewer.show()
+        self.viewer.raise_()
+        return self.viewer
+
     def save_report(self) -> Optional[Path]:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M")
-        suggested = Path.home() / f"{self._file_stem()}_{stamp}.txt"
-        chosen, _ = QFileDialog.getSaveFileName(
-            self.table, i18n.t("paths.save.title"), str(suggested), "Text (*.txt)"
-        )
-        if not chosen:
-            return None
-        target = Path(chosen)
-        try:
-            target.write_text(self.report_text(), encoding="utf-8")
-        except OSError as exc:
-            QMessageBox.warning(self.table, i18n.t("paths.save.title"),
-                                i18n.t("paths.save.failed", error=exc))
-            return None
-        return target
+        return save_text(self.table, self.report_text(), self._file_stem())
 
     def bar(self, caption: QLabel) -> QHBoxLayout:
         """설명 줄과 같은 줄에 안내와 단추 - 1080 화면에서 표 자리를 한 줄 더 먹지 않게."""
@@ -290,15 +296,91 @@ class PathTable:
         hint.setObjectName("muted")
         hint.setToolTip(i18n.t("paths.table_tip"))
         row.addWidget(hint)
-        self.copy_btn = QPushButton(i18n.t("paths.btn.copy"))
-        self.copy_btn.setToolTip(i18n.t("paths.btn.copy_tip"))
-        self.copy_btn.clicked.connect(self.copy_report)
+        self.view_btn = QPushButton(i18n.t("paths.btn.view"))
+        self.view_btn.setToolTip(i18n.t("paths.btn.view_tip"))
+        self.view_btn.clicked.connect(self.show_list)
         self.save_btn = QPushButton(i18n.t("paths.btn.save"))
         self.save_btn.setToolTip(i18n.t("paths.btn.save_tip"))
         self.save_btn.clicked.connect(self.save_report)
-        row.addWidget(self.copy_btn)
+        row.addWidget(self.view_btn)
         row.addWidget(self.save_btn)
         return row
+
+
+def save_text(parent, text: str, file_stem: str) -> Optional[Path]:
+    """글을 .txt 로 저장한다 (홈 폴더에 이름을 제안). 고른 곳, 안 골랐거나 못 썼으면 None."""
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    suggested = Path.home() / f"{file_stem}_{stamp}.txt"
+    chosen, _ = QFileDialog.getSaveFileName(
+        parent, i18n.t("paths.save.title"), str(suggested), "Text (*.txt)"
+    )
+    if not chosen:
+        return None
+    target = Path(chosen)
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        QMessageBox.warning(parent, i18n.t("paths.save.title"),
+                            i18n.t("paths.save.failed", error=exc))
+        return None
+    return target
+
+
+class ListViewer(QDialog):
+    """경로 목록을 글로 보는 창 - 골라 긁기, 모두 복사, 파일로 저장.
+
+    고정폭 글꼴에 줄 바꿈 없이 (칸이 줄을 맞춘다 - `text_width`). 고칠 수는 없다."""
+
+    def __init__(self, text: str, title: str, file_stem: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title or i18n.t("paths.viewer.title"))
+        self._file_stem = file_stem
+        box = QVBoxLayout(self)
+        heading = QLabel(title)
+        heading.setObjectName("sectionTitle")
+        heading.setWordWrap(True)
+        box.addWidget(heading)
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.text.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        # 앱 스타일시트의 글꼴이 위젯 글꼴을 덮는다 - 고정폭이 아니면 칸 줄이 어긋난다.
+        self.text.setStyleSheet(
+            'QPlainTextEdit { font-family: "DejaVu Sans Mono", "Liberation Mono", '
+            '"D2Coding", "NanumGothicCoding", "Consolas", "Courier New", monospace; }')
+        self.text.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.text.setPlainText(text)
+        box.addWidget(self.text, 1)
+
+        row = QHBoxLayout()
+        self.status = QLabel(i18n.t("paths.viewer.hint", count=max(0, len(text.splitlines()) - 4)))
+        self.status.setObjectName("muted")
+        row.addWidget(self.status, 1)
+        self.copy_btn = QPushButton(i18n.t("paths.viewer.copy_all"))
+        self.copy_btn.clicked.connect(self.copy_all)
+        self.save_btn = QPushButton(i18n.t("paths.btn.save"))
+        self.save_btn.setToolTip(i18n.t("paths.btn.save_tip"))
+        self.save_btn.clicked.connect(self.save)
+        close = QPushButton(i18n.t("common.close"))
+        close.clicked.connect(self.close)
+        for button in (self.copy_btn, self.save_btn, close):
+            row.addWidget(button)
+        box.addLayout(row)
+        # 1080 화면 안에 들게 - 넓게, 높이는 화면의 3/4 까지.
+        screen = QApplication.primaryScreen()
+        height = int(screen.availableGeometry().height() * 0.75) if screen else 700
+        self.resize(1100, min(720, height))
+
+    def copy_all(self) -> None:
+        QApplication.clipboard().setText(self.text.toPlainText())
+        self.status.setText(i18n.t("paths.viewer.copied"))
+
+    def save(self) -> Optional[Path]:
+        target = save_text(self, self.text.toPlainText(), self._file_stem)
+        if target is not None:
+            self.status.setText(i18n.t("paths.viewer.saved", path=target))
+        return target
 
 
 def text_width(text: str) -> int:

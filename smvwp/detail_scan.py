@@ -136,6 +136,8 @@ class DuTreeOutcome:
     # 순회 엔진이 곁다리로 모은 `(KB, 경로)` 큰 파일 목록. `du` 엔진은 비운다 -
     # `du` 는 디렉터리 합계만 주므로 파일 하나하나를 알 방법이 없다.
     largest_files: List["tuple"] = None
+    # 바로 든 파일이 많은 폴더 `(KB, 경로, 파일 수)` (`walker`). `du` 엔진은 비운다.
+    largest_dirs: List["tuple"] = None
     root_size_kb: Optional[int] = None
     completed: bool = False      # 루트까지 찍혔는가 (=서브트리 전체 완료)
     timed_out: bool = False
@@ -152,6 +154,8 @@ class DuTreeOutcome:
             self.entries = []
         if self.largest_files is None:
             self.largest_files = []
+        if self.largest_dirs is None:
+            self.largest_dirs = []
         if self.details is None:
             self.details = {}
         if self.owners is None:
@@ -316,6 +320,7 @@ def measure_tree(
             owners=outcome.owners,
             entries=outcome.entries,
             largest_files=outcome.largest_files,
+            largest_dirs=outcome.largest_dirs,
             root_size_kb=outcome.root_size_kb,
             completed=outcome.completed,
             timed_out=outcome.timed_out,
@@ -449,6 +454,9 @@ def _save_outcome(conn, checkpoint, outcome, generation, timeout_seconds) -> str
     if outcome.largest_files:
         scan_store.save_large_files(conn, account_id, generation, outcome.largest_files,
                                     commit=False)
+    if getattr(outcome, "largest_dirs", None):
+        scan_store.save_large_dirs(conn, account_id, generation, outcome.largest_dirs,
+                                   commit=False)
     # 사람별 사용량 - 이 체크포인트가 측정 단위로 낸 것의 몫 (끊겼으면 끝난 하위 폴더의
     # 것만 - 남은 자식은 다시 재며 그때 더한다).
     owners = getattr(outcome, "owners", None)

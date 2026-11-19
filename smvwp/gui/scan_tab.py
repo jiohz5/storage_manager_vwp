@@ -50,6 +50,7 @@ from ..scheduler import NightlyScanWorker, ScanStatusWorker
 from .overview_page import OverviewPage
 from .scan_pages import (
     TAB_ACCOUNTS,
+    TAB_DIRS,
     TAB_GROWTH,
     TAB_LARGE,
     TAB_KEYS,
@@ -59,6 +60,7 @@ from .scan_pages import (
     _entry_for,
     AccountsPage,
     GrowthPage,
+    LargeDirsPage,
     LargeFilesPage,
     SummaryPage,
     status_text,
@@ -362,10 +364,11 @@ class ScanTab(QFrame):
         self.accounts_page = AccountsPage()
         self.growth_page = GrowthPage()
         self.large_page = LargeFilesPage()
+        self.dirs_page = LargeDirsPage()
         self.owners_page = OwnersPage()
         self._pages = (
             self.overview_page, self.summary_page, self.accounts_page, self.growth_page,
-            self.large_page, self.owners_page,
+            self.large_page, self.dirs_page, self.owners_page,
         )
         for page, key in zip(self._pages, TAB_KEYS):
             self.detail_stack.addWidget(page)
@@ -585,7 +588,7 @@ class ScanTab(QFrame):
         self._refresh_overview()
 
     # -- 쪽 그리기 ------------------------------------------------------------
-    ACCOUNT_PAGES = (TAB_GROWTH, TAB_LARGE, TAB_OWNERS)
+    ACCOUNT_PAGES = (TAB_GROWTH, TAB_LARGE, TAB_DIRS, TAB_OWNERS)
 
     def _page_input(self, index: int):
         """그 쪽이 그리는 데 쓰는 것 전부. 지난번과 같으면 다시 그릴 까닭이 없다."""
@@ -619,13 +622,10 @@ class ScanTab(QFrame):
             self._refresh_growth_table()
         elif index == TAB_LARGE:
             self.large_page.show_account(self._scan_snapshot, self._selected_account())
+        elif index == TAB_DIRS:
+            self.dirs_page.show_account(self._scan_snapshot, self._selected_account())
         elif index == TAB_OWNERS:
             self.owners_page.show_account(self._scan_snapshot, self._selected_account())
-        else:
-            self._draw_extra_page(index)
-
-    def _draw_extra_page(self, index: int) -> None:
-        """여섯 쪽 뒤에 붙는 쪽 (큰 폴더 등)."""
 
     def _draw_pages(self, everything: bool = False) -> None:
         """지금 보이는 쪽을 (바뀌었으면) 그린다. `everything` 이면 모든 쪽."""

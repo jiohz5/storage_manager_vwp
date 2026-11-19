@@ -64,6 +64,23 @@ STRINGS = {
     "scan.tab.summary": "요약",
     "scan.tab.accounts": "계정별",
     "scan.tab.growth": "용량 변화",
+    "scan.tab.dirs": "큰 폴더",
+    "dirs.col.path": "폴더",
+    "dirs.col.size": "바로 든 파일",
+    "dirs.col.files": "파일 수",
+    "dirs.col.avg": "평균 크기",
+    "dirs.heading": "{account}: 바로 든 파일이 많은 폴더 {count}개",
+    "dirs.none": "{account}: 바로 든 파일이 1GB 넘는 폴더를 아직 모르거나 없습니다 (다음 상세 스캔 뒤에 채워집니다).",
+    "dirs.new": "목록에 없던 폴더",
+    "dirs.band.title": "큰 폴더 {count}개가 계정에서",
+    "dirs.chip.many": "파일 1만 개 넘는 폴더 {count}",
+    "dirs.chip.grew": "크게 는 폴더 {count}",
+    "dirs.tip": (
+        "폴더에 바로 든 파일의 합입니다 (하위 폴더는 빼고). 작은 파일이 많이 모인 곳을\n"
+        "찾습니다 - 하나하나는 큰 파일 목록에 못 들어도 모이면 수백 GB 입니다.\n"
+        "깊이와 상관없이 1GB 넘는 폴더를 큰 것부터 모읍니다. 하위 폴더까지 합친 크기와\n"
+        "구조는 '폴더 펼쳐 보기' 에서 봅니다. 두 번 누르면 그 폴더에서 터미널."
+    ),
     "scan.tab.large": "큰 파일",
     "scan.tab.owners": "사람별",
     "owners.col.name": "사람",
@@ -640,6 +657,13 @@ STRINGS = {
     "paths.menu.copy": "전체 경로 복사",
     "paths.btn.copy": "목록 복사",
     "paths.btn.copy_tip": "표 전체를 글로 복사합니다 (크기·주인·전체 경로). 메신저나 메일에 붙여 넣으세요.",
+    "paths.btn.view": "목록 보기",
+    "paths.btn.view_tip": "표 전체를 글로 펼쳐 봅니다 (크기·주인·전체 경로). 마우스로 골라 긁거나 모두 복사, 파일로 저장할 수 있습니다.",
+    "paths.viewer.title": "목록",
+    "paths.viewer.hint": "{count}줄 - 마우스로 골라 Ctrl+C, 또는 모두 복사",
+    "paths.viewer.copy_all": "모두 복사",
+    "paths.viewer.copied": "복사했습니다 - 메신저나 메일에 붙여 넣으세요",
+    "paths.viewer.saved": "저장했습니다: {path}",
     "paths.btn.save": "파일로 저장",
     "paths.btn.save_tip": "표 전체를 .txt 파일로 저장합니다 (크기·주인·전체 경로).",
     "paths.save.title": "목록 저장",

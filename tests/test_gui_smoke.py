@@ -803,7 +803,7 @@ class ScanTabHeightTests(_GuiCase):
 
         tabs = self.window._scan_tab.detail_tabs
         self.assertEqual(tabs.count(), len(TAB_KEYS))
-        self.assertEqual(len(TAB_KEYS), 6)   # 현황·요약·계정별·용량 변화·큰 파일·사람별
+        self.assertEqual(len(TAB_KEYS), 7)   # 현황·요약·계정별·용량 변화·큰 파일·큰 폴더·사람별
 
     def test_each_detail_tab_has_a_name(self):
         tabs = self.window._scan_tab.detail_tabs
@@ -3113,6 +3113,66 @@ class SearchDoesNotFreezeTests(_GuiCase):
         self.wait(lambda: self.dialog.results.rowCount() == 1)
 
 
+class LargeDirsPageTests(_GuiCase):
+    """큰 폴더 쪽 - 바로 든 파일이 많은 폴더를 큰 것부터, 목록 보기·터미널·주인."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.scan_pages import LargeDirsPage
+
+        self.root = "/acct"
+        self.folder = "/acct/run/out"
+        self.page = LargeDirsPage()
+        self.page.retranslate()
+        self.addCleanup(self.page.close)
+        self.rows = [
+            ["/acct/small", 2 * self.GB, 3, None, True],
+            [self.folder, 400 * self.GB, 20000, 100 * self.GB, True],
+        ]
+
+    def test_folders_are_listed_biggest_first_with_counts_and_change(self):
+        from smvwp import i18n
+        from smvwp.gui.scan_pages import DIR_AVG, DIR_CHANGE, DIR_FILES, DIR_PATH, DIR_SIZE
+
+        self.page.show_dirs(self.rows, "proj", self.root, 1000 * self.GB)
+        table = self.page.table
+        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(table.item(0, DIR_PATH).text(), "run/out")
+        self.assertIn("400", table.item(0, DIR_SIZE).text())
+        self.assertEqual(table.item(0, DIR_FILES).text(), "20,000")
+        self.assertIn("MB", table.item(0, DIR_AVG).text())
+        self.assertIn("+", table.item(0, DIR_CHANGE).text())
+        self.assertEqual(table.item(1, DIR_CHANGE).text(), i18n.t("dirs.new"))
+        self.assertTrue(self.page.band.isVisibleTo(self.page))
+        self.assertIn("proj", self.page.caption.text())
+
+    def test_the_list_viewer_carries_the_full_paths(self):
+        self.page.show_dirs(self.rows, "proj", self.root, 1000 * self.GB)
+        self.page.paths.view_btn.click()
+        viewer = self.page.paths.viewer
+        self.addCleanup(viewer.close)
+        self.assertIn(self.folder, viewer.text.toPlainText())
+
+    def test_nothing_known_yet_says_so(self):
+        self.page.show_dirs([], "proj", self.root, None)
+        self.assertEqual(self.page.table.rowCount(), 0)
+        self.assertIn("proj", self.page.caption.text())
+
+    def test_the_scan_tab_has_the_page_next_to_large_files(self):
+        from smvwp.gui.main_window import MainWindow
+        from smvwp import i18n
+        from smvwp.gui.scan_pages import TAB_DIRS, TAB_LARGE
+
+        window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(window.close)
+        tab = window._scan_tab
+        self.assertEqual(TAB_DIRS, TAB_LARGE + 1)
+        self.assertIs(tab.detail_stack.widget(TAB_DIRS), tab.dirs_page)
+        self.assertEqual(tab.detail_tabs.tabText(TAB_DIRS), i18n.t("scan.tab.dirs"))
+
+
 class PathTableTests(_GuiCase):
     """큰 파일·용량 변화 표에서 바로 손대기 - 터미널, 주인, 목록 넘기기, 잘리지 않는 크기.
 
@@ -3199,8 +3259,14 @@ class PathTableTests(_GuiCase):
 
         self.show()
         owners = self.wait_owners()
-        self.page.paths.copy_btn.click()
+        self.page.paths.view_btn.click()
+        viewer = self.page.paths.viewer
+        self.addCleanup(viewer.close)
+        self.assertTrue(viewer.isVisible())
+        self.assertTrue(viewer.text.isReadOnly())
+        viewer.copy_btn.click()
         text = QApplication.clipboard().text()
+        self.assertEqual(text, viewer.text.toPlainText())
         self.assertIn("proj", text.splitlines()[0])
         row = [line for line in text.splitlines() if str(self.file) in line]
         self.assertEqual(len(row), 1, text)
@@ -3215,6 +3281,14 @@ class PathTableTests(_GuiCase):
         with patch("smvwp.gui.path_actions.QFileDialog.getSaveFileName",
                    return_value=(str(target), "")):
             self.page.paths.save_btn.click()
+        self.assertIn(str(self.file), target.read_text(encoding="utf-8"))
+
+        target.unlink()   # 목록 보기 창에서도 저장한다
+        self.page.paths.view_btn.click()
+        self.addCleanup(self.page.paths.viewer.close)
+        with patch("smvwp.gui.path_actions.QFileDialog.getSaveFileName",
+                   return_value=(str(target), "")):
+            self.page.paths.viewer.save_btn.click()
         self.assertIn(str(self.file), target.read_text(encoding="utf-8"))
 
     def test_size_column_is_wide_enough_for_the_unit(self):

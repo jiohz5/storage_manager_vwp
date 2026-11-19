@@ -164,6 +164,8 @@ class AccountScanSnapshot:
     # 이 계정에서 가장 큰 파일들과 지난 세대 대비 변화
     # (`large_files.build` 에 그대로 넣을 수 있는 모양).
     large_files: List[tuple] = field(default_factory=list)
+    # 바로 든 파일이 많은 폴더 `[경로, KB, 파일 수, 이전 KB, 견줬나]` (`large_dir_changes`).
+    large_dirs: List[list] = field(default_factory=list)
     # 크고 거의 통째로 오래 안 바뀐 폴더 `[{path, size_kb, cold_kb, newest_mtime}]`
     # (`scan_store.cold_folders`). 야간 스캔이 요약을 남길 때만 채운다.
     cold_folders: List[dict] = field(default_factory=list)
@@ -282,7 +284,13 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
             if previous_gen else None
         ),
         "large_files": (
-            scan_store.large_file_changes(conn, account_id, current_gen, previous_gen)
+            scan_store.large_file_changes(conn, account_id, current_gen, previous_gen)[
+                :LARGE_FILES_SHOWN]
+            if current_gen else []
+        ),
+        "large_dirs": (
+            scan_store.large_dir_changes(conn, account_id, current_gen, previous_gen,
+                                         limit=LARGE_DIRS_SHOWN)
             if current_gen else []
         ),
         # 크고 오래 안 바뀐 폴더. 세대의 줄을 훑으므로 요약을 남길 때만 (`focus` 와 같은
@@ -310,6 +318,10 @@ def _settled_parts(conn, state, current_gen, previous_gen, top_n, max_depth,
         **facts,
     }
 
+
+# 요약에 싣는 큰 파일·큰 폴더 수. 요약은 창이 열 때 계정마다 읽으므로 끝없이 늘리지 않는다.
+LARGE_FILES_SHOWN = 300
+LARGE_DIRS_SHOWN = 200
 
 # 화면에 싣는 사람 수 - 그 아래는 '그 밖 N명' 으로 묶는다.
 OWNERS_SHOWN = 15
@@ -432,6 +444,9 @@ def get_status_snapshot(
                     top_paths=settled["top_paths"],
                     growth=settled["growth"],
                     large_files=settled["large_files"],
+                    # 이 열쇠가 생기기 전에 남긴 요약에는 없다 - 그 계정을 다음에 다
+                    # 재면 채워진다.
+                    large_dirs=[list(item) for item in settled.get("large_dirs") or []],
                     cold_folders=list(settled.get("cold_folders") or []),
                     owners=list(settled.get("owners") or []),
                     folder_trends={

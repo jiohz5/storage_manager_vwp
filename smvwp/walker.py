@@ -71,7 +71,20 @@ FALLBACK_BLOCK_SIZE = 4096
 # 화면과 보고서가 보여 줄 수 있는 양이 상한이다 - 수천 개를 모아 봐야 아무도
 # 안 읽고 메모리만 쓴다. 힙에 올려 두므로 이 수를 넘으면 가장 작은 것이 밀려
 # 나간다(전체 정렬을 하지 않는다).
-LARGEST_FILES_KEPT = 50
+#
+# 50 이었다. 20~30TB 계정에서 50개는 "큰 파일이 저것밖에 안 되나" 였다 (실기). 힙이라
+# 개수를 늘려도 파일마다 드는 값은 그대로다 (가장 작은 것과 한 번 견줄 뿐).
+LARGEST_FILES_KEPT = 300
+
+# 순회 하나가 기억할 "바로 든 파일이 많은 폴더" 개수와 바닥.
+#
+# 큰 파일만으로는 **작은 파일이 잔뜩 모인 곳**이 안 보인다 - 100MB 짜리 수백 개, 1MB
+# 짜리 수만 개는 하나하나는 목록에 못 들지만 모이면 수백 GB 다. 폴더마다 **바로 든
+# 파일**(하위 폴더 제외)의 합을 이미 세고 있으므로(`own_blocks`) 큰 것만 붙잡는다.
+# 깊이와 상관없다 - 깊이 3 아래 폴더도 잡힌다 (폴더 기록은 깊이 3 까지다).
+LARGEST_DIRS_KEPT = 200
+LARGEST_DIR_MIN_KB = 1024 * 1024   # 1GB
+_MIN_DIR_BLOCKS = LARGEST_DIR_MIN_KB * 2
 
 # 이보다 작은 파일은 후보로도 보지 않는다.
 #
@@ -151,6 +164,8 @@ class WalkOutcome:
     # 아래는 진단용 - 스캔 자체는 쓰지 않는다 (`probe` 참고).
     # 가장 큰 파일 `(KB, 경로)` 목록, 큰 것부터. 순회 중에 곁다리로 모은다.
     largest_files: List[tuple] = field(default_factory=list)
+    # 바로 든 파일이 많은 폴더 `(KB, 경로, 파일 수)` 목록, 큰 것부터 (하위 폴더 제외).
+    largest_dirs: List[tuple] = field(default_factory=list)
     hardlink_files: int = 0   # nlink>1 이라 중복 검사를 거친 파일 수
     logical_bytes: int = 0    # st_size 합. 점유 블록과 벌어지면 희소/작은 파일
     max_depth_seen: int = 0   # 루트를 0으로 본 가장 깊은 디렉터리
@@ -227,6 +242,8 @@ class ParallelWalker:
         # 넘으면 그것을 밀어낸다. 전체를 모아 정렬하면 파일 수만큼 메모리를
         # 쓰는데, 우리가 필요한 것은 상위 몇 개뿐이다.
         self._largest: List[tuple] = []
+        # 바로 든 파일이 많은 폴더 후보 `(KB, 경로, 파일 수)` - 같은 최소 힙.
+        self._largest_dirs: List[tuple] = []
 
     @property
     def kept_nodes(self) -> int:
@@ -345,8 +362,10 @@ class ParallelWalker:
         # 여기서 재면 루트를 포함해 **훑는 디렉터리마다 정확히 한 번** 세어진다.
         # 제외된 디렉터리(`.snapshot` 등)는 애초에 훑지 않으므로 세지 않는다 -
         # `du --exclude` 와 같은 결과다.
+        own_dir_blocks = 0
         try:
-            blocks += disk_blocks(os.stat(node.path, follow_symlinks=False))
+            own_dir_blocks = disk_blocks(os.stat(node.path, follow_symlinks=False))
+            blocks += own_dir_blocks
         except OSError:
             # 읽지 못한 것은 바로 아래 `scandir` 가 잡는다. 여기서 또 세면
             # 같은 실패가 두 번 계산된다.
@@ -426,6 +445,9 @@ class ParallelWalker:
             self.logical_bytes += logical
             for candidate in big:
                 self._offer_large(candidate)
+            # 바로 든 파일의 합 (폴더 자신의 블록은 뺀다 - 비어 있는 폴더가 들면 안 된다).
+            if blocks - own_dir_blocks >= _MIN_DIR_BLOCKS:
+                self._offer_dir(((blocks - own_dir_blocks) * 512 // 1024, node.path, files))
 
             node.blocks += blocks
             node.own_blocks = blocks
@@ -455,6 +477,14 @@ class ParallelWalker:
             heapq.heappush(self._largest, candidate)
         elif candidate[0] > self._largest[0][0]:
             heapq.heapreplace(self._largest, candidate)
+
+    def _offer_dir(self, candidate: tuple) -> None:
+        """바로 든 파일이 많은 폴더 후보 하나 (`_tree_lock` 안에서). `_offer_large` 와 같다."""
+
+        if len(self._largest_dirs) < LARGEST_DIRS_KEPT:
+            heapq.heappush(self._largest_dirs, candidate)
+        elif candidate[0] > self._largest_dirs[0][0]:
+            heapq.heapreplace(self._largest_dirs, candidate)
 
     def _worker(self) -> None:
         files = dirs = unreadable = 0
@@ -556,6 +586,7 @@ class ParallelWalker:
             dir_count=self.dir_count,
             unreadable=self.unreadable,
             largest_files=sorted(self._largest, reverse=True),
+            largest_dirs=sorted(self._largest_dirs, reverse=True),
             hardlink_files=self.hardlink_files,
             logical_bytes=self.logical_bytes,
             max_depth_seen=deepest,

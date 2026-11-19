@@ -39,8 +39,8 @@ from . import path_actions, theme, visuals, widgets
 
 # 세부 탭. 순서가 곧 화면 순서다 - 현황(`overview_page`)이 먼저 열린다.
 TAB_KEYS = ["scan.tab.overview", "scan.tab.summary", "scan.tab.accounts", "scan.tab.growth",
-            "scan.tab.large", "scan.tab.owners"]
-(TAB_OVERVIEW, TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE, TAB_OWNERS) = range(6)
+            "scan.tab.large", "scan.tab.dirs", "scan.tab.owners"]
+(TAB_OVERVIEW, TAB_SUMMARY, TAB_ACCOUNTS, TAB_GROWTH, TAB_LARGE, TAB_DIRS, TAB_OWNERS) = range(7)
 
 OWNER_COLUMN_KEYS = ["owners.col.name", "owners.col.size", "owners.col.delta", "owners.col.files"]
 (OWNER_NAME, OWNER_SIZE, OWNER_DELTA, OWNER_FILES) = range(4)
@@ -82,7 +82,19 @@ LARGE_COLUMN_KEYS = [
 # 화면에 띄우는 줄 수. 반쪽 폭을 나눠 쓸 때는 12 줄로 묶었는데, 탭을 통째로
 # 쓰게 된 뒤로는 묶을 까닭이 없다. 저장소가 계정마다 20 개쯤 남기므로 사실상
 # 전부 보인다.
-LARGE_ROWS_SHOWN = 50
+LARGE_ROWS_SHOWN = 300
+
+# 큰 폴더 - 바로 든 파일(하위 폴더 제외)의 합이 큰 폴더.
+DIR_COLUMN_KEYS = [
+    "dirs.col.path",
+    "dirs.col.size",
+    "dirs.col.files",
+    "dirs.col.avg",
+    "large.col.share",
+    "large.col.change",
+    "paths.col.owner",
+]
+(DIR_PATH, DIR_SIZE, DIR_FILES, DIR_AVG, DIR_SHARE, DIR_CHANGE, DIR_OWNER) = range(7)
 
 # 계정별 현황 표.
 #
@@ -1194,6 +1206,148 @@ class LargeFilesPage(QWidget):
         band.set_chips([
             (i18n.t(key, count=count), kind, legend) for key, kind, count in counts if count
         ])
+
+
+# -- 큰 폴더 -------------------------------------------------------------------
+class LargeDirsPage(QWidget):
+    """바로 든 파일이 많은 폴더 - 깊이와 상관없이, 큰 것부터.
+
+    큰 파일 표는 파일 하나하나가 커야 잡힌다. 100MB 짜리 수백 개나 작은 파일 수만 개가
+    한 폴더에 모이면 수백 GB 인데 어느 목록에도 안 든다. 순회가 폴더마다 '바로 든 파일'
+    의 합을 세므로 그 큰 것을 모았다 (`walker.LARGEST_DIRS_KEPT`). 하위 폴더까지 합친
+    크기와 구조는 '폴더 펼쳐 보기' (트리)가 보여 준다."""
+
+    def __init__(self, parent=None, compact: bool = False):
+        super().__init__(parent)
+        self._compact = compact
+        layout = _page_box(self)
+        self.stack = visuals.ShareStack()
+        self.band = visuals.SummaryBand(self.stack)
+        self.band.setVisible(False)
+        layout.addWidget(self.band)
+        self.caption = _caption()
+        self.caption.setToolTip(i18n.t("dirs.tip"))
+        layout.addWidget(self.caption)
+
+        table = _table(len(DIR_COLUMN_KEYS))
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(DIR_PATH, QHeaderView.Stretch)
+        for column, width in ((DIR_SIZE, 160), (DIR_SHARE, 130), (DIR_CHANGE, 150)):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+            table.setColumnWidth(column, width)
+        for column in (DIR_FILES, DIR_AVG, DIR_OWNER):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.cells = widgets.ChangeBarDelegate(table)
+        table.setItemDelegate(self.cells)
+        table.setSortingEnabled(True)
+        self.table = table
+        self._account_name = ""
+        self.paths = path_actions.PathTable(
+            table, DIR_PATH, DIR_OWNER, title=self.caption.text,
+            file_stem=lambda: f"smvwp_{self._account_name}_dirs")
+        at = layout.indexOf(self.caption)
+        layout.removeWidget(self.caption)
+        layout.insertLayout(at, self.paths.bar(self.caption))
+        layout.addWidget(table, 1)
+        layout.addStretch(0)
+
+    def retranslate(self) -> None:
+        self.table.setHorizontalHeaderLabels([i18n.t(key) for key in DIR_COLUMN_KEYS])
+
+    def show_account(self, snapshot, account) -> None:
+        entry = _entry_for(snapshot, account.account_id if account else None)
+        if entry is None:
+            self.show_dirs([], account.name if account else "", "", None)
+            return
+        self.show_dirs(list(getattr(entry, "large_dirs", None) or []), entry.account_name,
+                       account.path if account else "", entry.current_measured_kb)
+
+    def show_dirs(self, rows, account_name: str, root: str, total_kb) -> None:
+        """`rows` 는 `[경로, KB, 파일 수, 이전 KB, 견줬나]` (`scan_store.large_dir_changes`)."""
+
+        table = self.table
+        table.setSortingEnabled(False)
+        table.setRowCount(0)
+        self._account_name = account_name
+        if not rows:
+            self.band.setVisible(False)
+            self.caption.setText(i18n.t("dirs.none", account=account_name))
+            fit_table(table)
+            return
+        rows = sorted(rows, key=lambda row: -row[1])
+        summed = sum(row[1] for row in rows)
+        total = total_kb or 0
+        band = self.band
+        band.setVisible(True)
+        band.caption.setText(i18n.t("dirs.band.title", count=len(rows)))
+        if total:
+            band.set_value(f"{summed / total * 100:.1f}%")
+            band.sub.setText(i18n.t("large.band.of", sum=formatting.format_kb(summed),
+                                    total=formatting.format_kb(total)))
+        else:
+            band.set_value(formatting.format_kb(summed))
+            band.sub.setText("")
+        self.stack.set_parts([
+            (row[1], "accent" if index < 10 else "neutral",
+             f"{formatting.relative_path(row[0], root)} · {formatting.format_kb(row[1])}")
+            for index, row in enumerate(rows)
+        ], total or summed)
+        many = sum(1 for row in rows if row[2] >= MANY_FILES)
+        grew = sum(1 for row in rows if row[3] is not None and row[1] - row[3] > 0
+                   and row[1] >= row[3] * large_files.GROWTH_ALERT_RATIO)
+        band.set_chips([
+            (i18n.t(key, count=count), kind, i18n.t("dirs.tip"))
+            for key, kind, count in (("dirs.chip.many", "soft", many), ("dirs.chip.grew", "change_up", grew))
+            if count
+        ])
+        self.caption.setText(i18n.t("dirs.heading", account=account_name, count=len(rows))
+                             + ("" if self._compact else _root_note(root)))
+
+        biggest = rows[0][1] or 1
+        changes = [abs(row[1] - row[3]) for row in rows if row[3] is not None]
+        self.cells.scale = max(changes, default=0)
+        dash = i18n.t("common.none")
+        table.setRowCount(len(rows))
+        for index, (path, size_kb, count, previous, compared) in enumerate(rows):
+            item = path_actions.path_item(formatting.relative_path(path, root), path)
+            item.setData(widgets.CellDelegate.PATH_ROLE, True)
+            if item.text() != path:
+                item.setToolTip(path)
+            table.setItem(index, DIR_PATH, item)
+            size = widgets.NumericItem(formatting.format_kb(size_kb), size_kb)
+            size.setData(widgets.CellDelegate.BAR_ROLE, (size_kb / biggest, "accent"))
+            table.setItem(index, DIR_SIZE, size)
+            table.setItem(index, DIR_FILES, widgets.NumericItem(f"{count:,}", count))
+            average = size_kb // count if count else 0
+            table.setItem(index, DIR_AVG, widgets.NumericItem(
+                formatting.format_kb(average) if count else dash, average))
+            share = size_kb / total * 100 if total else None
+            share_item = widgets.NumericItem(f"{share:.1f}%" if share is not None else dash, share or 0)
+            if share is not None:
+                share_item.setData(widgets.CellDelegate.BAR_ROLE, (min(1.0, share / 10), "neutral"))
+            table.setItem(index, DIR_SHARE, share_item)
+            if previous is None:
+                change = QTableWidgetItem(i18n.t("dirs.new") if compared else dash)
+                if compared:
+                    change.setData(widgets.CellDelegate.CHIP_ROLE, (change.text(), "change_up"))
+            else:
+                delta = size_kb - previous
+                change = widgets.NumericItem(formatting.format_kb_delta(delta), delta)
+                change.setData(widgets.CellDelegate.VALUE_ROLE, delta)
+            table.setItem(index, DIR_CHANGE, change)
+            for column in (DIR_SIZE, DIR_FILES, DIR_AVG, DIR_SHARE, DIR_CHANGE):
+                table.item(index, column).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.paths.start_owners()
+        path_actions.fit_text_column(table, DIR_SIZE, widgets.CellDelegate.BAR_MIN + 10)
+        path_actions.fit_text_column(table, DIR_SHARE, widgets.CellDelegate.BAR_MIN + 10)
+        path_actions.fit_text_column(table, DIR_CHANGE)
+        table.setSortingEnabled(True)
+        table.sortItems(DIR_SIZE, Qt.DescendingOrder)
+        fit_table(table)
+
+
+# 이보다 파일이 많이 든 폴더는 알약으로 센다 ("파일 1만 개 넘는 폴더 N").
+MANY_FILES = 10000
 
 
 # -- 6. 사람별 ----------------------------------------------------------------

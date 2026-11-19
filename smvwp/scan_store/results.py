@@ -480,6 +480,58 @@ def save_large_files(
     return len(rows)
 
 
+def save_large_dirs(
+    conn: sqlite3.Connection, account_id: str, generation: int, entries,
+    commit: bool = True,
+) -> int:
+    """순회가 붙잡은 `(KB, 경로, 파일 수)` 폴더 목록을 저장한다 (`save_large_files` 와 같다)."""
+
+    if not entries:
+        return 0
+    now = utc_now_iso()
+    rows = [
+        (account_id, generation, str(path), int(size_kb), int(count), now)
+        for size_kb, path, count in entries
+    ]
+    conn.executemany(
+        "INSERT OR REPLACE INTO baseline_large_dirs "
+        "(account_id, generation, path, size_kb, file_count, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    if commit:
+        conn.commit()
+    return len(rows)
+
+
+def large_dir_changes(
+    conn: sqlite3.Connection, account_id: str, generation: int, previous_generation,
+    limit: int = 200,
+) -> List[list]:
+    """바로 든 파일이 많은 폴더들 `[경로, KB, 파일 수, 이전 KB 또는 None, 견줬나]`, 큰 것부터.
+
+    견주는 규칙은 `large_file_changes` 와 같다 - 지난 목록에 없었다는 것만 안다."""
+
+    current = conn.execute(
+        "SELECT path, size_kb, file_count FROM baseline_large_dirs "
+        "WHERE account_id = ? AND generation = ? ORDER BY size_kb DESC LIMIT ?",
+        (account_id, generation, limit),
+    ).fetchall()
+    previous = {}
+    if previous_generation:
+        previous = {
+            row["path"]: row["size_kb"]
+            for row in conn.execute(
+                "SELECT path, size_kb FROM baseline_large_dirs WHERE account_id = ? AND generation = ?",
+                (account_id, previous_generation),
+            )
+        }
+    compared = bool(previous)
+    return [
+        [row["path"], row["size_kb"], row["file_count"], previous.get(row["path"]), compared]
+        for row in current
+    ]
+
+
 def largest_files(
     conn: sqlite3.Connection, account_id: str, generation: int, limit: int = 20
 ):
@@ -571,6 +623,10 @@ def prune_old_generations(conn: sqlite3.Connection, account_id: str, keep_last: 
     )
     conn.execute(
         f"DELETE FROM baseline_owners WHERE account_id = ? AND generation IN ({placeholders})",
+        (account_id, *to_delete),
+    )
+    conn.execute(
+        f"DELETE FROM baseline_large_dirs WHERE account_id = ? AND generation IN ({placeholders})",
         (account_id, *to_delete),
     )
     conn.commit()

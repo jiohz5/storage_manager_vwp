@@ -65,6 +65,22 @@ CREATE TABLE IF NOT EXISTS baseline_large_files (
 CREATE INDEX IF NOT EXISTS idx_large_files_gen
     ON baseline_large_files(account_id, generation, size_kb DESC);
 
+-- 바로 든 파일(하위 폴더 제외)이 많은 폴더 상위 몇 개 - 큰 파일과 같은 방식.
+--
+-- 작은 파일이 많이 모인 곳은 큰 파일 목록에 안 잡힌다. 깊이와 상관없이 남긴다
+-- (`walker.LARGEST_DIRS_KEPT`). 세대와 함께 지운다 (`prune_old_generations`).
+CREATE TABLE IF NOT EXISTS baseline_large_dirs (
+    account_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    size_kb INTEGER NOT NULL,
+    file_count INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, generation, path)
+);
+CREATE INDEX IF NOT EXISTS idx_large_dirs_gen
+    ON baseline_large_dirs(account_id, generation, size_kb DESC);
+
 CREATE TABLE IF NOT EXISTS baseline_results (
     account_id TEXT NOT NULL,
     generation INTEGER NOT NULL,
