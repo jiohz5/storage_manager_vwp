@@ -642,12 +642,18 @@ def _process_search_index(
     if stop_or_deadline():
         return "interrupted", 0
 
+    started = time.monotonic()
     try:
         with search_index.session(data_dir) as conn:
             count = search_index.index_account(
                 conn, account.account_id, Path(account.path), should_stop=stop_or_deadline
             )
-        return ("interrupted" if stop_or_deadline() else "done"), count
+        status = "interrupted" if stop_or_deadline() else "done"
+        # 검색 색인은 크기 순회와 **따로** 계정을 한 번 더 훑는다 - 밤이 얼마나 길어지는지
+        # 보이게 남긴다 (`smvwp_cli.py diagnose` 가 이 줄을 모은다).
+        logger.info("검색 색인 %s: %s, %d개, %.1f분", account.name, status, count,
+                    (time.monotonic() - started) / 60)
+        return status, count
     except Exception:  # pragma: no cover - 방어적 처리
         logger.exception("검색 인덱싱 실패: %s", account.name)
         return "error", 0

@@ -42,7 +42,8 @@ def read_timing(data_dir: Path) -> Optional[dict]:
         payload = json.loads(timing_path(data_dir).read_text(encoding="utf-8"))
         seconds = {str(k): float(v) for k, v in payload["seconds"].items()}
         return {"finished_at": str(payload["finished_at"]), "host": str(payload.get("host", "")),
-                "total": float(payload["total"]), "seconds": seconds}
+                "total": float(payload["total"]), "seconds": seconds,
+                "server_sample": str(payload.get("server_sample", ""))}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
@@ -51,6 +52,9 @@ class _Stopwatch:
     def __init__(self) -> None:
         self.seconds: Dict[str, float] = {}
         self._started = time.monotonic()
+        # 이번 바퀴의 서버 부하 표본이 어떻게 됐나 - 실기에서 표본이 한 번도 안 쌓였는데
+        # 말없이 버려지는 길(잴 수 없음, 빈 표본)이 있어 까닭을 알 수 없었다.
+        self.server_sample = ""
 
     @contextmanager
     def stage(self, name: str):
@@ -66,6 +70,7 @@ class _Stopwatch:
             "host": socket.gethostname(),
             "total": round(time.monotonic() - self._started, 3),
             "seconds": {name: round(value, 3) for name, value in self.seconds.items()},
+            "server_sample": self.server_sample,
         }
         try:
             atomic.write_text(timing_path(data_dir), json.dumps(payload))
@@ -156,7 +161,11 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
             server_sample = servermon.take_one(
                 work=collect, with_cmdline=settings.record_process_cmdline
             )
-        except Exception:  # pragma: no cover - 측정 실패가 수집을 막으면 안 된다
+            if server_sample is None:
+                watch.server_sample = "잴 수 없음 (/proc 없음)"
+                logger.warning("서버 부하 표본: 이 장비에서는 잴 수 없습니다 (/proc 없음)")
+        except Exception as exc:  # 측정 실패가 수집을 막으면 안 된다
+            watch.server_sample = f"측정 실패: {type(exc).__name__}: {exc}"
             logger.exception("서버 부하 표본 실패 (수집은 계속합니다)")
             if not records:
                 collect()
@@ -173,9 +182,14 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
     if server_sample is not None:
         try:
             with watch.stage("server"), scan_store.session(data_dir) as scan_conn:
-                scan_store.save_server_sample(
+                sample_id = scan_store.save_server_sample(
                     scan_conn, server_sample, source=scan_store.SOURCE_COLLECTOR
                 )
+                if sample_id is None:
+                    watch.server_sample = "빈 표본 (CPU·load 를 못 읽음) - 저장 안 함"
+                    logger.warning("서버 부하 표본: CPU·load 를 못 읽어 저장하지 않았습니다")
+                else:
+                    watch.server_sample = f"저장 (id {sample_id})"
                 scan_store.prune_server_samples(
                     scan_conn, settings.server_sample_retention_days
                 )
@@ -186,8 +200,10 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
             if sqlite_db.is_busy(exc):
                 # 다른 작업이 스캔 DB 를 잡고 있었다 - 고장이 아니다. 표본 한 벌을
                 # 건너뛸 뿐이고 df 표본은 이미 저장됐다.
+                watch.server_sample = f"스캔 DB 잠김 - 건너뜀 ({exc})"
                 logger.warning("스캔 DB 가 잠겨 있어 이번 서버 부하 표본은 건너뜁니다 (%s)", exc)
             else:
+                watch.server_sample = f"저장 실패: {type(exc).__name__}: {exc}"
                 logger.exception("서버 부하 표본 저장 실패 (수집 결과는 이미 저장됨)")
 
     accounts_by_id = {a.account_id: a for a in accounts}

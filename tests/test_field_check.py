@@ -90,7 +90,7 @@ class ReportTests(_Case):
         self.assertIn("돌려주는 법", text)
         self.assertIn("== 요약 ==", text)
         for title in ("장비", "상태", "수집 한 바퀴", "df 한 번 묻기", "홈 결과 파일", "야간 스캔",
-                      "서버 부하 표본", "데이터 폴더에 쌓인 것", "화면 라이브러리", "cron", "로그"):
+                      "검색 색인", "서버 부하 표본", "데이터 폴더에 쌓인 것", "화면 라이브러리", "cron", "로그"):
             self.assertIn(title, text)
         self.assertNotIn("! 읽지 못함", text, text)
         self.assertTrue(text.rstrip().endswith("-- 끝 --"))
@@ -138,6 +138,37 @@ class ReportTests(_Case):
         self.assertFalse(scan_store.db_path(self.data_dir).exists())
 
 
+class SearchAndServerSampleTests(_Case):
+    """서버 부하 표본이 왜 안 쌓이나, 검색 색인이 밤을 얼마나 늘리나 - 보고서가 답하게."""
+
+    def test_the_last_cycles_server_sample_outcome_is_in_the_summary(self):
+        self.fill()
+        watch = cycle._Stopwatch()
+        watch.seconds = {"df": 1.0}
+        watch.server_sample = "빈 표본 (CPU·load 를 못 읽음) - 저장 안 함"
+        watch.save(self.data_dir)
+        summary = self.build().split("== 요약 ==")[1].split("\n== ")[0]
+        self.assertIn("! 마지막 수집의 서버 부하 표본: 빈 표본", summary)
+
+    def test_search_index_accounts_and_minutes_from_the_log(self):
+        from smvwp import search_index
+
+        self.fill()
+        self.config.accounts[0].search_indexing = True
+        with search_index.session(self.data_dir) as conn:
+            search_index.index_account(conn, self.config.accounts[0].account_id, self.secret_path)
+        (self.data_dir / "logs" / "scan-night.log").write_text(
+            "2026-11-19 02:00:00 INFO smvwp.nightly_scan [n] 검색 색인 proj: done, 1234개, 41.5분\n"
+            "2026-11-20 02:00:00 INFO smvwp.nightly_scan [n] 검색 색인 proj: done, 1240개, 40.0분\n",
+            encoding="utf-8")
+        text = self.build()
+        self.assertIn("색인을 켠 계정: 1개", text)
+        self.assertIn("proj: 0개, 마지막 완주", text)
+        self.assertIn("합계 82분", text)
+        self.assertIn("검색 색인: 켠 계정 1개", text.split("== 요약 ==")[1].split("\n== ")[0])
+        self.assertNotIn("very_secret_project_path", text)
+
+
 class ProgressTests(_Case):
     """실기에서 오래 걸려 멈춘 것인지 알 수 없었다 - 절마다 한 줄, 느리면 중간에도."""
 
@@ -148,10 +179,10 @@ class ProgressTests(_Case):
             text = field_check.build(self.data_dir, self.config, progress=said.append)
         starts = [line for line in said if line.endswith(" ...")]
         ends = [line for line in said if "초 (지금까지" in line]
-        self.assertEqual(len(starts), 11)
-        self.assertEqual(len(ends), 11)
-        self.assertTrue(starts[0].startswith("[ 1/11] 장비"))
-        self.assertTrue(said[-1].startswith("[11/11] 로그 - "))
+        self.assertEqual(len(starts), 12)
+        self.assertEqual(len(ends), 12)
+        self.assertTrue(starts[0].startswith("[ 1/12] 장비"))
+        self.assertTrue(said[-1].startswith("[12/12] 로그 - "))
         summary = text.split("== 요약 ==")[1].split("\n== ")[0]
         self.assertIn("점검 걸린 시간:", summary)
 
@@ -174,7 +205,7 @@ class ProgressTests(_Case):
         with patch("smvwp.field_check._home", side_effect=OSError("Stale file handle")), \
                 patch("subprocess.run", side_effect=_fake_run()):
             field_check.build(self.data_dir, self.config, progress=said.append)
-        self.assertTrue(any(line.startswith("[ 5/11] 홈 결과 파일 - ") and "(실패)" in line
+        self.assertTrue(any(line.startswith("[ 5/12] 홈 결과 파일 - ") and "(실패)" in line
                             for line in said), said)
 
     def test_a_broken_terminal_does_not_stop_the_report(self):
@@ -205,7 +236,7 @@ class CommandTests(_Case):
         self.assertIn("== 요약 ==", printed)
         self.assertIn(str(target), printed)
         self.assertNotIn("== 1.", printed)   # 화면에는 요약만
-        self.assertIn("[ 4/11] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
+        self.assertIn("[ 4/12] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
         self.assertIn("점검 끝 - ", printed)
 
     def test_falls_back_to_home_when_the_folder_is_not_writable(self):

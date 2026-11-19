@@ -309,6 +309,18 @@ def entry_count(conn: sqlite3.Connection, account_id: Optional[str] = None) -> i
     return int(row[0])
 
 
+def known_count(conn: sqlite3.Connection, account_id: str) -> Optional[int]:
+    """마지막으로 **완주한** 색인의 항목 수 (`search_state`). 한 번도 완주 못 했으면 None.
+
+    `entry_count` 는 `COUNT(*)` 라 항목이 수천만이면 NFS 에서 몇 분이 걸린다 - 검색 창이
+    PIN 을 받은 뒤 그것을 화면 스레드에서 세느라 창이 멈췄다. 이것은 한 줄 읽기다."""
+
+    row = conn.execute(
+        "SELECT entry_count FROM search_state WHERE account_id = ?", (account_id,)
+    ).fetchone()
+    return None if row is None or row[0] is None else int(row[0])
+
+
 def clear_account(conn: sqlite3.Connection, account_id: str) -> int:
     """계정의 인덱스를 지운다 (검색을 끄거나 계정을 삭제할 때).
 

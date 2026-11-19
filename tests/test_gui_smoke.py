@@ -3001,6 +3001,86 @@ class SearchPinTests(_GuiCase):
             self.assertTrue(dialog._prompt_for_pin())
 
 
+class SearchDoesNotFreezeTests(_GuiCase):
+    """PIN 을 치면 창이 움직이지 않았다 - 화면 스레드에서 색인 항목을 COUNT(*) 로 셌다.
+
+    색인이 수천만 줄인 NFS 의 DB 에서는 몇 분이다. 이제 검색 DB 일은 전부 작업 스레드에서,
+    항목 수는 완주 때 적어 둔 한 줄(`known_count`)이다."""
+
+    def setUp(self):
+        super().setUp()
+        from smvwp import search_index
+        from smvwp.gui.search_dialog import SearchDialog
+
+        self.account = self.config.accounts[0]
+        root = Path(self.account.path)
+        for name in ("alpha.v", "beta.v", "gamma.log"):
+            (root / name).write_text("x", encoding="utf-8")
+        self.account.search_indexing = True
+        with search_index.session(self.data_dir) as conn:
+            search_index.index_account(conn, self.account.account_id, root)
+        self.dialog = SearchDialog(self.data_dir, self.config)
+        self.addCleanup(self.dialog.close)
+        index = self.dialog.account_combo.findData(self.account.account_id)
+        self.dialog.account_combo.setCurrentIndex(index)
+
+    def wait(self, done):
+        import time
+
+        deadline = time.monotonic() + 5
+        while not done() and time.monotonic() < deadline:
+            _app().processEvents()
+            time.sleep(0.01)
+        self.assertTrue(done(), self.dialog.status_label.text())
+
+    def test_opening_never_counts_the_whole_index(self):
+        import threading
+
+        main = threading.current_thread()
+
+        def no_counting(*_args, **_kwargs):
+            raise AssertionError("COUNT(*) 로 세면 큰 색인에서 창이 멈춘다")
+
+        def off_the_screen_thread(*args, **kwargs):
+            self.assertIsNot(threading.current_thread(), main)
+            return real(*args, **kwargs)
+
+        from smvwp import search_index
+
+        real = search_index.known_count
+        with patch("smvwp.search_index.entry_count", side_effect=no_counting), \
+                patch("smvwp.search_index.known_count", side_effect=off_the_screen_thread):
+            self.dialog._refresh_state()
+            self.wait(lambda: self.dialog.status_label.text().endswith("|  3"))
+
+    def test_search_runs_off_the_screen_thread_and_fills_the_table(self):
+        import threading
+
+        from smvwp import search_index
+
+        main = threading.current_thread()
+        real = search_index.search
+        seen = []
+
+        def search(*args, **kwargs):
+            seen.append(threading.current_thread() is main)
+            return real(*args, **kwargs)
+
+        self.dialog.query_edit.setText("beta.v")
+        with patch("smvwp.search_index.search", side_effect=search), \
+                patch("smvwp.search_index.entry_count", side_effect=AssertionError("COUNT")):
+            self.dialog._run_search()
+            self.wait(lambda: self.dialog.results.rowCount() == 1)
+        self.assertEqual(seen, [False])
+        self.assertEqual(self.dialog.results.item(0, 0).text(), "beta.v")
+
+    def test_reading_and_searching_queue_up_instead_of_dropping(self):
+        self.dialog.query_edit.setText("alpha.v")
+        self.dialog._refresh_state()
+        self.dialog._run_search()   # 상태를 읽는 중에 누른 검색도 버려지지 않는다
+        self.wait(lambda: self.dialog.results.rowCount() == 1)
+
+
 class PathTableTests(_GuiCase):
     """큰 파일·용량 변화 표에서 바로 손대기 - 터미널, 주인, 목록 넘기기, 잘리지 않는 크기.
 

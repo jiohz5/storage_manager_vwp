@@ -350,6 +350,47 @@ class CollectorWiringTests(unittest.TestCase):
             cycle.run_collection_cycle(self.data_dir, self.config())
         self.assertEqual(done, [1])
 
+    def outcome(self):
+        from smvwp import cycle
+
+        return cycle.read_timing(self.data_dir)["server_sample"]
+
+    def test_what_happened_to_the_sample_is_kept_with_the_timing(self):
+        """실기에서 표본이 한 번도 안 쌓였는데 로그에 아무 말이 없었다 - 잴 수 없음과
+        빈 표본은 말없이 버려졌다. 이제 바퀴마다 결과 한 마디가 남는다 (diagnose 요약)."""
+
+        self.run_cycle(lambda work, with_cmdline: (work(), sample())[1])
+        self.assertTrue(self.outcome().startswith("저장 (id "), self.outcome())
+
+        with self.assertLogs("smvwp.cycle", "WARNING") as logs:
+            self.run_cycle(lambda work, with_cmdline: (work(), None)[1])
+        self.assertIn("잴 수 없음", self.outcome())
+        self.assertIn("서버 부하 표본", logs.output[0])
+
+        empty = sample(busy=None)
+        empty.load_avg_1m = None
+        with self.assertLogs("smvwp.cycle", "WARNING"):
+            self.run_cycle(lambda work, with_cmdline: (work(), empty)[1])
+        self.assertIn("빈 표본", self.outcome())
+
+        def explode(work, with_cmdline):
+            raise OSError("no /proc")
+
+        with self.assertLogs("smvwp.cycle", "ERROR"):
+            self.run_cycle(explode)
+        self.assertIn("측정 실패: OSError", self.outcome())
+
+    def test_a_busy_scan_database_is_named(self):
+        import sqlite3
+
+        from smvwp import cycle
+
+        with patch.object(cycle.scan_store, "save_server_sample",
+                          side_effect=sqlite3.OperationalError("database is locked")), \
+                self.assertLogs("smvwp.cycle", "WARNING"):
+            self.run_cycle(lambda work, with_cmdline: (work(), sample())[1])
+        self.assertIn("스캔 DB 잠김", self.outcome())
+
     def test_the_command_line_switch_is_honoured(self):
         """다른 사용자의 작업 내용이 그대로 남는 곳이라 끌 수 있어야 한다."""
 

@@ -302,6 +302,10 @@ def _cycle(report: Report, data_dir: Path, config, lines: List[str]) -> None:
         lines.append(f"  {name:<9} {seconds:7.2f}초")
     shown = " ".join(f"{name} {seconds:.1f}" for name, seconds in parts if seconds >= 0.05)
     report.note(f"수집 {timing['total']:.1f}초 / 간격 {interval // 60}분 ({shown or '모두 0.1 미만'})")
+    outcome = timing.get("server_sample") or "기록 없음 (이 판 이전 수집)"
+    mark = "" if outcome.startswith("저장 (") else "! "
+    lines.append(f"{mark}이 바퀴의 서버 부하 표본: {outcome}")
+    report.note(f"{mark}마지막 수집의 서버 부하 표본: {outcome[:120]}")
 
 
 def _df(report: Report, config, lines: List[str]) -> None:
@@ -423,6 +427,41 @@ def _night_order(report: Report, data_dir: Path, config, lines: List[str]) -> No
                      f"  디렉터리 {item.done_dirs}/{item.total_dirs}{'(어림)' if item.estimated_total else ''}")
     report.note(f"스캔 바퀴: 끝 {overview.count(scan_overview.DONE)} / 남음 {len(overview.remaining)}"
                 f" / 못 봄 {overview.count(scan_overview.UNSEEN)}")
+
+
+def _search(report: Report, data_dir: Path, config, lines: List[str]) -> None:
+    """검색 색인 - 켠 계정은 밤마다 크기 순회와 따로 한 번 더 훑는다. 그 몫이 얼마인가."""
+
+    from . import search_index
+
+    on = [account for account in config.accounts if account.search_indexing]
+    path = search_index.db_path(data_dir)
+    size = sum(Path(str(path) + suffix).stat().st_size
+               for suffix in ("", "-wal", "-journal") if Path(str(path) + suffix).exists())
+    lines.append(f"색인을 켠 계정: {len(on)}개 / {len(config.accounts)}개 · search_index.db {_mb(size)}")
+    if path.exists() and on:
+        with read_only(path) as conn:
+            state = {row[0]: (row[1], row[2]) for row in conn.execute(
+                "SELECT account_id, entry_count, last_full_index_at FROM search_state")}
+        for account in on:
+            count, at = state.get(account.account_id, (None, None))
+            lines.append(f"  {account.name}: "
+                         + (f"{count:,}개, 마지막 완주 {_local(at)}" if count is not None
+                            else "한 번도 완주 못 함"))
+    spent = []
+    for log in sorted((data_dir / "logs").glob("*.log*")):
+        spent += [line for line in _tail_lines(log) if "검색 색인 " in line and "분" in line]
+    minutes = []
+    for line in spent:
+        try:
+            minutes.append(float(line.rsplit(",", 1)[1].strip().rstrip("분")))
+        except (IndexError, ValueError):
+            pass
+    lines.append(f"로그의 '검색 색인' 줄: {len(spent)}개, 합계 {sum(minutes):.0f}분")
+    for line in spent[-8:]:
+        lines.append(f"  {line[:200]}")
+    report.note(f"검색 색인: 켠 계정 {len(on)}개 · DB {_mb(size)}"
+                + (f" · 로그상 {sum(minutes):.0f}분 ({len(minutes)}번)" if minutes else ""))
 
 
 def _server_load(report: Report, data_dir: Path, lines: List[str]) -> None:
@@ -554,6 +593,8 @@ def build(data_dir: Path, config, progress: Optional[Callable[[str], None]] = No
         ("홈 결과 파일", lambda lines: _home(report, data_dir, config, lines)),
         ("야간 스캔 - 최근 실행과 다음 순서",
          lambda lines: _night(report, data_dir, config, lines)),
+        ("검색 색인 (밤에 따로 한 번 더 훑는 몫)",
+         lambda lines: _search(report, data_dir, config, lines)),
         ("서버 부하 표본", lambda lines: _server_load(report, data_dir, lines)),
         ("데이터 폴더에 쌓인 것 (보관 기간 정하기용)",
          lambda lines: _inventory(report, data_dir, config, lines)),
