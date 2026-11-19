@@ -17,6 +17,9 @@
   바깥 명령에는 모두 제한 시간이 있다.
 - 계정 **경로**·파일 이름·다른 사람의 프로세스 명령줄은 넣지 않는다. 계정 이름과
   호스트 이름은 들어간다 (밤 순서와 수집 장비를 보려면 필요하다).
+- 돌리는 동안 절마다 터미널에 한 줄씩 (몇 번째·무엇·걸린 시간), 오래 걸리는 절은
+  10초마다 "아직 읽는 중" 을 낸다 - 멈춘 것인지 느린 것인지, 어디서 느린지 보이게.
+  보고서 요약에도 총 시간과 가장 오래 걸린 절이 들어간다.
 - 맨 위 '요약' 은 짧은 줄 몇 개다. 폐쇄망이라 복사가 안 되면 그것만 옮겨 적어도
   대부분의 결정을 내릴 수 있게 한다.
 """
@@ -31,6 +34,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -63,24 +67,66 @@ _KEEP = {"days": "{}일", "generations": "세대 {}개", "forever": "지우지 �
 _STATES = {"done": "끝", "doing": "하는 중", "waiting": "대기", "unseen": "못 봄"}
 
 
+TICK_SECONDS = 10.0
+
+
 class Report:
     """절(section)마다 줄을 모은다. 요약 줄은 따로 모아 맨 위에 둔다."""
 
-    def __init__(self) -> None:
+    def __init__(self, progress: Optional[Callable[[str], None]] = None, total: int = 0,
+                 tick_seconds: float = TICK_SECONDS) -> None:
         self.summary: List[str] = []
         self.sections: List[Tuple[str, List[str]]] = []
+        self.spent: List[Tuple[str, float]] = []
+        self.progress = progress
+        self.total = total
+        self.tick_seconds = tick_seconds
+        self.started = time.monotonic()
+
+    def _say(self, line: str) -> None:
+        if self.progress is not None:
+            try:
+                self.progress(line)
+            except Exception:   # 터미널이 닫혀도 보고서는 끝까지 만든다
+                pass
 
     def section(self, title: str, fill: Callable[[List[str]], None]) -> None:
         lines: List[str] = []
+        number = len(self.sections) + 1
+        tag = f"[{number:>2}/{self.total}]" if self.total else f"[{number:>2}]"
+        self._say(f"{tag} {title} ...")
         started = time.monotonic()
+        done = threading.Event()
+
+        def tick() -> None:   # 오래 걸리는 절: 멈춘 것이 아님을 보인다
+            while not done.wait(self.tick_seconds):
+                self._say(f"      ... 아직 읽는 중 ({time.monotonic() - started:.0f}초)")
+
+        ticker = threading.Thread(target=tick, daemon=True)
+        if self.progress is not None:
+            ticker.start()
         try:
             fill(lines)
         except Exception as exc:   # 한 절이 실패해도 나머지는 낸다
             lines.append(f"! 읽지 못함: {type(exc).__name__}: {exc}")
+        finally:
+            done.set()
         spent = time.monotonic() - started
         if spent >= 1.0:
             lines.append(f"(이 절을 읽는 데 {spent:.1f}초)")
         self.sections.append((title, lines))
+        self.spent.append((title, spent))
+        failed = any(line.startswith("! 읽지 못함") for line in lines)
+        self._say(f"{tag} {title} - {spent:.1f}초{' (실패)' if failed else ''}"
+                  f" (지금까지 {time.monotonic() - self.started:.0f}초)")
+
+    def timing_note(self) -> None:
+        """요약에 총 시간과 오래 걸린 절 - 점검 자체가 느리면 어디인지 보이게."""
+
+        total = time.monotonic() - self.started
+        slow = sorted(self.spent, key=lambda item: item[1], reverse=True)[:3]
+        slow = [f"{title.split(' (')[0]} {spent:.0f}초" for title, spent in slow if spent >= 1.0]
+        self.note(f"점검 걸린 시간: {total:.0f}초" + (f" (오래: {', '.join(slow)})" if slow else ""))
 
     def note(self, line: str) -> None:
         self.summary.append(line)
@@ -494,25 +540,31 @@ def _logs(report: Report, data_dir: Path, lines: List[str]) -> None:
 
 # -- 묶기 ---------------------------------------------------------------------
 
-def build(data_dir: Path, config) -> str:
-    """보고서 글 전체. 읽기만 한다."""
+def build(data_dir: Path, config, progress: Optional[Callable[[str], None]] = None,
+          tick_seconds: float = TICK_SECONDS) -> str:
+    """보고서 글 전체. 읽기만 한다. `progress` 가 있으면 절마다 진행 한 줄을 넘긴다."""
 
     data_dir = Path(data_dir)
-    report = Report()
-    report.section("장비·파이썬", lambda lines: _machine(report, data_dir, lines))
-    report.section("상태 (smvwp_cli.py status 와 같음)",
-                   lambda lines: _status(report, data_dir, config, lines))
-    report.section("수집 한 바퀴가 쓴 시간", lambda lines: _cycle(report, data_dir, config, lines))
-    report.section("df 한 번 묻기 (--output)", lambda lines: _df(report, config, lines))
-    report.section("홈 결과 파일", lambda lines: _home(report, data_dir, config, lines))
-    report.section("야간 스캔 - 최근 실행과 다음 순서",
-                   lambda lines: _night(report, data_dir, config, lines))
-    report.section("서버 부하 표본", lambda lines: _server_load(report, data_dir, lines))
-    report.section("데이터 폴더에 쌓인 것 (보관 기간 정하기용)",
-                   lambda lines: _inventory(report, data_dir, config, lines))
-    report.section("화면 라이브러리 (PyQt5 / PySide6)", lambda lines: _qt(report, lines))
-    report.section("cron", lambda lines: _cron(report, lines))
-    report.section("로그", lambda lines: _logs(report, data_dir, lines))
+    steps = [
+        ("장비·파이썬", lambda lines: _machine(report, data_dir, lines)),
+        ("상태 (smvwp_cli.py status 와 같음)",
+         lambda lines: _status(report, data_dir, config, lines)),
+        ("수집 한 바퀴가 쓴 시간", lambda lines: _cycle(report, data_dir, config, lines)),
+        ("df 한 번 묻기 (--output)", lambda lines: _df(report, config, lines)),
+        ("홈 결과 파일", lambda lines: _home(report, data_dir, config, lines)),
+        ("야간 스캔 - 최근 실행과 다음 순서",
+         lambda lines: _night(report, data_dir, config, lines)),
+        ("서버 부하 표본", lambda lines: _server_load(report, data_dir, lines)),
+        ("데이터 폴더에 쌓인 것 (보관 기간 정하기용)",
+         lambda lines: _inventory(report, data_dir, config, lines)),
+        ("화면 라이브러리 (PyQt5 / PySide6)", lambda lines: _qt(report, lines)),
+        ("cron", lambda lines: _cron(report, lines)),
+        ("로그", lambda lines: _logs(report, data_dir, lines)),
+    ]
+    report = Report(progress, total=len(steps), tick_seconds=tick_seconds)
+    for title, fill in steps:
+        report.section(title, fill)
+    report.timing_note()
     stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
     return report.render(f"##### Storage Manager VWP 실기 점검 ({stamp}) #####")
 

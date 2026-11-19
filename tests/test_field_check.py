@@ -8,6 +8,7 @@
 import io
 import subprocess
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -137,6 +138,57 @@ class ReportTests(_Case):
         self.assertFalse(scan_store.db_path(self.data_dir).exists())
 
 
+class ProgressTests(_Case):
+    """실기에서 오래 걸려 멈춘 것인지 알 수 없었다 - 절마다 한 줄, 느리면 중간에도."""
+
+    def test_each_part_says_when_it_starts_and_how_long_it_took(self):
+        self.fill()
+        said = []
+        with patch("subprocess.run", side_effect=_fake_run()):
+            text = field_check.build(self.data_dir, self.config, progress=said.append)
+        starts = [line for line in said if line.endswith(" ...")]
+        ends = [line for line in said if "초 (지금까지" in line]
+        self.assertEqual(len(starts), 11)
+        self.assertEqual(len(ends), 11)
+        self.assertTrue(starts[0].startswith("[ 1/11] 장비"))
+        self.assertTrue(said[-1].startswith("[11/11] 로그 - "))
+        summary = text.split("== 요약 ==")[1].split("\n== ")[0]
+        self.assertIn("점검 걸린 시간:", summary)
+
+    def test_a_slow_part_keeps_saying_it_is_still_working(self):
+        said = []
+
+        def slow(report, data_dir, config, lines):
+            time.sleep(0.35)
+            lines.append("ok")
+
+        with patch("smvwp.field_check._inventory", side_effect=slow), \
+                patch("subprocess.run", side_effect=_fake_run()):
+            field_check.build(self.data_dir, self.config, progress=said.append, tick_seconds=0.1)
+        at = [i for i, line in enumerate(said) if "데이터 폴더" in line]
+        between = said[at[0] + 1:at[1]]
+        self.assertTrue(between and all("아직 읽는 중" in line for line in between), said)
+
+    def test_a_failed_part_is_marked_on_the_line(self):
+        said = []
+        with patch("smvwp.field_check._home", side_effect=OSError("Stale file handle")), \
+                patch("subprocess.run", side_effect=_fake_run()):
+            field_check.build(self.data_dir, self.config, progress=said.append)
+        self.assertTrue(any(line.startswith("[ 5/11] 홈 결과 파일 - ") and "(실패)" in line
+                            for line in said), said)
+
+    def test_a_broken_terminal_does_not_stop_the_report(self):
+        def broken(_line):
+            raise BrokenPipeError()
+
+        text = self.build_with(broken)
+        self.assertTrue(text.rstrip().endswith("-- 끝 --"))
+
+    def build_with(self, progress):
+        with patch("subprocess.run", side_effect=_fake_run()):
+            return field_check.build(self.data_dir, self.config, progress=progress)
+
+
 class CommandTests(_Case):
     def test_writes_the_report_and_prints_the_summary(self):
         import smvwp_cli
@@ -153,6 +205,8 @@ class CommandTests(_Case):
         self.assertIn("== 요약 ==", printed)
         self.assertIn(str(target), printed)
         self.assertNotIn("== 1.", printed)   # 화면에는 요약만
+        self.assertIn("[ 4/11] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
+        self.assertIn("점검 끝 - ", printed)
 
     def test_falls_back_to_home_when_the_folder_is_not_writable(self):
         target = self.root / "missing_dir" / "r.txt"

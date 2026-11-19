@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 # 어느 작업 디렉터리에서 호출되더라도 `smvwp` 패키지를 찾을 수 있게 한다.
@@ -449,8 +450,13 @@ def command_diagnose(args) -> int:
     except config_module.ConfigError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print("실기 점검 중... (읽기만 합니다, 보통 1분 안)", flush=True)
-    text = field_check.build(data_dir, config)
+    print("실기 점검 중... (읽기만 합니다. 절마다 한 줄, 오래 걸리면 10초마다 알립니다)",
+          flush=True)
+    started = time.monotonic()
+    text = field_check.build(data_dir, config,
+                             progress=lambda line: print(line, flush=True))
+    print(f"점검 끝 - {time.monotonic() - started:.0f}초")
+    print("")
     target = Path(args.out) if args.out else field_check.default_report_path()
     written = field_check.write(text, target)
     summary = text.split("== 요약 ==", 1)[1].split("\n== ", 1)[0]
