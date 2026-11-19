@@ -622,6 +622,9 @@ class ThreadEmitTests(unittest.TestCase):
         "ThreadWorker",
         # `crontab -l` 결과를 값으로만 담아 두고 신호는 쏘지 않는다.
         "ScanTab",
+        # 화면 스레드가 멈춘 동안 지켜보는 것이라 화면 스레드에 기댈 수 없다. 신호는
+        # 쏘지 않고 로그만 남긴다 (`stall_watch`).
+        "StallWatch",
     }
 
     def test_threads_are_started_only_by_the_shared_worker(self):

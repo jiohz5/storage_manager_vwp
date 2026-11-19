@@ -906,6 +906,38 @@ class ScanTabLayoutTests(_GuiCase):
         for _ in range(3):
             _app().processEvents()
 
+    # -- 버벅임 ----------------------------------------------------------
+    def test_a_status_refresh_redraws_only_the_page_in_view(self):
+        """스캔 상태는 30초마다(도는 동안 5초마다) 새로 온다. 예전에는 올 때마다 여섯 쪽을
+        전부 다시 그렸다 - 큰 파일 수백 줄과 주인 찾기까지. 그동안 단추가 굳었다."""
+
+        from smvwp.gui.scan_pages import TAB_GROWTH, TAB_LARGE
+
+        self.page(TAB_GROWTH)
+        drawn = []
+        for name in ("large_page", "owners_page", "accounts_page", "summary_page",
+                     "overview_page", "growth_page"):
+            page = getattr(self.tab, name)
+            method = "show_digest" if name == "summary_page" else (
+                "show_overview" if name == "overview_page" else (
+                    "show_accounts" if name == "accounts_page" else "show_account"))
+            real = getattr(page, method)
+            setattr(page, method, lambda *a, _n=name, _r=real, **k: (drawn.append(_n), _r(*a, **k)))
+
+        same = self._snapshot()
+        self.tab._on_scan_status_ready(same)
+        self.assertEqual(drawn, [], "같은 상태면 아무것도 다시 그리지 않는다")
+
+        changed = self._snapshot()
+        changed.accounts[0].baseline_done = 950
+        self.tab._on_scan_status_ready(changed)
+        self.assertEqual(drawn, ["growth_page"], "바뀌어도 보이는 쪽만")
+
+        self.page(TAB_LARGE)   # 안 보이던 쪽은 보일 때 그린다
+        self.assertEqual(drawn, ["growth_page", "large_page"])
+        self.page(TAB_GROWTH)   # 그사이 안 바뀐 쪽은 다시 안 그린다
+        self.assertEqual(drawn, ["growth_page", "large_page"])
+
     # -- 자리 ------------------------------------------------------------
     def test_growth_and_large_files_each_get_the_full_width(self):
         """반폭씩 나누면 경로 뒤쪽이 잘린다."""

@@ -180,8 +180,7 @@ def check_data_dir(data_dir: Optional[Path]) -> dict:
         for label, module in (
             ("samples.db", store),
             ("detail_scan.db", scan_store),
-            ("search_index.db", search_index),
-        ):
+        ) + ((("search_index.db", search_index),) if not search_index.SHELVED else ()):
             mode = module.journal_mode(data_dir)
             if mode:
                 modes[label] = mode

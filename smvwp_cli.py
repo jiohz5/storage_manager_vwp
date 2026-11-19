@@ -156,6 +156,11 @@ def command_gui(args) -> int:
         )
         return 2
 
+    # 창이 뜨기까지, 첫 데이터까지 걸린 시간과 화면이 멈춘 자리를 로그에 남긴다
+    # (`smvwp.gui.stall_watch` - diagnose 가 모은다).
+    from smvwp.gui import stall_watch
+
+    stall_watch.started()
     app = QApplication(sys.argv)
 
     # 위젯을 만들기 전에 테마를 입힌다 - 나중에 적용하면 이미 만들어진
@@ -182,9 +187,14 @@ def command_gui(args) -> int:
 
     window = MainWindow(data_dir, config)
     window.show()
+    stall_watch.mark("창이 뜰 때")
+    watch = stall_watch.StallWatch().start(window)
     # 창이 뜬 뒤에 안내를 띄운다 - 부모 창 없이 모달이 먼저 뜨는 것을 피한다.
     window.show_first_run_if_needed()
-    return app.exec_()
+    try:
+        return app.exec_()
+    finally:
+        watch.stop()
 
 
 def command_collect(args) -> int:
@@ -240,7 +250,7 @@ def command_prepare(args) -> int:
         ("표본 DB 맞추기", lambda: opened(store)),
         ("스캔 DB 맞추기", lambda: opened(scan_store)),
     ]
-    if search_index.db_path(data_dir).exists():
+    if not search_index.SHELVED and search_index.db_path(data_dir).exists():
         steps.append(("검색 색인 DB 맞추기", lambda: opened(search_index)))
     steps += [
         ("헬스체크 대조 남기기", lambda: f"{health.save_results(data_dir, config)}개 프로젝트 계정"),

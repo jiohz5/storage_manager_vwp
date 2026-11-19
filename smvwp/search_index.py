@@ -33,6 +33,15 @@ KIND_FILE = "file"
 KIND_DIR = "dir"
 KIND_LINK = "link"
 
+# **보류 (2026-11-20).** 용량 관리가 자리 잡을 때까지 검색 색인을 만들지도 읽지도 않는다.
+#
+# 켠 계정은 밤마다 크기 순회와 따로 계정 전체를 한 번 더 훑고, 파일마다 NFS 위 DB 한
+# 파일에 써 넣는다 - 밤이 길어지고 그 DB 를 여는 창이 멈췄다. 사용자 결정으로 미룬다.
+# True 인 동안: 야간 스캔은 색인하지 않고(`nightly_scan._process_search_index`),
+# 창의 검색 메뉴는 숨고, 데이터 폴더·진단·prepare·diagnose 는 이 DB 를 열지 않는다
+# (데이터 폴더 창에는 남은 파일의 크기만 - `stat` 한 번). 코드와 남은 파일은 그대로다.
+SHELVED = True
+
 # 계정 루트 바로 아래에서만 제외하는 디렉터리 (중첩된 같은 이름은 일반 데이터).
 ROOT_EXCLUDED_NAMES = {".snapshot"}
 

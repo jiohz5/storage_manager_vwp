@@ -429,6 +429,12 @@ def _night_order(report: Report, data_dir: Path, config, lines: List[str]) -> No
                 f" / 못 봄 {overview.count(scan_overview.UNSEEN)}")
 
 
+def _search_shelved() -> bool:
+    from . import search_index
+
+    return search_index.SHELVED   # 보류 중에는 이 절도 없다 - 그 DB 를 열지 않는다
+
+
 def _search(report: Report, data_dir: Path, config, lines: List[str]) -> None:
     """검색 색인 - 켠 계정은 밤마다 크기 순회와 따로 한 번 더 훑는다. 그 몫이 얼마인가."""
 
@@ -575,6 +581,45 @@ def _logs(report: Report, data_dir: Path, lines: List[str]) -> None:
     for name, line in errors[-8:]:
         lines.append(f"  [{name}] {line[:240]}")
     report.note(f"로그 ERROR {len(errors)}개")
+    _gui_speed(report, files, lines)
+
+
+def _gui_speed(report: Report, files, lines: List[str]) -> None:
+    """창이 뜨기까지 걸린 시간과 화면이 멈춘 자리 (`gui.stall_watch` 가 남긴 줄)."""
+
+    from .gui.stall_watch import STALL_PREFIX, STARTUP_PREFIX
+
+    startup, stalls = [], []
+    for log in files:
+        if not log.name.startswith("gui"):
+            continue
+        for line in _tail_lines(log):
+            if STARTUP_PREFIX in line:
+                startup.append(line.split(STARTUP_PREFIX, 1)[1].strip())
+            elif STALL_PREFIX in line:
+                text = line.split(STALL_PREFIX, 1)[1].strip()
+                try:
+                    seconds = float(text.split("초", 1)[0])
+                except ValueError:
+                    continue
+                stalls.append((seconds, text.split(" - ", 1)[-1]))
+    lines.append("")
+    lines.append(f"창 시작 (최근 6줄): {len(startup)}줄")
+    for line in startup[-6:]:
+        lines.append(f"  {line[:200]}")
+    lines.append(f"화면 멈춤 (1초 넘게): {len(stalls)}번")
+    places: dict = {}
+    for seconds, at in stalls:
+        total, count, longest = places.get(at, (0.0, 0, 0.0))
+        places[at] = (total + seconds, count + 1, max(longest, seconds))
+    for at, (total, count, longest) in sorted(places.items(), key=lambda kv: -kv[1][0])[:8]:
+        lines.append(f"  {count}번 합 {total:.0f}초 (가장 긴 것 {longest:.1f}초) - {at[:200]}")
+    if startup:
+        report.note("창 시작: " + " / ".join(startup[-3:]))
+    if stalls:
+        worst = max(places.items(), key=lambda kv: kv[1][0])
+        report.note(f"! 화면 멈춤 {len(stalls)}번, 가장 긴 것 {max(s for s, _ in stalls):.1f}초"
+                    f" - 가장 많이 멈춘 자리: {worst[0][:160]}")
 
 
 # -- 묶기 ---------------------------------------------------------------------
@@ -593,8 +638,10 @@ def build(data_dir: Path, config, progress: Optional[Callable[[str], None]] = No
         ("홈 결과 파일", lambda lines: _home(report, data_dir, config, lines)),
         ("야간 스캔 - 최근 실행과 다음 순서",
          lambda lines: _night(report, data_dir, config, lines)),
+    ] + ([] if _search_shelved() else [
         ("검색 색인 (밤에 따로 한 번 더 훑는 몫)",
          lambda lines: _search(report, data_dir, config, lines)),
+    ]) + [
         ("서버 부하 표본", lambda lines: _server_load(report, data_dir, lines)),
         ("데이터 폴더에 쌓인 것 (보관 기간 정하기용)",
          lambda lines: _inventory(report, data_dir, config, lines)),

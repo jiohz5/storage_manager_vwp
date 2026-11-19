@@ -49,9 +49,14 @@ from .. import nightly_scan, procio, scan_digest, scan_overview, usage_log
 from ..scheduler import NightlyScanWorker, ScanStatusWorker
 from .overview_page import OverviewPage
 from .scan_pages import (
+    TAB_ACCOUNTS,
     TAB_GROWTH,
+    TAB_LARGE,
     TAB_KEYS,
     TAB_OVERVIEW,
+    TAB_OWNERS,
+    TAB_SUMMARY,
+    _entry_for,
     AccountsPage,
     GrowthPage,
     LargeFilesPage,
@@ -60,6 +65,7 @@ from .scan_pages import (
     OwnersPage,
 )
 from .scan_progress_dialog import ScanProgressDialog
+from . import stall_watch
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +124,9 @@ class ScanTab(QFrame):
         # 홈이 읽은 최신 표본 - 잰 합계를 지금 쓰는 양과 견줄 때 쓴다 (`set_latest_samples`).
         self._latest_samples = {}
         self.overview = None
+        # 쪽마다 마지막으로 그린 입력 (`_draw_page`). 같으면 다시 그리지 않는다.
+        self._drawn: dict = {}
+        self._drawn_once = False
 
         self._build()
 
@@ -168,7 +177,7 @@ class ScanTab(QFrame):
         if index >= 0 and index != self.scan_account_combo.currentIndex():
             self.scan_account_combo.setCurrentIndex(index)
             return
-        self._refresh_growth_table()
+        self._draw_pages()
 
     def open_growth(self, account_id) -> None:
         """그 계정의 용량 변화 쪽을 연다 (홈의 '지난 스캔 대비 용량 변화' 카드)."""
@@ -204,6 +213,8 @@ class ScanTab(QFrame):
         알약은 그릴 때 정해지므로 다시 그려야 바뀐다. 디스크는 다시 읽지 않는다."""
 
         if self._scan_snapshot is not None:
+            self._drawn.clear()
+            self._drawn_once = False
             self._on_scan_status_ready(self._scan_snapshot)
 
     def _build(self) -> None:
@@ -341,6 +352,8 @@ class ScanTab(QFrame):
         self.detail_stack.setObjectName("subPages")
         box.addWidget(self.detail_stack, 1)
         self.detail_tabs.currentChanged.connect(self.detail_stack.setCurrentIndex)
+        # 보이지 않던 쪽은 보일 때 그린다 - 그사이 입력이 바뀌었을 때만 (`_draw_page`).
+        self.detail_tabs.currentChanged.connect(self._draw_page)
 
         # 쪽은 그리기만 한다. 사람이 쪽에서 무엇을 고르면 신호로 알려 오고,
         # 계정 선택과 탭 옮기기는 여기서 한다 (`scan_pages` 참고).
@@ -460,6 +473,7 @@ class ScanTab(QFrame):
     def _on_scan_status_ready(self, snapshot) -> None:
         """백그라운드가 읽어 온 스냅샷을 화면에 그린다 (GUI 스레드)."""
 
+        stall_watch.mark("상세 스캔 상태")
         self.first_load_bar.setVisible(False)
         self._scan_snapshot = snapshot
         running = snapshot.is_running or self._scan_worker.is_running()
@@ -555,11 +569,13 @@ class ScanTab(QFrame):
 
         self.scan_run_btn.setEnabled(not running)
         self.scan_stop_btn.setEnabled(running)
-        self._refresh_digest(snapshot)
-        self.accounts_page.show_accounts(snapshot, self._get_config().accounts, running)
-        self._refresh_growth_table()
-        self._refresh_large_files()
-        self._refresh_overview()
+        self._running = running
+        # 현황은 홈도 쓴다 - 늘 낸다. 쪽은 **지금 보이는 것만** 다시 그린다 (처음 한 번은
+        # 전부). 예전에는 30초마다(스캔이 도는 동안은 5초마다) 여섯 쪽을 다 다시 그렸다 -
+        # 큰 파일 표 수백 줄과 주인 찾기까지. 그동안 단추가 굳었다 ("버튼 간 버벅임").
+        self._refresh_overview(draw=False)
+        self._draw_pages(everything=not self._drawn_once)
+        self._drawn_once = True
 
     # -- 현황 ------------------------------------------------------------
     def set_latest_samples(self, samples) -> None:
@@ -568,7 +584,58 @@ class ScanTab(QFrame):
         self._latest_samples = dict(samples or {})
         self._refresh_overview()
 
-    def _refresh_overview(self) -> None:
+    # -- 쪽 그리기 ------------------------------------------------------------
+    ACCOUNT_PAGES = (TAB_GROWTH, TAB_LARGE, TAB_OWNERS)
+
+    def _page_input(self, index: int):
+        """그 쪽이 그리는 데 쓰는 것 전부. 지난번과 같으면 다시 그릴 까닭이 없다."""
+
+        snapshot = self._scan_snapshot
+        if index in self.ACCOUNT_PAGES:
+            account = self._selected_account()
+            return (account, _entry_for(snapshot, account.account_id if account else None))
+        if index == TAB_OVERVIEW:
+            return (self.overview,)
+        if index == TAB_ACCOUNTS:
+            return (snapshot, self._get_config().accounts, getattr(self, "_running", False))
+        return (snapshot, self._get_config().settings)
+
+    def _draw_page(self, index: int, force: bool = False) -> None:
+        if self._scan_snapshot is None or not 0 <= index < len(self._pages):
+            return
+        wanted = self._page_input(index)
+        if not force and index in self._drawn and self._drawn[index] == wanted:
+            return
+        self._drawn[index] = wanted
+        if index == TAB_OVERVIEW:
+            if self.overview is not None:
+                self.overview_page.show_overview(self.overview, self._get_config().settings)
+        elif index == TAB_SUMMARY:
+            self._refresh_digest(self._scan_snapshot)
+        elif index == TAB_ACCOUNTS:
+            self.accounts_page.show_accounts(
+                self._scan_snapshot, self._get_config().accounts, getattr(self, "_running", False))
+        elif index == TAB_GROWTH:
+            self._refresh_growth_table()
+        elif index == TAB_LARGE:
+            self.large_page.show_account(self._scan_snapshot, self._selected_account())
+        elif index == TAB_OWNERS:
+            self.owners_page.show_account(self._scan_snapshot, self._selected_account())
+        else:
+            self._draw_extra_page(index)
+
+    def _draw_extra_page(self, index: int) -> None:
+        """여섯 쪽 뒤에 붙는 쪽 (큰 폴더 등)."""
+
+    def _draw_pages(self, everything: bool = False) -> None:
+        """지금 보이는 쪽을 (바뀌었으면) 그린다. `everything` 이면 모든 쪽."""
+
+        current = self.detail_stack.currentIndex()
+        for index in range(len(self._pages)):
+            if everything or index == current:
+                self._draw_page(index)
+
+    def _refresh_overview(self, draw: bool = True) -> None:
         """스냅샷으로 현황을 내 그리고, 홈에도 넘긴다. 계산은 가볍다 (DB 를 읽지 않는다)."""
 
         if self._scan_snapshot is None:
@@ -584,8 +651,9 @@ class ScanTab(QFrame):
             logger.exception("상세 스캔 현황을 내지 못했습니다")
             return
         self.overview = overview
-        self.overview_page.show_overview(overview, config.settings)
         self.overview_changed.emit(overview)
+        if draw and self.detail_stack.currentIndex() == TAB_OVERVIEW:
+            self._draw_page(TAB_OVERVIEW)
 
     # -- 요약 ------------------------------------------------------------
     def _refresh_digest(self, snapshot) -> None:
@@ -631,8 +699,8 @@ class ScanTab(QFrame):
         보였다. 표를 눌러서 바꿀 수 있다는 것도 그래서 눈에 안 들어왔다.
         """
 
-        self._refresh_growth_table()
-        self._refresh_large_files()
+        # 계정을 바꾸면 지금 보이는 쪽만 다시 그린다 - 나머지는 보일 때 (`_draw_page`).
+        self._draw_pages()
         self.accounts_page.mark_account(self.scan_account_combo.currentData())
 
     def _trigger_scan_now(self) -> None:

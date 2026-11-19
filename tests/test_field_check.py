@@ -90,7 +90,7 @@ class ReportTests(_Case):
         self.assertIn("돌려주는 법", text)
         self.assertIn("== 요약 ==", text)
         for title in ("장비", "상태", "수집 한 바퀴", "df 한 번 묻기", "홈 결과 파일", "야간 스캔",
-                      "검색 색인", "서버 부하 표본", "데이터 폴더에 쌓인 것", "화면 라이브러리", "cron", "로그"):
+                      "서버 부하 표본", "데이터 폴더에 쌓인 것", "화면 라이브러리", "cron", "로그"):
             self.assertIn(title, text)
         self.assertNotIn("! 읽지 못함", text, text)
         self.assertTrue(text.rstrip().endswith("-- 끝 --"))
@@ -150,6 +150,17 @@ class SearchAndServerSampleTests(_Case):
         summary = self.build().split("== 요약 ==")[1].split("\n== ")[0]
         self.assertIn("! 마지막 수집의 서버 부하 표본: 빈 표본", summary)
 
+    def test_shelved_search_index_is_not_a_section_and_not_opened(self):
+        """검색 색인은 보류다 - 절도 없고 그 DB 를 열지도 않는다."""
+
+        self.fill()
+        self.config.accounts[0].search_indexing = True
+        with patch("smvwp.search_index.session", side_effect=AssertionError("열면 안 된다")),                 patch("smvwp.field_check.read_only", wraps=field_check.read_only) as opened:
+            text = self.build()
+        self.assertNotIn("검색 색인", text)
+        self.assertFalse([c for c in opened.call_args_list if "search_index" in str(c)])
+
+    @patch("smvwp.search_index.SHELVED", False)
     def test_search_index_accounts_and_minutes_from_the_log(self):
         from smvwp import search_index
 
@@ -169,6 +180,27 @@ class SearchAndServerSampleTests(_Case):
         self.assertNotIn("very_secret_project_path", text)
 
 
+class GuiSpeedTests(_Case):
+    """창이 뜨기까지 걸린 시간과 화면이 멈춘 자리 - 창 로그에서 모아 요약에."""
+
+    def test_startup_and_stalls_from_the_window_log(self):
+        self.fill()
+        (self.data_dir / "logs" / "gui-host.log").write_text(
+            "2026-11-20 09:00:01 INFO smvwp.gui.stall_watch [m] 창 시작 뒤 창이 뜰 때까지 2.1초\n"
+            "2026-11-20 09:00:09 INFO smvwp.gui.stall_watch [m] 창 시작 뒤 홈 데이터까지 9.8초\n"
+            "2026-11-20 09:01:00 WARNING smvwp.gui.stall_watch [m] 화면 멈춤 3.2초 - "
+            "scan_pages.py:1100 show_files < scan_tab.py:600 _draw_page\n"
+            "2026-11-20 09:02:00 WARNING smvwp.gui.stall_watch [m] 화면 멈춤 1.5초 - "
+            "scan_pages.py:1100 show_files < scan_tab.py:600 _draw_page\n",
+            encoding="utf-8")
+        text = self.build()
+        summary = text.split("== 요약 ==")[1].split("\n== ")[0]
+        self.assertIn("창 시작: 창이 뜰 때까지 2.1초 / 홈 데이터까지 9.8초", summary)
+        self.assertIn("! 화면 멈춤 2번, 가장 긴 것 3.2초", summary)
+        self.assertIn("scan_pages.py:1100 show_files", summary)
+        self.assertIn("2번 합 5초 (가장 긴 것 3.2초)", text)
+
+
 class ProgressTests(_Case):
     """실기에서 오래 걸려 멈춘 것인지 알 수 없었다 - 절마다 한 줄, 느리면 중간에도."""
 
@@ -179,10 +211,10 @@ class ProgressTests(_Case):
             text = field_check.build(self.data_dir, self.config, progress=said.append)
         starts = [line for line in said if line.endswith(" ...")]
         ends = [line for line in said if "초 (지금까지" in line]
-        self.assertEqual(len(starts), 12)
-        self.assertEqual(len(ends), 12)
-        self.assertTrue(starts[0].startswith("[ 1/12] 장비"))
-        self.assertTrue(said[-1].startswith("[12/12] 로그 - "))
+        self.assertEqual(len(starts), 11)
+        self.assertEqual(len(ends), 11)
+        self.assertTrue(starts[0].startswith("[ 1/11] 장비"))
+        self.assertTrue(said[-1].startswith("[11/11] 로그 - "))
         summary = text.split("== 요약 ==")[1].split("\n== ")[0]
         self.assertIn("점검 걸린 시간:", summary)
 
@@ -205,7 +237,7 @@ class ProgressTests(_Case):
         with patch("smvwp.field_check._home", side_effect=OSError("Stale file handle")), \
                 patch("subprocess.run", side_effect=_fake_run()):
             field_check.build(self.data_dir, self.config, progress=said.append)
-        self.assertTrue(any(line.startswith("[ 5/12] 홈 결과 파일 - ") and "(실패)" in line
+        self.assertTrue(any(line.startswith("[ 5/11] 홈 결과 파일 - ") and "(실패)" in line
                             for line in said), said)
 
     def test_a_broken_terminal_does_not_stop_the_report(self):
@@ -236,7 +268,7 @@ class CommandTests(_Case):
         self.assertIn("== 요약 ==", printed)
         self.assertIn(str(target), printed)
         self.assertNotIn("== 1.", printed)   # 화면에는 요약만
-        self.assertIn("[ 4/12] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
+        self.assertIn("[ 4/11] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
         self.assertIn("점검 끝 - ", printed)
 
     def test_falls_back_to_home_when_the_folder_is_not_writable(self):

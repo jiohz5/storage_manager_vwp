@@ -236,6 +236,17 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
         self._run_scan(dir1_kb=500 * GB_KB)
         self.assertEqual(self._growth_events(), [])
 
+    def test_shelved_search_index_is_neither_built_nor_opened(self):
+        """검색 색인은 보류다 - 켠 계정이어도 밤에 훑지 않고 그 DB 를 만들지도 열지도 않는다."""
+
+        self.account.search_indexing = True
+        config_module.save_config(self.data_dir, self.config)
+        with patch("smvwp.search_index.session", side_effect=AssertionError("열면 안 된다")):
+            summary = self._run_scan(dir1_kb=10)
+        self.assertEqual(summary.accounts[0].search_status, "skipped")
+        self.assertFalse(search_index.db_path(self.data_dir).exists())
+
+    @patch.object(search_index, "SHELVED", False)
     def test_search_index_updates_only_when_enabled(self):
         summary = self._run_scan(dir1_kb=10)
         self.assertEqual(summary.accounts[0].search_status, "skipped")
@@ -255,6 +266,7 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
         finally:
             conn.close()
 
+    @patch.object(search_index, "SHELVED", False)
     def test_orphan_search_index_is_pruned_on_next_scan(self):
         self.account.search_indexing = True
         config_module.save_config(self.data_dir, self.config)
@@ -277,6 +289,7 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
         finally:
             conn.close()
 
+    @patch.object(search_index, "SHELVED", False)
     def test_scan_still_succeeds_when_search_indexing_fails(self):
         """부가 기능 실패가 이미 저장된 기준선을 무효로 만들면 안 된다."""
 

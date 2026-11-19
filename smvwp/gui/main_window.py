@@ -64,10 +64,12 @@ from .. import (
     forecast_notify,
     freshness,
     i18n,
+    search_index,
     store,
     tiers,
 )
 from ..scheduler import CollectorScheduler, DashboardWorker, ThreadWorker
+from . import stall_watch
 from . import theme, widgets
 from .overview_widgets import Chip, MiniBar, SegmentBar, TimelineBar
 from .visuals import ActionDelegate, ChangeList, CollectStrip
@@ -75,7 +77,6 @@ from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
 from .first_run import FirstRunDialog
 from .reports_dialog import ReportsDialog
-from .search_dialog import SearchDialog
 
 logger = logging.getLogger(__name__)
 
@@ -525,6 +526,8 @@ class MainWindow(QMainWindow):
         self.tools_btn.setPopupMode(QToolButton.InstantPopup)
         tools = QMenu(self.tools_btn)
         self.search_action = tools.addAction("", self._open_search_dialog)
+        # 검색 색인은 보류다 (`search_index.SHELVED`) - 메뉴도 숨긴다.
+        self.search_action.setVisible(not search_index.SHELVED)
         self.trend_action = tools.addAction("", self._open_trend_dialog)
         # 서버 부하는 계정이 아니라 **장비**에 대한 것이다 - 정작 알고 싶은 것은
         # 스캔 옆에서 다른 작업이 얼마나 쓰고 있었나다.
@@ -1058,6 +1061,7 @@ class MainWindow(QMainWindow):
         self.loading_row.setVisible(True)
 
     def _on_dashboard_ready(self, data) -> None:
+        stall_watch.mark("홈 데이터")
         self.loading_row.setVisible(False)
         self._latest_samples = data.samples
         self._forecasts = data.forecasts
@@ -1823,6 +1827,8 @@ class MainWindow(QMainWindow):
     def _open_search_dialog(self) -> None:
         # 검색을 **했다는 사실**만 남긴다. 무엇을 찾았는지는 남기지 않는다 -
         # 운영 판단에 필요한 것은 이 기능을 쓰는 사람이 있느냐까지다.
+        from .search_dialog import SearchDialog
+
         usage_log.record_soon(self._data_dir, usage_log.SEARCH_USED)
         SearchDialog(self._data_dir, self._config, parent=self).exec_()
 

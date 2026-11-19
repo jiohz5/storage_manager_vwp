@@ -190,8 +190,8 @@ def _search_item(data_dir: Path) -> Item:
 
     path = search_index.db_path(data_dir)
     item = Item(key="data.item.search", size_bytes=_db_size(path), keep=KEEP_CURRENT)
-    if not path.exists():
-        return item
+    if search_index.SHELVED or not path.exists():
+        return item   # 보류 중에는 열지 않는다 - 남은 파일의 크기만
     with search_index.session(data_dir) as conn:
         item.count, item.count_more, _ = _count_and_oldest(conn, "search_entries", None)
     return item

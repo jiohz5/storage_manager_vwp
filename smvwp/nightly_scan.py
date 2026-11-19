@@ -635,7 +635,7 @@ def _process_search_index(
     데이터는 이미 저장된 뒤이므로, 부가 기능 하나 때문에 그것을 무효로 만들
     이유가 없다."""
 
-    if not account.search_indexing:
+    if search_index.SHELVED or not account.search_indexing:
         return "skipped", 0
 
     stop_or_deadline = lambda: should_stop() or deadline_reached()
@@ -1383,7 +1383,7 @@ def _prune_orphan_search_indexes(data_dir: Path, config: config_module.AppConfig
     끝나지 않을 수 있다. 야간 실행마다 한 번 더 대조해 orphan이 영구히 남지
     않게 한다."""
 
-    if not search_index.db_path(data_dir).exists():
+    if search_index.SHELVED or not search_index.db_path(data_dir).exists():
         return
     try:
         with search_index.session(data_dir) as conn:
