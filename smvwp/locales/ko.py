@@ -809,6 +809,7 @@ STRINGS = {
     ),
     "scan.current_target": "지금: {account} · {path}",
     "scan.scanning_now": "상세 스캔 진행 중 · {path}",
+    "progress.reading": "읽는 중... (창은 그대로 쓸 수 있습니다)",
     "progress.title": "상세 스캔 진행 상황",
     "progress.btn.refresh": "새로고침",
     "progress.summary": (
@@ -1177,6 +1178,7 @@ STRINGS = {
     "tree.band.title": "계정 합계",
     "tree.root_tip": "{name}\n{size} · 계정의 {pct}%",
     "scan.size_share": "계정의 {pct}%",
+    "large.stack_rest": "그 밖 {count}개 · {size}",
     "large.share_tip": "{path}\n{size} · 계정의 {pct}%",
     "growth.chip.new": "새 폴더",
     "growth.chip.gone": "없어짐",

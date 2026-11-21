@@ -3113,6 +3113,170 @@ class SearchDoesNotFreezeTests(_GuiCase):
         self.wait(lambda: self.dialog.results.rowCount() == 1)
 
 
+class SmoothHomeTests(_GuiCase):
+    """2026-11 GUI 점검: 화면 스레드에서 쓸데없이 다시 만들던 것들과 잘리던 것들."""
+
+    GB = 1024 * 1024
+
+    def setUp(self):
+        super().setUp()
+        from smvwp.gui.main_window import MainWindow
+
+        self.window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(self.window.close)
+        self.window._latest_samples = self.samples(self.config.accounts)
+        self.window._render_table(self.window._latest_samples)
+
+    def samples(self, accounts):
+        from datetime import datetime, timezone
+
+        from smvwp import store
+
+        made = {}
+        for index, account in enumerate(accounts):
+            total = (10 + index) * 1024 * self.GB   # 저마다 다른 스토리지
+            made[account.account_id] = store.SampleRecord(
+                account_id=account.account_id, collected_at=datetime.now(timezone.utc).isoformat(),
+                ok=True, filesystem="nfs4", mount_point=f"/ifs/{index}", total_kb=total,
+                used_kb=total // 2, avail_kb=total // 2, byte_pct=50.0, overall_tier="normal")
+        return made
+
+    def snapshot(self, done=900):
+        from smvwp.nightly_scan import AccountScanSnapshot, StatusSnapshot
+
+        return StatusSnapshot(
+            is_running=True, window_description="22:00~06:00",
+            latest_run={"status": "running", "started_at": "2026-09-15T13:00:00+00:00",
+                        "current_path": self.config.accounts[0].path + "/LAYOUT/run_01/deep",
+                        "current_account_id": self.config.accounts[0].account_id},
+            accounts=[AccountScanSnapshot(
+                account_id=a.account_id, account_name=a.name, last_completed_generation=2,
+                top_paths=[], growth=[], pending_baseline_count=10, baseline_done=done,
+                baseline_total=1000, measured_kb=100 * self.GB, current_measured_kb=100 * self.GB,
+            ) for a in self.config.accounts])
+
+    def scan_cells(self):
+        from smvwp.gui.main_window import COL_SCAN
+
+        table = self.window.table
+        return [table.cellWidget(row, COL_SCAN) for row in range(table.rowCount())]
+
+    def test_an_unchanged_scan_status_rebuilds_no_home_cells(self):
+        tab = self.window._scan_tab
+        tab._on_scan_status_ready(self.snapshot())
+        before = self.scan_cells()
+        tab._on_scan_status_ready(self.snapshot())
+        self.assertEqual([id(w) for w in self.scan_cells()], [id(w) for w in before],
+                         "같은 현황이면 홈 표의 칸 위젯을 다시 만들지 않는다")
+
+    def test_the_scan_chip_is_never_squeezed(self):
+        from smvwp.gui.overview_widgets import Chip
+
+        # 실기처럼 옆 글이 길 때 (예전에는 알약이 눌려 '= 중 950/10(' 이 됐다).
+        long_note = ("하는 중 950/1000", "doing", "11/27(금) 밤 · 34번째 · 남은 디렉터리 50개")
+        with patch("smvwp.scan_overview.home_chip", return_value=long_note):
+            self.window._scan_tab._on_scan_status_ready(self.snapshot())
+        self.window.resize(1400, 900)
+        self.window.show()
+        for _ in range(3):
+            _app().processEvents()
+        chips = [chip for cell in self.scan_cells() if cell for chip in cell.findChildren(Chip)]
+        self.assertTrue(chips)
+        for chip in chips:
+            self.assertGreaterEqual(chip.width(), chip.sizeHint().width(), chip.text())
+
+    def test_the_running_path_on_the_tile_is_short(self):
+        from smvwp.gui.scan_tab import BannerState
+
+        account = self.config.accounts[0]
+        path = account.path + "/LAYOUT/run_01/deep"
+        self.window._update_home_scan_banner(BannerState(running=True, path=path, done=1, total=2))
+        detail = self.window.tiles["scan"].detail
+        self.assertIn(account.name, detail.text())
+        self.assertNotIn(account.path, detail.text())
+        self.assertEqual(detail.toolTip(), path)
+
+    def test_typing_in_a_long_list_waits_for_a_pause(self):
+        from smvwp import config as config_module
+        from smvwp.gui import main_window
+
+        for index in range(main_window.FILTER_IMMEDIATE_ROWS + 5):
+            path = Path(self.tmp.name) / f"many{index}"
+            path.mkdir()
+            config_module.add_account(self.config, f"many{index}", str(path), data_dir=self.data_dir)
+        self.window._latest_samples = self.samples(self.config.accounts)
+        self.window._render_table(self.window._latest_samples)
+        rows = self.window.table.rowCount()
+        self.window.filter_edit.setText("many1")
+        self.assertEqual(self.window.table.rowCount(), rows, "글자마다 다시 그리지 않는다")
+        self.window._filter_timer.timeout.emit()
+        self.assertLess(self.window.table.rowCount(), rows)
+
+    def test_a_hidden_scan_tab_draws_nothing_until_shown(self):
+        tab = self.window._scan_tab
+        tab._on_scan_status_ready(self.snapshot())
+        self.window.show()
+        self.window.tabs.setCurrentIndex(0)   # 홈을 보는 중
+        for _ in range(3):
+            _app().processEvents()
+        drawn = []
+        page = tab.overview_page
+        real = page.show_overview
+        page.show_overview = lambda *a, **k: (drawn.append(1), real(*a, **k))
+        tab._on_scan_status_ready(self.snapshot(950))
+        self.assertEqual(drawn, [])
+        self.window.tabs.setCurrentIndex(self.window.tabs.indexOf(self.window._scan_page))
+        for _ in range(3):
+            _app().processEvents()
+        self.assertEqual(drawn, [1], "보일 때 그린다")
+
+
+class StackPartsTests(unittest.TestCase):
+    def test_hundreds_of_parts_become_a_few_and_the_rest(self):
+        from smvwp.gui import scan_pages
+
+        parts = [(300 - k, "accent", f"f{k}") for k in range(300)]
+        made = scan_pages.stack_parts(parts)
+        self.assertEqual(len(made), scan_pages.STACK_PARTS + 1)
+        self.assertEqual(made[-1][0], sum(p[0] for p in parts[scan_pages.STACK_PARTS:]))
+        self.assertEqual(made[-1][1], "neutral")
+        self.assertEqual(scan_pages.stack_parts(parts[:3]), parts[:3])
+
+
+class ScanProgressOffTheScreenThreadTests(_GuiCase):
+    def test_the_progress_dialog_reads_the_db_off_the_screen_thread(self):
+        import threading
+        import time
+
+        from smvwp import scan_store
+        from smvwp.gui.scan_progress_dialog import ScanProgressDialog
+
+        main = threading.current_thread()
+        seen = []
+        real = scan_store.session
+
+        def session(*args, **kwargs):
+            # 앞 시험이 남긴 창의 타이머가 그사이 다른 데이터 폴더를 열 수 있다 - 이 창 것만.
+            if args and Path(args[0]) == Path(self.data_dir):
+                seen.append(threading.current_thread() is main)
+            return real(*args, **kwargs)
+
+        with patch("smvwp.gui.scan_progress_dialog.scan_store.session", side_effect=session):
+            dialog = ScanProgressDialog(self.data_dir, self.config,
+                                        account_id=self.config.accounts[0].account_id)
+            self.addCleanup(dialog.close)
+            deadline = time.monotonic() + 5
+            while not seen or dialog._reader.is_running():
+                _app().processEvents()
+                time.sleep(0.01)
+                if time.monotonic() > deadline:
+                    break
+            _app().processEvents()
+        self.assertTrue(seen)
+        self.assertNotIn(True, seen, "화면 스레드에서 스캔 DB 를 열지 않는다")
+        self.assertNotIn("읽는 중", dialog.summary_label.text())
+
+
 class LargeDirsPageTests(_GuiCase):
     """큰 폴더 쪽 - 바로 든 파일이 많은 폴더를 큰 것부터, 목록 보기·터미널·주인."""
 

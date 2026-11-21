@@ -630,10 +630,18 @@ class ScanTab(QFrame):
     def _draw_pages(self, everything: bool = False) -> None:
         """지금 보이는 쪽을 (바뀌었으면) 그린다. `everything` 이면 모든 쪽."""
 
+        # 창은 떠 있는데 이 탭이 안 보이면(홈을 보는 중) 아무 쪽도 그리지 않는다 - 탭이
+        # 보일 때 그린다 (`showEvent`). 창이 안 뜬 때(시험)는 예전대로.
+        if not everything and self.window().isVisible() and not self.isVisible():
+            return
         current = self.detail_stack.currentIndex()
         for index in range(len(self._pages)):
             if everything or index == current:
                 self._draw_page(index)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt 규약
+        super().showEvent(event)
+        self._draw_pages()
 
     def _refresh_overview(self, draw: bool = True) -> None:
         """스냅샷으로 현황을 내 그리고, 홈에도 넘긴다. 계산은 가볍다 (DB 를 읽지 않는다)."""

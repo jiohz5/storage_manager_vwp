@@ -381,6 +381,22 @@ def _size_item(size_kb, account_kb) -> QTableWidgetItem:
     return item
 
 
+# 요약 띠의 쌓은 막대에 따로 그리는 조각 수. 300개를 다 그리면 바코드가 된다.
+STACK_PARTS = 20
+
+
+def stack_parts(parts):
+    """큰 것 `STACK_PARTS` 개는 따로, 나머지는 회색 한 덩어리 (툴팁에 몇 개·얼마)."""
+
+    parts = list(parts)
+    if len(parts) <= STACK_PARTS:
+        return parts
+    rest = parts[STACK_PARTS:]
+    size = sum(part[0] for part in rest)
+    return parts[:STACK_PARTS] + [(size, "neutral", i18n.t(
+        "large.stack_rest", count=len(rest), size=formatting.format_kb(size)))]
+
+
 def fit_table(table, most: int = 0) -> None:
     """줄이 몇 개뿐인 표가 칸을 다 차지해 빈 흰 면이 되지 않게 높이를 줄 수에 맞춘다.
 
@@ -1186,7 +1202,7 @@ class LargeFilesPage(QWidget):
         else:
             band.set_value(formatting.format_kb(summed))
             band.sub.setText("")
-        self.stack.set_parts([
+        self.stack.set_parts(stack_parts([
             (
                 item.size_kb, "attention" if item.is_notable else "accent",
                 i18n.t(
@@ -1196,7 +1212,7 @@ class LargeFilesPage(QWidget):
                 ),
             )
             for item in shown
-        ], total)
+        ]), total)
         legend = large_files_legend()
         counts = (
             ("large.chip.dominant", "tier_alert", sum(1 for item in shown if item.dominates_account)),
@@ -1287,11 +1303,11 @@ class LargeDirsPage(QWidget):
         else:
             band.set_value(formatting.format_kb(summed))
             band.sub.setText("")
-        self.stack.set_parts([
-            (row[1], "accent" if index < 10 else "neutral",
+        self.stack.set_parts(stack_parts([
+            (row[1], "accent",
              f"{formatting.relative_path(row[0], root)} · {formatting.format_kb(row[1])}")
-            for index, row in enumerate(rows)
-        ], total or summed)
+            for row in rows
+        ]), total or summed)
         many = sum(1 for row in rows if row[2] >= MANY_FILES)
         grew = sum(1 for row in rows if row[3] is not None and row[1] - row[3] > 0
                    and row[1] >= row[3] * large_files.GROWTH_ALERT_RATIO)

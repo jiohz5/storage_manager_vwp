@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
@@ -46,6 +46,7 @@ from PyQt5.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QShortcut,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -145,6 +146,13 @@ COLUMN_KEYS = [
 # `파일시스템` 열은 뺐다. 값이 거의 항상 같아서(계정 대부분이 같은 파일시스템에
 # 있다) 열 하나를 통째로 쓰면서 정보는 거의 주지 않았다. 대신 경로 툴팁에
 # 넣는다 - 필요한 순간(어느 파일시스템인지 확인할 때)에만 보면 되는 값이다.
+
+# 찾기 칸: 줄이 이보다 많으면 글자마다가 아니라 멈춘 뒤 한 번 다시 그린다.
+FILTER_IMMEDIATE_ROWS = 40
+FILTER_DELAY_MS = 200
+# 홈 타일의 '지금 재는 곳' 글 길이.
+SCAN_PATH_CHARS = 60
+
 
 class _Tile(QFrame):
     """홈 맨 위의 타일 하나 - 이름, 큰 값, 그 옆 한마디, 막대나 알약, 설명 한두 줄.
@@ -271,6 +279,15 @@ class MainWindow(QMainWindow):
         self._scan_tab = ScanTab(data_dir, lambda: self._config, self)
         # 스캔 탭이 넘겨 준 상세 스캔 현황과 "지금 도는가" (홈 타일·오늘 밤 카드가 쓴다).
         self._overview = None
+        # 홈 표에 지금 그려진 '상세 스캔' 칸(계정 -> 알약 열쇠)과 스토리지 줄 아래 계정 크기.
+        # 현황은 30초마다(스캔이 돌면 5초마다) 오는데, 바뀐 칸만 다시 만든다.
+        self._drawn_chips: Dict[str, object] = {}
+        self._drawn_measured: Optional[dict] = None
+        # 찾기 칸 - 계정이 많으면 글자마다 표를 다시 만들지 않고 잠깐 멈췄을 때 한 번.
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(FILTER_DELAY_MS)
+        self._filter_timer.timeout.connect(lambda: self._render_table(self._latest_samples))
         self._scan_banner = None
 
         self._build_ui()
@@ -1135,7 +1152,13 @@ class MainWindow(QMainWindow):
 
     def _on_filter_changed(self, text: str) -> None:
         self._filter_text = (text or "").strip().lower()
-        self._render_table(self._latest_samples)
+        # 줄이 적으면 바로 (금방 끝난다). 많으면 칸 위젯 수백 개를 글자마다 다시 만들어
+        # 치는 동안 칸이 굳는다 - 멈춘 뒤 한 번만.
+        if self.table.rowCount() <= FILTER_IMMEDIATE_ROWS:
+            self._filter_timer.stop()
+            self._render_table(self._latest_samples)
+        else:
+            self._filter_timer.start()
 
     def _visible_accounts(self, accounts) -> list:
         """찾기 칸에 친 글자가 이름이나 경로에 든 계정만."""
@@ -1166,6 +1189,8 @@ class MainWindow(QMainWindow):
             item.account_id: item.measured_kb
             for item in (getattr(self._overview, "accounts", None) or [])
         }
+        self._drawn_measured = measured
+        self._drawn_chips = {}
 
         for row, (account, members) in enumerate(layout):
             # 칸 위젯은 줄을 다시 쓸 때 남는다 - 스토리지 줄이 생기고 없어지며 같은 행이
@@ -1633,13 +1658,17 @@ class MainWindow(QMainWindow):
 
         self._show_tonight(overview)
         self._show_changes(overview)
-        # 스토리지 줄 아래 계정의 크기는 상세 스캔 현황에서 온다 - 묶인 줄이 있으면 다시.
-        if self._latest_samples and priority.storage_groups(list(self._latest_samples.values())):
+        # 스토리지 줄 아래 계정의 크기는 상세 스캔 현황에서 온다 - 그 크기가 바뀌었을 때만
+        # 표를 다시 세운다. 예전에는 현황이 올 때마다(스캔 중 5초마다) 표 전체를 칸 위젯까지
+        # 다시 만들었다 (계정 100개면 화면 스레드에서 0.1초 넘게, 실기는 더).
+        measured = {item.account_id: item.measured_kb for item in overview.accounts}
+        if (self._latest_samples and measured != self._drawn_measured
+                and priority.storage_groups(list(self._latest_samples.values()))):
             self._render_table(self._latest_samples)
             return
         for row in range(self.table.rowCount()):
             account_id = self._account_id_at_row(row)
-            if account_id:
+            if account_id and self._chip_key(account_id) != self._drawn_chips.get(account_id):
                 self.table.setCellWidget(row, COL_SCAN, self._scan_cell(account_id))
 
     def _show_scan_tile_detail(self) -> None:
@@ -1649,9 +1678,12 @@ class MainWindow(QMainWindow):
         state = self._scan_banner
         if state is not None and state.running:
             scan.detail.setText(
-                i18n.t("scan.scanning_now", path=state.path) if state.path else i18n.t("scan.started")
+                i18n.t("scan.scanning_now", path=self._short_scan_path(state.path))
+                if state.path else i18n.t("scan.started")
             )
+            scan.detail.setToolTip(state.path or "")
             return
+        scan.detail.setToolTip("")
         overview = self._overview
         if overview is None:
             scan.detail.setText("")
@@ -1661,6 +1693,22 @@ class MainWindow(QMainWindow):
             done=overview.count(scan_overview.DONE), doing=overview.count(scan_overview.DOING),
             waiting=overview.count(scan_overview.WAITING), unseen=overview.count(scan_overview.UNSEEN),
         ))
+
+    def _short_scan_path(self, path: str) -> str:
+        """`계정 · 계정 안 경로` (가운데를 줄여 60자 안). 실기 경로는 길어 타일에서 세 줄로 접혔다."""
+
+        owner = max(
+            (account for account in self._config.accounts
+             if path == account.path or path.startswith(account.path.rstrip("/\\") + "/")
+             or path.startswith(account.path.rstrip("/\\") + "\\")),
+            key=lambda account: len(account.path), default=None,
+        )
+        text = (f"{owner.name} · {formatting.relative_path(path, owner.path)}"
+                if owner is not None else path)
+        if len(text) > SCAN_PATH_CHARS:
+            half = (SCAN_PATH_CHARS - 1) // 2
+            text = text[:half] + "…" + text[-half:]
+        return text
 
     def _show_tonight(self, overview) -> None:
         widgets.clear_layout(self.tonight_rows)
@@ -1734,30 +1782,44 @@ class MainWindow(QMainWindow):
         box.addWidget(end)
         return row
 
+    def _chip_key(self, account_id: str):
+        """그 계정의 '상세 스캔' 칸에 들어갈 것 `(글, 종류, 옆 글)` - 없으면 None."""
+
+        overview = self._overview
+        if overview is None:
+            return None
+        item = next((entry for entry in overview.accounts if entry.account_id == account_id), None)
+        return None if item is None else scan_overview.home_chip(item, overview)
+
     def _scan_cell(self, account_id: str) -> QWidget:
-        """표의 '상세 스캔' 칸 - 알약(어디쯤인가)과 옆 글(오늘 밤 몇 번째 등)."""
+        """표의 '상세 스캔' 칸 - 알약(어디쯤인가)과 옆 글(오늘 밤 몇 번째 등).
+
+        알약은 줄지 않는다 - 옆 글이 길면 옆 글을 '…' 로 줄인다 (예전에는 알약이 눌려
+        '하는 중 950/1000' 이 '= 중 950/10(' 로 잘렸다)."""
 
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         box = QHBoxLayout(container)
         box.setContentsMargins(4, 8, 4, 8)
         box.setSpacing(8)
-        overview = self._overview
-        item = None
-        if overview is not None:
-            item = next((entry for entry in overview.accounts if entry.account_id == account_id), None)
-        if item is None:
+        key = self._chip_key(account_id)
+        self._drawn_chips[account_id] = key
+        if key is None:
             dash = QLabel(i18n.t("common.none"))
             dash.setObjectName("muted")
             box.addWidget(dash)
+            box.addStretch(1)
         else:
-            text, kind, note = scan_overview.home_chip(item, overview)
-            box.addWidget(Chip(text, kind))
+            text, kind, note = key
+            chip = Chip(text, kind)
+            chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            box.addWidget(chip)
             if note:
-                label = QLabel(note)
+                label = widgets.ElidedLabel(note)
                 label.setObjectName("caption")
-                box.addWidget(label)
-        box.addStretch(1)
+                box.addWidget(label, 1)
+            else:
+                box.addStretch(1)
         return container
 
     # -- 이벤트 핸들러 --------------------------------------------------

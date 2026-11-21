@@ -28,7 +28,7 @@ QT_INHERITED = {
     "setToolTip", "menuBar", "statusBar", "setWindowIcon", "windowTitle",
     "setSizePolicy", "sizeHint", "setContentsMargins", "setProperty", "property",
     "setFocus", "raise_", "activateWindow", "setWindowState", "windowState",
-    "findChildren", "findChild",
+    "findChildren", "findChild", "window",
     # QDialog 쪽
     "accept", "reject", "done", "exec_", "setModal", "result",
     # QFrame 쪽

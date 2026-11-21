@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import formatting
 from .. import i18n, scan_store
+from ..scheduler import ThreadWorker
 from . import theme, widgets
 
 COLUMN_KEYS = [
@@ -44,6 +45,30 @@ STATUS_KEYS = {
 }
 
 
+class _ProgressReader(ThreadWorker):
+    """한 계정의 체크포인트 진행을 읽는다 - NFS 위 스캔 DB 라 화면 스레드에서 읽지 않는다.
+
+    예전에는 창을 열 때·계정을 바꿀 때·새로 고칠 때마다 화면 스레드에서 읽었다 (밤 스캔이
+    DB 를 쥐고 있으면 최대 30초 기다린다)."""
+
+    THREAD_NAME = "smvwp-progress"
+    COALESCE = True
+
+    def __init__(self, data_dir: Path, parent=None):
+        super().__init__(parent)
+        self._data_dir = data_dir
+
+    def _work(self, account_id: str):
+        kind = scan_store.BASELINE
+        with scan_store.session(self._data_dir) as conn:
+            state = scan_store.get_account_state(conn, account_id)
+            generation = state.working_generation
+            counts = scan_store.checkpoint_progress(conn, account_id, kind, generation)
+            rows = [dict(row) for row in scan_store.recent_checkpoints(conn, account_id, kind, generation)]
+            scan_at = scan_store.generation_completed_at(conn, account_id, generation)
+        return account_id, generation, counts, rows, scan_at
+
+
 class ScanProgressDialog(QDialog):
     def __init__(self, data_dir: Path, config: config_module.AppConfig, account_id=None, parent=None):
         super().__init__(parent)
@@ -51,6 +76,10 @@ class ScanProgressDialog(QDialog):
         self._config = config
         self.setWindowTitle(i18n.t("progress.title"))
         self.resize(900, 620)
+        self._reader = _ProgressReader(data_dir, self)
+        self._reader.finished.connect(self._show)
+        self._reader.failed.connect(
+            lambda message: self.summary_label.setText(i18n.t("scan.status_error", message=message)))
         self._build_ui()
         if account_id:
             index = self.account_combo.findData(account_id)
@@ -98,21 +127,18 @@ class ScanProgressDialog(QDialog):
 
     def _reload(self) -> None:
         account_id = self.account_combo.currentData()
-        # 종류는 이제 기준선 하나뿐이다. 고르는 상자를 없앴으니 여기서도 못박는다.
-        kind = scan_store.BASELINE
         if not account_id:
             self.summary_label.setText(i18n.t("search.no_account"))
             self.table.setRowCount(0)
             return
+        self.summary_label.setText(i18n.t("progress.reading"))
+        self._reader.start(account_id)
 
-        with scan_store.session(self._data_dir) as conn:
-            state = scan_store.get_account_state(conn, account_id)
-            generation = state.working_generation
-            counts = scan_store.checkpoint_progress(conn, account_id, kind, generation)
-            rows = scan_store.recent_checkpoints(conn, account_id, kind, generation)
-            # 진행 중인 스캔은 아직 완료 시각이 없다 - 그때는 회차 번호로 물러난다.
-            scan_at = scan_store.generation_completed_at(conn, account_id, generation)
-
+    def _show(self, result) -> None:
+        account_id, generation, counts, rows, scan_at = result
+        if account_id != self.account_combo.currentData():
+            return   # 그사이 다른 계정을 골랐다 - 그쪽 결과가 곧 온다
+        # 진행 중인 스캔은 아직 완료 시각이 없다 - 그때는 회차 번호로 물러난다.
         self.summary_label.setText(
             i18n.t(
                 "progress.summary",

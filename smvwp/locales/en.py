@@ -795,6 +795,7 @@ STRINGS = {
     ),
     "scan.current_target": "Now: {account} - {path}",
     "scan.scanning_now": "Detail scan running - {path}",
+    "progress.reading": "Reading... (the window stays usable)",
     "progress.title": "Detail scan progress",
     "progress.btn.refresh": "Refresh",
     "progress.summary": (
@@ -1167,6 +1168,7 @@ STRINGS = {
     "tree.band.title": "Account total",
     "tree.root_tip": "{name}\n{size} · {pct}% of the account",
     "scan.size_share": "{pct}% of the account",
+    "large.stack_rest": "{count} more · {size}",
     "large.share_tip": "{path}\n{size} · {pct}% of the account",
     "growth.chip.new": "New folder",
     "growth.chip.gone": "Gone",
