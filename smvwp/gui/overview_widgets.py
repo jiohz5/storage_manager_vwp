@@ -169,6 +169,40 @@ class TimelineBar(QWidget):
             tick += timedelta(hours=2)
 
 
+class ProgressLine(QWidget):
+    """글자 없는 가는 진행 막대 - 남는 폭만큼 늘고, 자리가 없으면 0 까지 줄어 사라진다.
+
+    홈 표 '상세 스캔' 칸에서 알약과 옆 글 뒤의 남는 폭을 채운다 (넓은 화면에서 칸이 비어
+    보이지 않게). 숫자는 알약이 말한다."""
+
+    def __init__(self, fraction: float, color: str, tip: str = "", parent=None):
+        super().__init__(parent)
+        self.fraction = max(0.0, min(1.0, fraction))
+        self._color = color
+        self.setToolTip(tip)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFixedHeight(26)
+        self.setStyleSheet("background: transparent;")
+
+    def sizeHint(self) -> QSize:
+        return QSize(0, 26)
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt 규약
+        width = self.width()
+        if width < 24:
+            return   # 너무 좁으면 그리지 않는다 - 점 하나는 읽히지 않는다
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        top = (self.height() - 6) / 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(theme.BORDER))
+        painter.drawRoundedRect(QRectF(0, top, width, 6), 3, 3)
+        if self.fraction > 0:
+            painter.setBrush(QColor(self._color))
+            painter.drawRoundedRect(QRectF(0, top, max(6.0, width * self.fraction), 6), 3, 3)
+
+
 class MiniBar(QWidget):
     """칸 하나짜리 진행 막대 + 오른쪽 글자 (표 칸에 넣는다)."""
 

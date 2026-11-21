@@ -96,12 +96,27 @@ class ElidedLabel(QLabel):
     머리줄처럼 옆 단추들과 폭을 나눠 쓰는 자리에서 긴 경고 문장이 단추를 밀어내거나
     중간에서 잘려 뜻이 끊기지 않게 한다. `text()` 는 줄이기 전 전체를 돌려준다."""
 
-    def __init__(self, text: str = "", parent=None):
+    def __init__(self, text: str = "", parent=None, natural_max: int = 0):
         super().__init__(parent)
         self._full = ""
-        # 폭은 남는 만큼만 쓴다 - 글 길이가 머리줄 폭을 정하지 않게.
-        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        # 폭은 남는 만큼만 쓴다 - 글 길이가 머리줄 폭을 정하지 않게. `natural_max` 를 주면
+        # 자리가 있을 때는 글 전체(그 폭까지)를 바라고, 모자라면 0 까지 줄어 먼저 양보한다.
+        self._natural_max = natural_max
+        self.setSizePolicy(QSizePolicy.Preferred if natural_max else QSizePolicy.Ignored,
+                           QSizePolicy.Preferred)
         self.setText(text)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt 규약
+        hint = super().sizeHint()
+        if self._natural_max:
+            hint.setWidth(min(self.fontMetrics().horizontalAdvance(self._full) + 4, self._natural_max))
+        return hint
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt 규약
+        hint = super().minimumSizeHint()
+        if self._natural_max:
+            hint.setWidth(0)
+        return hint
 
     def setText(self, text: str) -> None:  # noqa: N802 - Qt 규약
         self._full = text or ""

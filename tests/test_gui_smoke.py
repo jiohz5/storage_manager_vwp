@@ -3185,6 +3185,55 @@ class SmoothHomeTests(_GuiCase):
         for chip in chips:
             self.assertGreaterEqual(chip.width(), chip.sizeHint().width(), chip.text())
 
+    def test_a_wide_screen_gives_the_spare_width_to_the_scan_column(self):
+        """1920 화면에서 FULL 예상이 남는 폭을 다 먹어 '-' 하나 든 칸이 크게 비었다."""
+
+        from smvwp.gui.main_window import (COL_FORECAST, COL_SCAN, FORECAST_COLUMN_MAX,
+                                           SCAN_COLUMN_MIN)
+
+        self.window._scan_tab._on_scan_status_ready(self.snapshot())
+        table = self.window.table
+        widths = {}
+        for width in (1600, 1920):   # 1600 은 처음 창 크기
+            self.window.resize(width, 1000)
+            self.window.show()
+            for _ in range(5):
+                _app().processEvents()
+            used = sum(table.columnWidth(c) for c in range(table.columnCount()))
+            self.assertLessEqual(abs(used - table.viewport().width()), 2, "표가 꽉 찬다")
+            self.assertLessEqual(table.columnWidth(COL_FORECAST), FORECAST_COLUMN_MAX)
+            self.assertGreaterEqual(table.columnWidth(COL_SCAN), SCAN_COLUMN_MIN)
+            widths[width] = table.columnWidth(COL_SCAN)
+        self.assertGreater(widths[1920], widths[1600] + 250, "넓어진 만큼 상세 스캔 칸이 받는다")
+        # 그 칸 안도 비지 않는다 - 진행 막대가 남는 폭을 채운다.
+        from smvwp.gui.overview_widgets import ProgressLine
+
+        cell = next(widget for widget in self.scan_cells() if widget is not None)
+        line = cell.findChild(ProgressLine)
+        self.assertIsNotNone(line)
+        self.assertGreater(line.width(), 150)
+        self.assertAlmostEqual(line.fraction, 0.9)
+
+    def test_the_default_size_does_not_scroll_sideways_with_scan_notes(self):
+        """남는 폭을 상세 스캔에 주다가 1600 에서 옆 스크롤이 생겨 '최근 수집' 이 잘렸다."""
+
+        from smvwp import config as config_module
+
+        for index in range(20):
+            path = Path(self.tmp.name) / f"PRJ_{index:03d}_LAYOUT"
+            path.mkdir()
+            config_module.add_account(self.config, path.name, str(path), data_dir=self.data_dir)
+        self.window._latest_samples = self.samples(self.config.accounts)
+        long_note = ("하는 중 950/1000", "doing", "11/27(금) 밤 · 34번째")
+        with patch("smvwp.scan_overview.home_chip", return_value=long_note):
+            self.window._scan_tab._on_scan_status_ready(self.snapshot())
+            self.window._render_table(self.window._latest_samples)
+        self.window.resize(1600, 960)
+        self.window.show()
+        for _ in range(5):
+            _app().processEvents()
+        self.assertFalse(self.window.table.horizontalScrollBar().isVisible())
+
     def test_the_running_path_on_the_tile_is_short(self):
         from smvwp.gui.scan_tab import BannerState
 

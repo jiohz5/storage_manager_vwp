@@ -72,7 +72,7 @@ from .. import (
 from ..scheduler import CollectorScheduler, DashboardWorker, ThreadWorker
 from . import stall_watch
 from . import theme, widgets
-from .overview_widgets import Chip, MiniBar, SegmentBar, TimelineBar
+from .overview_widgets import Chip, MiniBar, ProgressLine, SegmentBar, TimelineBar
 from .visuals import ActionDelegate, ChangeList, CollectStrip
 from .scan_tab import ScanTab
 from .account_dialog import AccountDialog
@@ -150,6 +150,14 @@ COLUMN_KEYS = [
 # 찾기 칸: 줄이 이보다 많으면 글자마다가 아니라 멈춘 뒤 한 번 다시 그린다.
 FILTER_IMMEDIATE_ROWS = 40
 FILTER_DELAY_MS = 200
+# 홈 표: '상세 스캔' 칸은 알약 + 옆 글이 들어갈 만큼은 늘 갖고 남는 폭을 다 받는다.
+# FULL 예상은 글만큼, 이 범위 안에서.
+SCAN_COLUMN_MIN = 210
+# '상세 스캔' 칸의 옆 글이 먼저 받는 폭의 상한 (그 뒤는 진행 막대).
+SCAN_NOTE_MAX = 200
+FORECAST_COLUMN_MIN = 72
+FORECAST_COLUMN_WANT = 130
+FORECAST_COLUMN_MAX = 240
 # 홈 타일의 '지금 재는 곳' 글 길이.
 SCAN_PATH_CHARS = 60
 
@@ -710,7 +718,33 @@ class MainWindow(QMainWindow):
         # 창의 크기 바뀜은 칸 배치보다 먼저 온다 - 오른쪽 칸 자신의 크기 바뀜을 듣는다.
         if watched is getattr(self, "right_column", None) and event.type() == QEvent.Resize:
             self._fit_right_column()
+        table = getattr(self, "table", None)
+        if table is not None and watched is table.viewport() and event.type() == QEvent.Resize:
+            self._fit_home_columns()
         return super().eventFilter(watched, event)
+
+    def _fit_home_columns(self) -> None:
+        """홈 표의 남는 폭을 나눈다 - FULL 예상은 글만큼(넘치면 줄임), 나머지는 '상세 스캔'.
+
+        좁으면 FULL 예상이 먼저 줄고(툴팁에 전체), '상세 스캔' 은 알약이 들어갈 만큼은
+        지킨다. 표가 꽉 차므로 넓은 화면에서 빈 칸이 생기지 않는다."""
+
+        table = self.table
+        header = table.horizontalHeader()
+        others = sum(table.columnWidth(column) for column in range(table.columnCount())
+                     if column not in (COL_SCAN, COL_FORECAST) and not table.isColumnHidden(column))
+        free = table.viewport().width() - others
+        wanted = max(table.sizeHintForColumn(COL_FORECAST), header.sectionSizeHint(COL_FORECAST))
+        # 자리가 있으면 글만큼(적어도 FORECAST_COLUMN_WANT), 모자라면 머리글 폭까지 먼저 준다 -
+        # 옆으로 밀려 '최근 수집' 이 잘리는 것보다 낫다 (전체는 툴팁).
+        forecast = max(header.minimumSectionSize(),
+                       min(max(wanted, FORECAST_COLUMN_WANT), FORECAST_COLUMN_MAX,
+                           free - SCAN_COLUMN_MIN))
+        scan = max(SCAN_COLUMN_MIN, free - forecast)
+        if table.columnWidth(COL_FORECAST) != forecast:
+            table.setColumnWidth(COL_FORECAST, forecast)
+        if table.columnWidth(COL_SCAN) != scan:
+            table.setColumnWidth(COL_SCAN, scan)
 
     def _open_growth(self, account_id: str) -> None:
         self._scan_tab.open_growth(account_id)
@@ -823,18 +857,25 @@ class MainWindow(QMainWindow):
         # (그 상태가 되면 가로 스크롤이 생기는데, 아무것도 안 보이는 것보다 낫다).
         header.setMinimumSectionSize(72)
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        # 남는 폭은 **FULL 예상**이 가져간다. 이름을 늘이려고 Stretch 로 뒀더니
-        # 오히려 반대가 됐다 - Stretch 는 '남은 것'을 받는 열이라, 옆 열들이
-        # 내용대로 가져간 뒤 이름만 최소 폭(80px)으로 찌그러져 `tc_layout...`
-        # 이 됐다. 이름은 내용대로 잡고, 길면 줄여도 되는 쪽(예측 문구, 툴팁에
-        # 전체가 있다)에 나머지를 준다.
+        # 남는 폭은 **'상세 스캔'** 이 가져간다 (`_fit_home_columns`). 알약 옆 글('11/27(금)
+        # 밤 · 34번째')이 그 폭을 쓰므로 넓은 화면에서도 비어 보이지 않는다. 예전에는 FULL
+        # 예상이 Stretch 로 남는 폭을 다 먹어 1920 화면에서 '-' 하나 든 칸이 400px 넘게 비었다.
+        # 이름은 Stretch 로 두지 않는다 - 옆 열들이 먼저 가져간 뒤 이름만 최소 폭으로
+        # 찌그러져 `tc_layout...` 이 됐다.
         # 막대가 들어가는 칸은 내용 기준으로 재면 너무 좁아진다.
         header.setSectionResizeMode(COL_BYTE, QHeaderView.Fixed)
         self.table.setColumnWidth(COL_BYTE, 200)
-        # '상세 스캔' 칸도 위젯(알약 + 옆 글)이라 내용 기준 폭이 머리글 폭으로 줄어든다.
+        # '상세 스캔' 과 FULL 예상은 직접 폭을 준다 - 남는 폭을 나누는 것은 `_fit_home_columns`.
         header.setSectionResizeMode(COL_SCAN, QHeaderView.Fixed)
-        self.table.setColumnWidth(COL_SCAN, 210)
-        header.setSectionResizeMode(COL_FORECAST, QHeaderView.Stretch)
+        self.table.setColumnWidth(COL_SCAN, SCAN_COLUMN_MIN)
+        header.setSectionResizeMode(COL_FORECAST, QHeaderView.Fixed)
+        self.table.setColumnWidth(COL_FORECAST, FORECAST_COLUMN_MIN)
+        # 내용대로 잡는 칸의 폭이 바뀌면(그리기 뒤) 남는 폭을 다시 나눈다. 우리가 정하는
+        # 두 칸의 바뀜은 듣지 않는다 - 서로 부르며 돌지 않게.
+        header.sectionResized.connect(
+            lambda index, _old, _new: index not in (COL_SCAN, COL_FORECAST)
+            and self._fit_home_columns())
+        self.table.viewport().installEventFilter(self)
         header.setStretchLastSection(False)
         header.setHighlightSections(False)
         # 헤더를 눌러 정렬한다. Qt 내장 정렬 대신 직접 하는 이유는 위 주석 참고.
@@ -1282,6 +1323,7 @@ class MainWindow(QMainWindow):
             self._tint_row(row, sample.overall_tier if sample.ok else tiers.UNKNOWN)
 
         self._summarize(every, latest)
+        self._fit_home_columns()
 
     def _fill_time_cell(self, row: int, account, sample) -> None:
         """'최근 수집' 칸 - 계정 줄과 스토리지 아래 계정 줄이 같이 쓴다."""
@@ -1789,7 +1831,10 @@ class MainWindow(QMainWindow):
         if overview is None:
             return None
         item = next((entry for entry in overview.accounts if entry.account_id == account_id), None)
-        return None if item is None else scan_overview.home_chip(item, overview)
+        if item is None:
+            return None
+        text, kind, note = scan_overview.home_chip(item, overview)
+        return text, kind, note, item.done_dirs, item.total_dirs, item.estimated_total
 
     def _scan_cell(self, account_id: str) -> QWidget:
         """표의 '상세 스캔' 칸 - 알약(어디쯤인가)과 옆 글(오늘 밤 몇 번째 등).
@@ -1810,16 +1855,22 @@ class MainWindow(QMainWindow):
             box.addWidget(dash)
             box.addStretch(1)
         else:
-            text, kind, note = key
+            text, kind, note, done, total, estimated = key
             chip = Chip(text, kind)
             chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             box.addWidget(chip)
             if note:
-                label = widgets.ElidedLabel(note)
+                # 옆 글은 자리가 있으면 다 보이고(남는 폭은 아래 막대), 모자라면 먼저 줄어든다.
+                label = widgets.ElidedLabel(note, natural_max=SCAN_NOTE_MAX)
                 label.setObjectName("caption")
-                box.addWidget(label, 1)
-            else:
-                box.addStretch(1)
+                box.addWidget(label)
+            # 이번 바퀴 진행 - 넓은 화면에서 칸이 비지 않게. 좁으면 줄어 사라진다.
+            box.addWidget(ProgressLine(
+                done / total if total else 0.0,
+                theme.ACCENT if done < total else theme.TEXT_FAINT,
+                i18n.t("home.scan_line_tip", done=f"{done:,}", total=f"{total:,}",
+                       estimated=i18n.t("home.scan_line_estimated") if estimated else ""),
+            ), 1)
         return container
 
     # -- 이벤트 핸들러 --------------------------------------------------

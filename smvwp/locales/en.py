@@ -1162,6 +1162,8 @@ STRINGS = {
     "home.tonight.end": "~{time}",
     "home.tonight.carry": "continues next night",
     "home.storage_row": "{mount} · {count} accounts",
+    "home.scan_line_tip": "This pass: {done} / {total} directories{estimated}",
+    "home.scan_line_estimated": " (total estimated from last time)",
     "home.account_share_tip": "This account's size from the detail scan - {pct}% of the storage's used space",
     "home.account_share_unknown": "The detail scan has not finished measuring this account yet",
     "detail.scan_when": "Measured by the {when} scan",

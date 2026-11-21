@@ -1172,6 +1172,8 @@ STRINGS = {
     "home.tonight.end": "~{time}",
     "home.tonight.carry": "다음 밤 이어서",
     "home.storage_row": "{mount} · 계정 {count}개",
+    "home.scan_line_tip": "이번 바퀴: 디렉터리 {done} / {total}{estimated}",
+    "home.scan_line_estimated": " (전체 수는 지난번 기준 어림)",
     "home.account_share_tip": "상세 스캔이 잰 이 계정의 크기 - 스토리지 사용량의 {pct}%",
     "home.account_share_unknown": "상세 스캔이 아직 이 계정을 끝까지 재지 않았습니다",
     "detail.scan_when": "{when} 스캔으로 잰 용량",
