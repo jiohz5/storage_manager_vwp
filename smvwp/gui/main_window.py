@@ -1108,6 +1108,7 @@ class MainWindow(QMainWindow):
         usage_log.record_soon(self._data_dir, usage_log.GUIDE_OPENED, detail=kind)
         dialog.open_scan_requested.connect(self._show_account_in_scan_tab)
         dialog.status_message.connect(self.status_bar_label.setText)
+        dialog.open_requested.connect(self._open_requested)
         dialog.exec_()
 
     def _refresh_table_from_store(self, at_least: Optional[str] = None) -> None:
@@ -2032,8 +2033,12 @@ class MainWindow(QMainWindow):
         """계정 하나에 대해 아는 것 전부를 한 창에 모아 보여 준다."""
 
         account_id = self._account_id_at_row(row)
-        if not account_id:
-            return
+        if account_id:
+            self._open_account_detail_for(account_id)
+
+    def _open_account_detail_for(self, account_id: str) -> None:
+        """계정 하나의 상세 창 (홈 표에서 걸러 숨긴 계정이어도 연다)."""
+
         from .account_detail_dialog import AccountDetailDialog
 
         usage_log.record_soon(self._data_dir, usage_log.ACCOUNT_VIEWED)
@@ -2043,7 +2048,30 @@ class MainWindow(QMainWindow):
         # 창의 탭을 옮기는 것은 창의 일이다 - 대화상자가 직접 만지면 둘을
         # 따로 옮길 수 없게 된다.
         dialog.open_scan_requested.connect(self._show_account_in_scan_tab)
+        dialog.open_requested.connect(self._open_requested)
         dialog.exec_()
+
+    def _open_requested(self, kind: str, account_id: str) -> None:
+        """대화상자가 '이것을 열어 달라' 하고 닫혔다 - 그 창이 다 닫힌 뒤 여기서 연다.
+
+        예전에는 대화상자 안에서 다음 대화상자를 열어 안내 -> 계정 -> 폴더 펼쳐 보기처럼
+        창이 겹겹이 쌓였다 (닫을 때도 하나씩). 이제 큰 창 위에는 늘 창 하나뿐이다."""
+
+        QTimer.singleShot(0, lambda: self._open_now(kind, account_id))
+
+    def _open_now(self, kind: str, account_id: str) -> None:
+        from .account_detail_dialog import OPEN_ACCOUNT, OPEN_TREE, OPEN_TREND
+
+        if kind == OPEN_ACCOUNT:
+            self._open_account_detail_for(account_id)
+        elif kind == OPEN_TREE:
+            from .tree_dialog import TreeDialog
+
+            TreeDialog(self._data_dir, self._config, account_id=account_id, parent=self).exec_()
+        elif kind == OPEN_TREND:
+            from .trend_dialog import TrendDialog
+
+            TrendDialog(self._data_dir, self._config, account_id=account_id, parent=self).exec_()
 
     def _show_account_in_scan_tab(self, account_id: str) -> None:
         self._scan_tab.select_account(account_id)

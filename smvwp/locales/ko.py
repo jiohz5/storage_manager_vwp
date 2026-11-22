@@ -392,6 +392,7 @@ STRINGS = {
     "load.col.rtt": "왕복",
     "load.col.queue": "대기",
     "tree.title": "폴더 펼쳐 보기",
+    "tree.btn.view_tip": "지금 펼쳐 둔 만큼을 글로 (들여쓰기는 깊이, 줄 끝에 전체 경로). 더 펼치면 더 들어갑니다.",
     "tree.btn.open": "폴더 펼쳐 보기",
     "tree.btn.expand": "한 단계 더 펼치기",
     "tree.col.path": "폴더",

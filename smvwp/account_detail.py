@@ -151,7 +151,7 @@ def read(
     one = replace(config, accounts=[account])
     _read_samples(detail, data_dir, account_id, trend_days, now)
     _read_forecast(detail, data_dir, one, account_id)
-    _read_scan(detail, data_dir, one, account)
+    _read_scan(detail, data_dir, one, account, full=config)
     _read_health(detail, data_dir, one, account_id)
     return detail
 
@@ -187,12 +187,22 @@ def _read_forecast(detail, data_dir, config, account_id) -> None:
         detail.failures.append(PART_FORECAST)
 
 
-def _read_scan(detail, data_dir, config, account) -> None:
-    """야간 스캔이 이 계정에 대해 남긴 것 (`config` 는 이 계정만 담은 것)."""
+def _read_scan(detail, data_dir, config, account, full=None) -> None:
+    """야간 스캔이 이 계정에 대해 남긴 것 (`config` 는 이 계정만 담은 것).
+
+    수집·야간 스캔이 써 둔 결과 파일(`scan_view`, 계정 전체 설정 `full` 로 믿을지 본다)에
+    있으면 그것을 쓴다 - 스캔 DB 를 열지 않는다. 없으면 예전처럼 이 계정만 DB 에서."""
+
+    from . import scan_view
 
     try:
-        snapshot = nightly_scan.get_status_snapshot(data_dir, config)
-        detail.scan = next(iter(snapshot.accounts), None)
+        from_file = scan_view.read(data_dir, full) if full is not None else None
+        if from_file is not None:
+            detail.scan = next((entry for entry in from_file.accounts
+                                if entry.account_id == account.account_id), None)
+        else:
+            snapshot = nightly_scan.get_status_snapshot(data_dir, config)
+            detail.scan = next(iter(snapshot.accounts), None)
         if detail.scan is not None:
             # 비중은 그 파일들을 잰 바퀴(끝난 것)의 합계로 나눈다.
             detail.large_files = large_files.build(

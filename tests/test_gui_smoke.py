@@ -3326,6 +3326,79 @@ def i18n_t(key):
     return i18n.t(key)
 
 
+class DetailDirsTabTests(_GuiCase):
+    def test_the_account_window_has_big_folders_too(self):
+        from types import SimpleNamespace
+
+        from smvwp import i18n
+        from smvwp.gui.account_detail_dialog import AccountDetailDialog
+
+        account = self.config.accounts[0]
+        with patch("smvwp.gui.account_detail_dialog.DetailReader.run_async", return_value=True):
+            dialog = AccountDetailDialog(self.data_dir, lambda: self.config, account.account_id)
+        self.addCleanup(dialog.close)
+        names = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+        self.assertIn(i18n.t("scan.tab.dirs"), names)
+        scan = SimpleNamespace(owners=[], large_dirs=[[account.path + "/run", 300 * 1024 * 1024, 900, None, False]])
+        dialog.dirs_page.show_dirs(scan.large_dirs, account.name, account.path, 1000 * 1024 * 1024)
+        self.assertEqual(dialog.dirs_page.table.rowCount(), 1)
+
+
+class OneWindowAtATimeTests(_GuiCase):
+    """안내 -> 계정 상세 -> 폴더 펼쳐 보기처럼 창이 겹겹이 쌓이지 않는다."""
+
+    def detail(self):
+        from smvwp.gui.account_detail_dialog import AccountDetailDialog
+
+        account = self.config.accounts[0]
+        with patch("smvwp.gui.account_detail_dialog.DetailReader.run_async", return_value=True):
+            dialog = AccountDetailDialog(self.data_dir, lambda: self.config, account.account_id)
+        self.addCleanup(dialog.close)
+        return dialog
+
+    def test_the_account_window_asks_and_closes_instead_of_stacking(self):
+        from smvwp.gui import account_detail_dialog as module
+
+        dialog = self.detail()
+        asked = []
+        dialog.open_requested.connect(lambda kind, account_id: asked.append((kind, account_id)))
+        with patch("smvwp.gui.tree_dialog.TreeDialog.exec_",
+                   side_effect=AssertionError("창 위에 창")):
+            dialog._open_tree()
+        self.assertEqual(asked, [(module.OPEN_TREE, self.config.accounts[0].account_id)])
+        self.assertEqual(dialog.result(), dialog.Accepted)
+
+    def test_the_main_window_opens_what_was_asked(self):
+        import time
+
+        from smvwp.gui import account_detail_dialog as module
+        from smvwp.gui.main_window import MainWindow
+
+        window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(window.close)
+        opened = []
+        with patch("smvwp.gui.tree_dialog.TreeDialog.exec_", side_effect=lambda: opened.append("tree")), \
+                patch("smvwp.gui.tree_dialog._TreeLoader.run_async", return_value=True):
+            window._open_requested(module.OPEN_TREE, self.config.accounts[0].account_id)
+            deadline = time.monotonic() + 2
+            while not opened and time.monotonic() < deadline:
+                _app().processEvents()
+        self.assertEqual(opened, ["tree"])
+
+    def test_an_account_hidden_by_the_filter_still_opens(self):
+        from smvwp.gui import account_detail_dialog as module
+        from smvwp.gui.main_window import MainWindow
+
+        window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(window.close)
+        window.filter_edit.setText("없는계정")
+        opened = []
+        with patch("smvwp.gui.account_detail_dialog.AccountDetailDialog.exec_",
+                   side_effect=lambda: opened.append(1)),                 patch("smvwp.gui.account_detail_dialog.DetailReader.run_async", return_value=True):
+            window._open_now(module.OPEN_ACCOUNT, self.config.accounts[0].account_id)
+        self.assertEqual(opened, [1])
+
+
 class StackPartsTests(unittest.TestCase):
     def test_hundreds_of_parts_become_a_few_and_the_rest(self):
         from smvwp.gui import scan_pages

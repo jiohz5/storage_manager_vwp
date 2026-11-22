@@ -56,6 +56,11 @@ HEALTH_COLUMN_KEYS = ("detail.health.col.task", "detail.health.col.status",
                       "detail.health.col.size", "detail.health.col.reclaim")
 
 
+# 다른 창을 열어 달라는 종류 (`open_requested`). 큰 창(`MainWindow._open_requested`)이 연다.
+OPEN_ACCOUNT = "account"
+OPEN_TREE = "tree"
+OPEN_TREND = "trend"
+
 class DetailReader(ThreadWorker):
     THREAD_NAME = "smvwp-account-detail"
 
@@ -76,6 +81,9 @@ class AccountDetailDialog(QDialog):
 
     # 이 창은 탭을 바꿀 수 없다 (창의 것이다). 값만 내보내고 창이 옮긴다.
     open_scan_requested = pyqtSignal(str)
+    # 다른 창을 열어 달라 `(종류, 계정id)` - 이 창은 닫히고 큰 창이 연다 (창 위에 창을 쌓지
+    # 않는다). 종류는 `OPEN_TREE` / `OPEN_TREND`.
+    open_requested = pyqtSignal(str, str)
 
     def __init__(self, data_dir: Path, get_config, account_id: str, parent=None):
         super().__init__(parent)
@@ -283,6 +291,11 @@ class AccountDetailDialog(QDialog):
         self.owners_page.retranslate()
         self.stack.addWidget(self.owners_page)
         self.tabs.addTab(i18n.t("scan.tab.owners"))
+        # 큰 폴더 - 바로 든 파일이 많은 폴더 (상세 스캔 탭의 쪽을 그대로).
+        self.dirs_page = scan_pages.LargeDirsPage(compact=True)
+        self.dirs_page.retranslate()
+        self.stack.addWidget(self.dirs_page)
+        self.tabs.addTab(i18n.t("scan.tab.dirs"))
         return column
 
     def _table(self, column_keys, tab_key: str) -> QTableWidget:
@@ -327,6 +340,10 @@ class AccountDetailDialog(QDialog):
         self.owners_page.show_owners(
             list(getattr(scan, "owners", None) or []) if scan is not None else [],
             detail.name, detail.measured_kb,
+        )
+        self.dirs_page.show_dirs(
+            list(getattr(scan, "large_dirs", None) or []) if scan is not None else [],
+            detail.name, detail.path, detail.measured_kb,
         )
         self._fill_health_table(detail)
 
@@ -554,20 +571,12 @@ class AccountDetailDialog(QDialog):
 
     # -- 동작 ------------------------------------------------------------
     def _open_tree(self) -> None:
-        from .tree_dialog import TreeDialog
-
-        TreeDialog(
-            self._data_dir, self._get_config(),
-            account_id=self._account_id, parent=self,
-        ).exec_()
+        self.open_requested.emit(OPEN_TREE, self._account_id)
+        self.accept()
 
     def _open_trend(self) -> None:
-        from .trend_dialog import TrendDialog
-
-        TrendDialog(
-            self._data_dir, self._get_config(),
-            account_id=self._account_id, parent=self,
-        ).exec_()
+        self.open_requested.emit(OPEN_TREND, self._account_id)
+        self.accept()
 
     def _go_to_scan(self) -> None:
         self.open_scan_requested.emit(self._account_id)

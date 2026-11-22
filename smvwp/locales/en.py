@@ -371,6 +371,7 @@ STRINGS = {
     "load.col.rtt": "Round trip",
     "load.col.queue": "Queued",
     "tree.title": "Browse folders",
+    "tree.btn.view_tip": "What is expanded now, as text (indent = depth, full path at the end). Expand more to include more.",
     "tree.btn.open": "Browse folders",
     "tree.btn.expand": "Expand one more level",
     "tree.col.path": "Folder",

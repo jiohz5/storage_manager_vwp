@@ -100,6 +100,20 @@ class AccountDetailTests(unittest.TestCase):
         self.assertIn(account_detail.PART_FORECAST, detail.failures)
         self.assertIsNotNone(detail.sample)
 
+    def test_the_scan_part_comes_from_the_status_file_without_the_scan_db(self):
+        """창이 스캔 DB 를 열지 않게 - 수집·야간 스캔이 써 둔 `view/scan.json` 이 있으면 그것."""
+
+        from smvwp import scan_view
+
+        self._sample()
+        scan_view.write(self.data_dir, self.config)
+        with patch("smvwp.nightly_scan.get_status_snapshot", side_effect=AssertionError("DB")), \
+                patch("smvwp.scan_status.get_status_snapshot", side_effect=AssertionError("DB")):
+            detail = self.read()
+        self.assertNotIn(account_detail.PART_SCAN, detail.failures)
+        self.assertIsNotNone(detail.scan)
+        self.assertEqual(detail.scan.account_id, self.account.account_id)
+
     def test_a_broken_scan_read_does_not_take_the_rest_down(self):
         self._sample()
         with patch(

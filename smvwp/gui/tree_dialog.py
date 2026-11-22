@@ -33,7 +33,9 @@ from typing import List, Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
+    QApplication,
     QComboBox,
+    QMenu,
     QTabWidget,
     QDialog,
     QHBoxLayout,
@@ -48,7 +50,7 @@ from PyQt5.QtWidgets import (
 from .. import config as config_module
 from .. import formatting, i18n, scan_store, tiers, tree_view, usage_log
 from ..scheduler import ThreadWorker
-from . import theme, visuals, widgets
+from . import path_actions, theme, visuals, widgets
 from .treemap_view import TreemapView
 
 COLUMN_KEYS = ("tree.col.path", "tree.col.size", "tree.col.share", "tree.col.change",
@@ -214,7 +216,20 @@ class TreeDialog(QDialog):
         self.expand_btn.clicked.connect(self._expand_more)
         list_tools.addWidget(self.expand_btn)
         list_tools.addStretch(1)
+        # 경로 표와 같은 손잡이 - 두 번 누르면 그 자리에서 터미널, 펼친 만큼을 글로 보기·저장.
+        hint = QLabel(i18n.t("paths.hint"))
+        hint.setObjectName("muted")
+        list_tools.addWidget(hint)
+        self.view_btn = QPushButton(i18n.t("paths.btn.view"))
+        self.view_btn.setToolTip(i18n.t("tree.btn.view_tip"))
+        self.view_btn.clicked.connect(self.show_list)
+        self.save_btn = QPushButton(i18n.t("paths.btn.save"))
+        self.save_btn.setToolTip(i18n.t("tree.btn.view_tip"))
+        self.save_btn.clicked.connect(self.save_list)
+        list_tools.addWidget(self.view_btn)
+        list_tools.addWidget(self.save_btn)
         list_box.addLayout(list_tools)
+        self.viewer = None
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(COLUMN_KEYS))
@@ -237,6 +252,10 @@ class TreeDialog(QDialog):
         for column in (COL_SHARE, COL_CHANGE, COL_COLD):
             self.tree.setItemDelegateForColumn(column, self.cells)
         self.tree.itemExpanded.connect(self._on_expanded)
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_menu)
+        self.tree.setToolTip(i18n.t("paths.table_tip"))
         list_box.addWidget(self.tree, 1)
         self.tabs.addTab(list_page, i18n.t("tree.tab.list"))
 
@@ -515,6 +534,83 @@ class TreeDialog(QDialog):
         self.map_path_label.setText(" / ".join(labels) if labels else "")
         self.map_up_btn.setEnabled(self.treemap.can_go_up())
         self.map_home_btn.setEnabled(self.treemap.can_go_up())
+
+    # -- 손대기: 터미널, 경로, 목록 --------------------------------------------
+    @staticmethod
+    def _place(item) -> "Optional[tuple]":
+        """`(경로, 파일인가)` - 계산으로 만든 '그 밖' 줄이나 빈 자리면 None."""
+
+        node = item.data(COL_PATH, NODE_ROLE) if item is not None else None
+        if node is None or node.kind == tree_view.MORE or not node.path:
+            return None
+        return node.path, node.kind == tree_view.FILE
+
+    def _on_double_click(self, item, _column: int) -> None:
+        place = self._place(item)
+        if place is not None:
+            path_actions.open_terminal(place[0], place[1], self)
+
+    def _on_menu(self, point) -> None:
+        place = self._place(self.tree.itemAt(point))
+        if place is None:
+            return
+        menu = QMenu(self.tree)
+        terminal = menu.addAction(i18n.t("paths.menu.terminal"))
+        copy = menu.addAction(i18n.t("paths.menu.copy"))
+        chosen = menu.exec_(self.tree.viewport().mapToGlobal(point))
+        if chosen is terminal:
+            path_actions.open_terminal(place[0], place[1], self)
+        elif chosen is copy:
+            QApplication.clipboard().setText(place[0])
+
+    def list_text(self) -> str:
+        """지금 펼쳐 둔 만큼을 글로 - 들여쓰기로 깊이, 칸들, 그리고 줄 끝에 전체 경로."""
+
+        heads = [self.tree.headerItem().text(column) for column in range(1, len(COLUMN_KEYS))]
+        rows = []
+
+        def walk(item, depth):
+            node = item.data(COL_PATH, NODE_ROLE)
+            if node is None:
+                return
+            rows.append(["  " * depth + item.text(COL_PATH)]
+                        + [item.text(column) for column in range(1, len(COLUMN_KEYS))]
+                        + [node.path if node.kind != tree_view.MORE else ""])
+            if item.isExpanded():
+                for index in range(item.childCount()):
+                    walk(item.child(index), depth + 1)
+
+        for index in range(self.tree.topLevelItemCount()):
+            walk(self.tree.topLevelItem(index), 0)
+        table = [[self.tree.headerItem().text(COL_PATH)] + heads + [i18n.t("paths.report.path")]] + rows
+        widths = [max(path_actions.text_width(row[i]) for row in table) for i in range(len(heads) + 1)]
+
+        def line(cells):
+            return "  ".join(
+                [cell + " " * (widths[i] - path_actions.text_width(cell))
+                 for i, cell in enumerate(cells[:-1])] + [cells[-1]]).rstrip()
+
+        from datetime import datetime
+
+        title = f"{self.account_combo.currentText()} - {i18n.t('tree.btn.open')}"
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        return "\n".join([title, i18n.t("paths.report.made", stamp=stamp), self.caption.text(), ""]
+                         + [line(row) for row in table]) + "\n"
+
+    def _file_stem(self) -> str:
+        return f"smvwp_{self.account_combo.currentText()}_tree"
+
+    def show_list(self):
+        if self.viewer is not None:
+            self.viewer.close()
+        self.viewer = path_actions.ListViewer(
+            self.list_text(), f"{self.account_combo.currentText()} - {i18n.t('tree.btn.open')}",
+            self._file_stem(), self)
+        self.viewer.show()
+        return self.viewer
+
+    def save_list(self):
+        return path_actions.save_text(self, self.list_text(), self._file_stem())
 
     def _expand_more(self) -> None:
         """보이는 것 한 단계 더 펼치기.

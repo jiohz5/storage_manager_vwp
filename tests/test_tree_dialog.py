@@ -141,6 +141,40 @@ class TreeDialogTests(unittest.TestCase):
             ("/proj/layout/run1", 300 * 1024, 2),
         ]
 
+    # -- 손대기 (경로 표와 같은 손잡이) ------------------------------------
+    def child(self, dialog, name):
+        root = dialog.tree.topLevelItem(0)
+        return next(root.child(i) for i in range(root.childCount()) if root.child(i).text(0) == name)
+
+    def test_double_click_opens_a_terminal_in_that_folder(self):
+        seed(self.conn, self.account.account_id, 1, self.rows_for_tree())
+        dialog = self.dialog()
+        with patch("smvwp.gui.tree_dialog.path_actions.open_terminal") as terminal:
+            dialog.tree.itemDoubleClicked.emit(self.child(dialog, "layout"), 0)
+        terminal.assert_called_once()
+        self.assertEqual(terminal.call_args[0][:2], ("/proj/layout", False))
+
+    def test_the_list_carries_what_is_expanded_with_full_paths(self):
+        seed(self.conn, self.account.account_id, 1, self.rows_for_tree())
+        dialog = self.dialog()
+        text = dialog.list_text()
+        self.assertIn("/proj/layout", text)
+        self.assertIn("/proj/sim", text)
+        layout = next(line for line in text.splitlines() if line.rstrip().endswith("/proj/layout"))
+        self.assertTrue(layout.startswith("  layout"), layout)   # 들여쓰기가 깊이
+        dialog.view_btn.click()
+        self.addCleanup(dialog.viewer.close)
+        self.assertEqual(dialog.viewer.text.toPlainText(), dialog.list_text())
+
+    def test_the_list_can_be_saved(self):
+        seed(self.conn, self.account.account_id, 1, self.rows_for_tree())
+        dialog = self.dialog()
+        target = Path(self.tmp.name) / "tree.txt"
+        with patch("smvwp.gui.path_actions.QFileDialog.getSaveFileName",
+                   return_value=(str(target), "")):
+            dialog.save_btn.click()
+        self.assertIn("/proj/sim", target.read_text(encoding="utf-8"))
+
     def test_the_account_root_appears(self):
         seed(self.conn, self.account.account_id, 1, self.rows_for_tree())
         dialog = self.dialog()

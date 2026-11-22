@@ -222,6 +222,9 @@ class ActionDialog(QDialog):
 
     # 창의 탭을 옮기는 것은 창의 일이다. 값만 내보낸다.
     open_scan_requested = pyqtSignal(str)
+    # 다른 창을 열어 달라 `(종류, 계정id)` - 이 창은 닫히고 큰 창이 연다
+    # (`account_detail_dialog.OPEN_*`).
+    open_requested = pyqtSignal(str, str)
     # 상태 줄에 쓸 한 줄 (복사했다는 알림 등).
     status_message = pyqtSignal(str)
 
@@ -534,21 +537,16 @@ class ActionDialog(QDialog):
             self._copy("\n".join(self.guide.commands))
 
     def _open_account(self) -> None:
-        from .account_detail_dialog import AccountDetailDialog
+        from .account_detail_dialog import OPEN_ACCOUNT
 
-        dialog = AccountDetailDialog(
-            self._data_dir, self._get_config, self.guide.account_id, parent=self
-        )
-        dialog.open_scan_requested.connect(self._forward_scan)
-        dialog.exec_()
+        self.open_requested.emit(OPEN_ACCOUNT, self.guide.account_id)
+        self.accept()
 
     def _open_tree(self) -> None:
-        from .tree_dialog import TreeDialog
+        from .account_detail_dialog import OPEN_TREE
 
-        TreeDialog(
-            self._data_dir, self._get_config(),
-            account_id=self.guide.account_id, parent=self,
-        ).exec_()
+        self.open_requested.emit(OPEN_TREE, self.guide.account_id)
+        self.accept()
 
     def _forward_scan(self, account_id: str) -> None:
         self.open_scan_requested.emit(account_id)
