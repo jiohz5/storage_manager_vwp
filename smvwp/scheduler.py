@@ -272,7 +272,10 @@ class ScanStatusWorker(ThreadWorker):
         return self.start()
 
     def _work(self):
-        return nightly_scan.get_status_snapshot(
+        # 수집·야간 스캔이 써 둔 결과 파일이 믿을 만하면 그것만 (`scan_view`), 아니면 DB.
+        from . import scan_view
+
+        return scan_view.load(
             self._data_dir, self._get_config(), cache=self._settled,
             on_account=lambda index, total: emit_safely(self, "progress", index, total, ""),
         )

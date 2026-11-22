@@ -225,6 +225,16 @@ class NightlyGrowthIntegrationTests(unittest.TestCase):
         self.assertIn("dir1", events[0]["details"]["path"])
         self.assertGreaterEqual(events[0]["details"]["delta_kb"], 100 * GB_KB)
 
+    def test_the_scan_leaves_the_status_file_for_the_window(self):
+        """창은 스캔 DB 대신 이 파일을 읽는다 (`scan_view`) - 스캔이 끝나면 새로 써 둔다."""
+
+        from smvwp import scan_view
+
+        self._run_scan(dir1_kb=10)
+        self.assertIsNone(scan_view.problem(self.data_dir, self.config))
+        snapshot = scan_view.read(self.data_dir, self.config)
+        self.assertEqual(snapshot.accounts[0].account_id, self.account.account_id)
+
     def test_small_growth_does_not_alert(self):
         self._run_scan(dir1_kb=10)
         self._run_scan(dir1_kb=20)

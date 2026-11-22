@@ -185,7 +185,7 @@ def command_gui(args) -> int:
 
     from smvwp.gui.main_window import MainWindow
 
-    window = MainWindow(data_dir, config)
+    window = MainWindow(data_dir, config, view_only=True if getattr(args, "view_only", False) else None)
     window.show()
     stall_watch.mark("창이 뜰 때")
     watch = stall_watch.StallWatch().start(window)
@@ -216,6 +216,12 @@ def command_collect(args) -> int:
 
 
 # -- prepare ---------------------------------------------------------------
+
+
+def _write_scan_view(data_dir, config) -> str:
+    from smvwp import scan_view
+
+    return str(scan_view.write(data_dir, config))
 
 
 def command_prepare(args) -> int:
@@ -256,6 +262,8 @@ def command_prepare(args) -> int:
         ("헬스체크 대조 남기기", lambda: f"{health.save_results(data_dir, config)}개 프로젝트 계정"),
         ("스캔 탭 요약 남기기", lambda: f"{nightly_scan.save_summaries(data_dir, config)}개 계정 새로"),
         ("한 바퀴 시작 남기기", lambda: nightly_scan.advance_pass(data_dir, config) and "남김"),
+        # 창은 상세 스캔 상태를 이 파일에서 읽는다 (`scan_view`) - 다음 수집 전에도.
+        ("상세 스캔 결과 파일 쓰기", lambda: _write_scan_view(data_dir, config)),
         # 야간 스캔은 마지막 스캔 뒤로 많이 변한 계정을 먼저 돈다 (`scan_order`). 이 규칙
         # 전에 끝난 스캔에는 그때의 사용량이 없어, 표본 이력에서 찾아 채운다.
         ("스캔 때의 사용량 채우기",
@@ -801,6 +809,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = sub.add_parser("gui", help="관리 GUI 실행")
     _add_data_dir(gui)
+    gui.add_argument(
+        "--view-only", action="store_true",
+        help="보기만 한다 - 수집·상세 스캔을 시작하지 않고 결과 파일만 읽는다 "
+             "(데이터 폴더에 쓸 수 없으면 저절로 이렇게 뜬다)",
+    )
     gui.set_defaults(func=command_gui)
 
 

@@ -371,6 +371,20 @@ def _home(report: Report, data_dir: Path, config, lines: List[str]) -> None:
     report.note(f"홈 파일 {'정상' if problem is None else problem}, 남이 읽기 "
                 f"{'됨' if readable else '안 됨'}, 창이 파일에서 {from_file}번 / 느린 DB {from_db}번")
 
+    from . import scan_view
+
+    scan_path = scan_view.view_path(data_dir)
+    scan_problem = scan_view.problem(data_dir, config)
+    try:
+        scan_info = scan_path.stat()
+        lines.append(f"view/scan.json {_mb(scan_info.st_size)}, 고친 때 "
+                     f"{_ago(datetime.fromtimestamp(scan_info.st_mtime, timezone.utc).isoformat(), datetime.now(timezone.utc))}"
+                     f", 창이 쓸 수 있나: {'예' if scan_problem is None else '아니오 - ' + scan_problem}")
+    except FileNotFoundError:
+        lines.append("! view/scan.json 없음 - 창은 상세 스캔 상태를 스캔 DB 에서 읽는다")
+    report.note(f"{'' if scan_problem is None else '! '}상세 스캔 파일 "
+                f"{'정상' if scan_problem is None else scan_problem}")
+
 
 def _night(report: Report, data_dir: Path, config, lines: List[str]) -> None:
     from . import scan_store

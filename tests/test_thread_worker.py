@@ -295,7 +295,7 @@ class BusyDatabaseTests(unittest.TestCase):
                 raise answer
             return answer
 
-        with patch("smvwp.scheduler.nightly_scan.get_status_snapshot", side_effect=snapshot):
+        with patch("smvwp.scan_status.get_status_snapshot", side_effect=snapshot):
             self.assertEqual(worker._compute(()), ("finished", "snapshot-1"))
             with self.assertLogs("smvwp.scheduler", level="WARNING") as logs:
                 self.assertEqual(worker._compute(()), ("finished", "snapshot-1"))
@@ -305,7 +305,7 @@ class BusyDatabaseTests(unittest.TestCase):
         from smvwp.scheduler import ScanStatusWorker
 
         worker = ScanStatusWorker(Path("."), lambda: None)
-        with patch("smvwp.scheduler.nightly_scan.get_status_snapshot", side_effect=ValueError("x")):
+        with patch("smvwp.scan_status.get_status_snapshot", side_effect=ValueError("x")):
             with self.assertLogs("smvwp.scheduler", level="ERROR"):
                 self.assertEqual(worker._compute(()), ("failed", "x"))
 

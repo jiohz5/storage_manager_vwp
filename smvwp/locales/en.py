@@ -426,6 +426,8 @@ STRINGS = {
     "dashboard.list_filtered": "showing {shown} of {total}",
     "dashboard.list_title": "Accounts",
     "dashboard.list_hint": "Double-click a row for everything about that account",
+    "dashboard.view_only": "View only - not collecting or scanning, just reading the results others wrote",
+    "scan.view_only_tip": "View-only window (cannot write the data folder) - scans run from cron or a window that can write",
     "dashboard.btn.collect_now": "Refresh",
     "dashboard.btn.collect_now_tooltip": (
         "Re-reads usage with df and updates the table. Finishes immediately and puts "

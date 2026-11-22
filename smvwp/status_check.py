@@ -126,6 +126,16 @@ def _home_file(data_dir: Path, config) -> Item:
     return Item("home", "홈 결과 파일", OK, "창이 이 파일을 읽습니다")
 
 
+def _scan_file(data_dir: Path, config) -> Item:
+    from . import scan_view
+
+    trouble = scan_view.problem(data_dir, config)
+    if trouble is not None:
+        return Item("scan_view", "상세 스캔 결과 파일", WARN, f"{trouble} - 창이 스캔 DB 에서 읽습니다",
+                    _HOME_HINTS.get(trouble, "다음 수집 뒤 다시 써집니다"))
+    return Item("scan_view", "상세 스캔 결과 파일", OK, "창이 이 파일을 읽습니다")
+
+
 def _night_scan(data_dir: Path, now: datetime) -> Item:
     if scan_lock.is_locked(data_dir):
         return Item("scan", "야간 스캔", INFO, "지금 돌고 있습니다")
@@ -169,6 +179,7 @@ def gather(data_dir: Path, config, now: Optional[datetime] = None) -> List[Item]
     items.append(_collection(data_dir, config.settings, now))
     items.append(_cycle_time(data_dir, config.settings))
     items.append(_home_file(data_dir, config))
+    items.append(_scan_file(data_dir, config))
     items.append(_night_scan(data_dir, now))
 
     outdated = nightly_scan.outdated_summaries(data_dir, config)

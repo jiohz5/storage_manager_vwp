@@ -967,6 +967,9 @@ def run_nightly_scan(
 
     keeper = _LockKeeper(data_dir, run_id)
     keeper.start()
+    # 창이 DB 대신 읽는 상세 스캔 상태 파일을 도는 동안 몇십 초마다 (`scan_view`).
+    viewer = _ViewKeeper(data_dir, config)
+    viewer.start()
     try:
         status, outcomes, effective_parallel = _scan_under_lock(
             data_dir,
@@ -984,6 +987,7 @@ def run_nightly_scan(
         )
     finally:
         keeper.stop()
+        viewer.stop()
         # 무엇이 실패해도 잠금은 푼다. 예전에는 이 줄이 실행 기록을 마무리하는
         # 일(`finish_run` 등) 뒤에 있어, 거기서 예외가 나면(NFS 위의 "database
         # is locked" 같은) 여기까지 오지 못했다. cron 실행이면 프로세스가
@@ -1007,6 +1011,7 @@ def run_nightly_scan(
     _prune_orphan_search_indexes(data_dir, config)
     _save_summaries(data_dir, config)
     _advance_pass(data_dir, config)
+    _write_scan_view(data_dir, config)
     _save_health(data_dir, config)
     _generate_reports(data_dir, config, finished_at)
     return RunSummary(
@@ -1017,6 +1022,46 @@ def run_nightly_scan(
         parallel_accounts=effective_parallel,
         weekend_night=weekend_night,
     )
+
+
+def _write_scan_view(data_dir: Path, config) -> None:
+    """상세 스캔 상태 파일을 쓴다. 실패해도 창이 DB 에서 읽을 뿐이다."""
+
+    from . import scan_view
+
+    try:
+        scan_view.write(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("상세 스캔 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
+
+
+class _ViewKeeper:
+    """스캔이 도는 동안 `scan_view.WRITE_EVERY_SECONDS` 마다 상세 스캔 상태 파일을 쓴다.
+
+    창은 스캔 중 5초마다 상태를 묻는데, 이제 DB 가 아니라 이 파일을 읽는다 - 창 여럿이
+    NFS 위 DB 를 5초마다 여는 대신 스캔이 30초에 한 번 쓴다."""
+
+    def __init__(self, data_dir: Path, config):
+        from . import scan_view
+
+        self._data_dir = data_dir
+        self._config = config
+        self._interval = scan_view.WRITE_EVERY_SECONDS
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="smvwp-scan-view", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _loop(self) -> None:
+        # 시작하자마자 한 번 - '지금 도는 중' 이 창에 바로 보이게.
+        while True:
+            _write_scan_view(self._data_dir, self._config)
+            if self._stop.wait(max(self._interval, 0.05)):
+                return
 
 
 class _LockKeeper:

@@ -19,6 +19,7 @@ DESIGN.md 2부 6절은 "대시보드 단일 화면(탭 없음)"으로 결정했�
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -162,6 +163,15 @@ FORECAST_COLUMN_MAX = 240
 SCAN_PATH_CHARS = 60
 
 
+
+def is_writable(data_dir: Path) -> bool:
+    """이 사람이 데이터 폴더에 쓸 수 있나 (`os.access` 한 번). 폴더가 아직 없으면 그 위를 본다."""
+
+    path = Path(data_dir)
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return os.access(str(path), os.W_OK)
+
 class _Tile(QFrame):
     """홈 맨 위의 타일 하나 - 이름, 큰 값, 그 옆 한마디, 막대나 알약, 설명 한두 줄.
 
@@ -259,10 +269,15 @@ class _FreshnessReader(ThreadWorker):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, data_dir: Path, config: config_module.AppConfig):
+    def __init__(self, data_dir: Path, config: config_module.AppConfig,
+                 view_only: Optional[bool] = None):
         super().__init__()
         self._data_dir = data_dir
         self._config = config
+        # 보기 전용 - 데이터 폴더에 쓸 수 없는 사람(또는 `gui --view-only`). 수집과 상세
+        # 스캔을 시작하지 않고, 수집기·야간 스캔이 써 둔 결과 파일을 읽기만 한다. 예전에는
+        # 그런 사람의 창도 15분마다 수집을 시도했다가 권한 오류로 실패했다.
+        self._view_only = (not is_writable(data_dir)) if view_only is None else bool(view_only)
         self._latest_samples: Dict[str, store.SampleRecord] = {}
         self._forecasts: Dict[str, object] = {}
         self._freshness: Dict[str, object] = {}
@@ -303,6 +318,9 @@ class MainWindow(QMainWindow):
         # 신호는 화면을 짠 **뒤에** 잇는다 - 상태 줄 위젯이 `_build_ui` 안에서
         # 만들어지기 때문이다.
         self._scan_tab.status_message.connect(self.status_bar_label.setText)
+        if self._view_only:
+            self._scan_tab.set_view_only(True)
+            self.status_bar_label.setText(i18n.t("dashboard.view_only"))
         self._scan_tab.banner_changed.connect(self._update_home_scan_banner)
         self._scan_tab.overview_changed.connect(self._on_overview_changed)
 
@@ -1159,6 +1177,12 @@ class MainWindow(QMainWindow):
         if self._collecting:
             return
         self._collecting = True
+        if self._view_only:
+            # 수집하지 않는다 - 남이 써 둔 결과 파일을 수집 간격의 1/3 마다 다시 읽는다.
+            self._view_timer = QTimer(self)
+            self._view_timer.timeout.connect(self._refresh_table_from_store)
+            self._view_timer.start(max(60, self._config.settings.collector_interval_seconds // 3) * 1000)
+            return
         self._scheduler.start(run_immediately=True)
 
     def _freshness_warning(self) -> Optional[str]:
@@ -1875,6 +1899,12 @@ class MainWindow(QMainWindow):
 
     # -- 이벤트 핸들러 --------------------------------------------------
     def _trigger_now(self) -> None:
+        if self._view_only:
+            # 수집 대신 다시 읽기만 (남이 써 둔 결과 파일).
+            self.status_bar_label.setText(i18n.t("dashboard.view_only"))
+            self._refresh_table_from_store()
+            self._scan_tab.refresh()
+            return
         self.status_bar_label.setText(i18n.t("dashboard.collecting"))
         self._scheduler.trigger_now()
 

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # 7~8번이고(보고서를 만드는 날만 더), 여는 것 자체는 NFS 에서도 왕복 몇 번이다. 연결을
 # 네 모듈에 걸쳐 넘기도록 고칠 값어치가 있는지는 **실기에서 어느 단계가 느린지** 를 봐야
 # 안다 - 그래서 고치기 전에 재는 것부터 둔다.
-STAGES = ("df", "save", "server", "notify", "forecast", "reports", "home")
+STAGES = ("df", "save", "server", "notify", "forecast", "reports", "home", "scan_view")
 
 
 def timing_path(data_dir: Path) -> Path:
@@ -131,6 +131,18 @@ def _write_home(data_dir: Path, config, home, watch: _Stopwatch) -> None:
             home_view.write(data_dir, config, home)
     except Exception:  # pragma: no cover - 방어적 처리
         logger.exception("홈 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
+
+
+def _write_scan_view(data_dir: Path, config, watch: _Stopwatch) -> None:
+    from . import scan_lock, scan_view
+
+    try:
+        if scan_lock.is_locked(data_dir):
+            return
+        with watch.stage("scan_view"):
+            scan_view.write(data_dir, config)
+    except Exception:  # pragma: no cover - 방어적 처리
+        logger.exception("상세 스캔 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
 
 
 def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> List[store.SampleRecord]:
@@ -265,6 +277,9 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
     # 홈 한 장을 파일로 - 창은 이것만 읽는다 (`home_view`). 실패하면 창이 예전처럼 DB 에서
     # 읽을 뿐이다. 보고서 뒤에 쓰는 것은 예전 순서 그대로다.
     _write_home(data_dir, config, home, watch)
+    # 상세 스캔 상태도 한 장 (`scan_view`) - 스캔이 안 도는 낮에도 창이 DB 를 열지 않게.
+    # 스캔이 도는 중이면 스캔이 30초마다 쓰므로 여기서는 건너뛴다.
+    _write_scan_view(data_dir, config, watch)
 
     watch.save(data_dir)
 

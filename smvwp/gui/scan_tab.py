@@ -129,6 +129,8 @@ class ScanTab(QFrame):
         # 쪽마다 마지막으로 그린 입력 (`_draw_page`). 같으면 다시 그리지 않는다.
         self._drawn: dict = {}
         self._drawn_once = False
+        # 보기 전용 창은 스캔을 시작·중지하지 않는다 (`set_view_only`).
+        self._view_only = False
 
         self._build()
 
@@ -570,8 +572,8 @@ class ScanTab(QFrame):
         if self._scan_status_timer.interval() != wanted:
             self._scan_status_timer.start(wanted)
 
-        self.scan_run_btn.setEnabled(not running)
-        self.scan_stop_btn.setEnabled(running)
+        self.scan_run_btn.setEnabled(not running and not self._view_only)
+        self.scan_stop_btn.setEnabled(running and not self._view_only)
         self._running = running
         # 현황은 홈도 쓴다 - 늘 낸다. 쪽은 **지금 보이는 것만** 다시 그린다 (처음 한 번은
         # 전부). 예전에는 30초마다(스캔이 도는 동안은 5초마다) 여섯 쪽을 다 다시 그렸다 -
@@ -712,6 +714,8 @@ class ScanTab(QFrame):
         self.accounts_page.mark_account(self.scan_account_combo.currentData())
 
     def _trigger_scan_now(self) -> None:
+        if self._view_only:
+            return
         # 안내를 보고 방금 cron 을 등록한 뒤 누르는 경우가 많다. 그때 빨간
         # 글씨가 그대로 남아 있으면 등록이 안 된 줄 알고 또 돌리게 된다.
         self._check_cron_async()
@@ -795,12 +799,23 @@ class ScanTab(QFrame):
         style.polish(label)
         label.setVisible(True)
 
+    def set_view_only(self, view_only: bool) -> None:
+        """보기 전용 - 스캔 단추를 끄고 스스로 시작하지 않는다 (데이터 폴더에 쓸 수 없다)."""
+
+        self._view_only = bool(view_only)
+        for button in (self.scan_run_btn, self.scan_stop_btn):
+            button.setEnabled(False)
+            button.setToolTip(i18n.t("scan.view_only_tip") if view_only else button.toolTip())
+
     def _maybe_start_nightly_scan(self) -> None:
         """시간창에 들어왔으면 스스로 시작한다 (밤마다 한 번).
 
         판단은 `auto_scan.should_start`에 있다 - Qt 없이 시험할 수 있어야
         하기 때문이다. 여기서는 그 답에 따라 실행만 한다.
         """
+
+        if self._view_only:
+            return
 
         now = datetime.now()
         latest = self._scan_snapshot.latest_run if self._scan_snapshot is not None else None

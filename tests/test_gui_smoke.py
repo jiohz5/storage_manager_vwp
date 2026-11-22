@@ -3280,6 +3280,52 @@ class SmoothHomeTests(_GuiCase):
         self.assertEqual(drawn, [1], "보일 때 그린다")
 
 
+class ViewOnlyTests(_GuiCase):
+    """데이터 폴더에 쓸 수 없는 사람의 창 - 수집·스캔을 시작하지 않고 결과 파일만 읽는다."""
+
+    def window(self, **kwargs):
+        from smvwp.gui.main_window import MainWindow
+
+        window = MainWindow(self.data_dir, self.config, **kwargs)
+        self.addCleanup(window.close)
+        return window
+
+    def test_a_read_only_data_folder_opens_a_view_only_window(self):
+        with patch("smvwp.gui.main_window.os.access", return_value=False):
+            window = self.window()
+        self.assertTrue(window._view_only)
+        self.assertEqual(window.status_bar_label.text(), i18n_t("dashboard.view_only"))
+
+    def test_a_view_only_window_never_collects_or_scans(self):
+        window = self.window(view_only=True)
+        with patch.object(window._scheduler, "start") as start, \
+                patch.object(window._scheduler, "trigger_now") as now:
+            window._start_collecting()
+            window.collect_btn.click()
+        start.assert_not_called()
+        now.assert_not_called()
+        tab = window._scan_tab
+        with patch.object(tab._scan_worker, "run_async") as run:
+            tab._trigger_scan_now()
+            with patch("smvwp.auto_scan.should_start", return_value=True):
+                tab._maybe_start_nightly_scan()
+        run.assert_not_called()
+        self.assertFalse(tab.scan_run_btn.isEnabled())
+        self.assertFalse(tab.scan_stop_btn.isEnabled())
+
+    def test_a_writable_folder_still_collects(self):
+        window = self.window(view_only=False)
+        with patch.object(window._scheduler, "start") as start:
+            window._start_collecting()
+        start.assert_called_once()
+
+
+def i18n_t(key):
+    from smvwp import i18n
+
+    return i18n.t(key)
+
+
 class StackPartsTests(unittest.TestCase):
     def test_hundreds_of_parts_become_a_few_and_the_rest(self):
         from smvwp.gui import scan_pages

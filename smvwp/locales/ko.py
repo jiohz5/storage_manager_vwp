@@ -447,6 +447,8 @@ STRINGS = {
     "dashboard.list_filtered": "{total}개 중 {shown}개 보임",
     "dashboard.list_title": "계정 목록",
     "dashboard.list_hint": "행을 두 번 누르면 그 계정의 모든 것을 한 창에서 봅니다",
+    "dashboard.view_only": "보기 전용 - 수집·상세 스캔은 하지 않고 남이 써 둔 결과만 읽습니다",
+    "scan.view_only_tip": "보기 전용 창입니다 (데이터 폴더에 쓸 수 없음) - 스캔은 cron 이나 쓸 수 있는 사람의 창이 돌립니다",
     "dashboard.btn.collect_now": "새로고침",
     "dashboard.btn.collect_now_tooltip": (
         "df로 사용률을 다시 읽어 표를 갱신합니다. 즉시 끝나며 대상 파일시스템에 "
