@@ -267,6 +267,55 @@ class CollectAllTests(unittest.TestCase):
             records = collector.collect_all(self.accounts(3))
         self.assertEqual([record.ok for record in records], [True, False, True])
 
+    def test_each_account_is_told_as_soon_as_its_df_ends(self):
+        """새로고침이 df 몇 초 뒤에 줄을 고치게 - 느린 계정 하나가 나머지를 붙잡지 않는다."""
+
+        import threading
+
+        from smvwp.store import SampleRecord
+
+        told, others_told = [], threading.Event()
+
+        def uneven(account, **_kwargs):
+            if account.account_id == "a0":
+                # 나머지가 다 알려진 뒤에야 끝난다 - 다 끝난 뒤 한꺼번에 알리면 여기서 막힌다.
+                self.assertTrue(others_told.wait(10), "끝난 계정을 바로 알리지 않았다")
+            return SampleRecord(account_id=account.account_id, collected_at="t", ok=True)
+
+        def on_record(record):
+            told.append(record.account_id)
+            if len(told) == 5:
+                others_told.set()
+
+        with patch("smvwp.collector.collect_account", side_effect=uneven):
+            records = collector.collect_all(self.accounts(6), on_record=on_record)
+        self.assertEqual(told[-1], "a0")
+        self.assertEqual(sorted(told), sorted(record.account_id for record in records))
+
+    def test_it_is_told_on_the_calling_thread_not_a_df_worker(self):
+        """창의 신호는 수집 스레드에서만 나간다 (잠깐 떴다 사라지는 일꾼 스레드가 아니라)."""
+
+        import threading
+
+        from smvwp.store import SampleRecord
+
+        threads = set()
+        with patch("smvwp.collector.collect_account",
+                   side_effect=lambda account, **_k: SampleRecord(
+                       account_id=account.account_id, collected_at="t", ok=True)):
+            collector.collect_all(self.accounts(6),
+                                  on_record=lambda _r: threads.add(threading.get_ident()))
+        self.assertEqual(threads, {threading.get_ident()})
+
+    def test_a_broken_listener_does_not_stop_collecting(self):
+        from smvwp.store import SampleRecord
+
+        with patch("smvwp.collector.collect_account",
+                   side_effect=lambda account, **_k: SampleRecord(
+                       account_id=account.account_id, collected_at="t", ok=True)):
+            records = collector.collect_all(self.accounts(3), on_record=lambda _r: 1 / 0)
+        self.assertEqual(len(records), 3)
+
     def test_nothing_and_one(self):
         self.assertEqual(collector.collect_all([]), [])
         with patch("smvwp.collector.ThreadPoolExecutor",

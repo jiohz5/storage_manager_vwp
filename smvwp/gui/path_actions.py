@@ -34,6 +34,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
+from PyQt5 import sip
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFontDatabase
 from PyQt5.QtWidgets import (
@@ -208,7 +209,16 @@ class PathTable:
         self.owners.request(missing)
 
     def _fill_owner(self, path: str, name: str) -> None:
+        """주인 하나가 왔다 - 그 경로의 칸에 쓴다.
+
+        표(와 그 자식인 `OwnerLookup`)가 지워진 뒤에도 이미 줄 선 신호는 온다 - 받는 쪽이
+        Qt 객체가 아니라 끊기지 않는다. 그때 지워진 표를 만지면 RuntimeError 가 슬롯 밖으로
+        나가고, PyQt 는 그것을 qFatal 로 받아 **프로그램이 통째로 죽는다** (창을 닫거나 쪽을
+        다시 그린 직후 주인을 찾던 중이면). 표가 없으면 할 일도 없다."""
+
         table = self.table
+        if sip.isdeleted(table):
+            return
         for row in range(table.rowCount()):
             item = table.item(row, self.owner_column)
             if item is not None and item.data(FULL_PATH_ROLE) == path:

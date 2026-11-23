@@ -192,6 +192,8 @@ class CollectorWorker(ThreadWorker):
     사람이 누른 `지금 수집` 은 언제나 수집한다."""
 
     THREAD_NAME = "smvwp-collect"
+    # 계정 하나의 df 가 끝났다 (`SampleRecord`) - 창이 그 줄을 바로 고친다.
+    measured = pyqtSignal(object)
 
     def __init__(self, data_dir: Path, get_config, parent: QObject = None):
         super().__init__(parent)
@@ -209,7 +211,10 @@ class CollectorWorker(ThreadWorker):
         config = self._get_config()
         if not manual and self._collected_elsewhere_recently(config):
             return None
-        records = run_collection_cycle(self._data_dir, config)
+        records = run_collection_cycle(
+            self._data_dir, config,
+            on_record=lambda record: emit_safely(self, "measured", record),
+        )
         stamps = [_parse_utc(record.collected_at) for record in records]
         stamps = [stamp for stamp in stamps if stamp is not None]
         if stamps:
@@ -338,10 +343,13 @@ class DashboardWorker(ThreadWorker):
 class CollectorScheduler:
     """QTimer로 `run_collection_cycle`을 주기적으로 호출하는 얇은 래퍼."""
 
-    def __init__(self, data_dir: Path, get_config, on_finished=None, on_failed=None):
+    def __init__(self, data_dir: Path, get_config, on_finished=None, on_failed=None,
+                 on_measured=None):
         self._data_dir = data_dir
         self._get_config = get_config
         self._worker = CollectorWorker(data_dir, get_config)
+        if on_measured is not None:
+            self._worker.measured.connect(on_measured)
         if on_finished is not None:
             self._worker.finished.connect(on_finished)
         if on_failed is not None:

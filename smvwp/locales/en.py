@@ -444,6 +444,7 @@ STRINGS = {
     "dashboard.hero_detail": "Highest usage · {account}",
     "dashboard.not_collected": "Not collected yet",
     "dashboard.collect_failed": "Collection failed: {message}",
+    "dashboard.measuring": "Checking df {done}/{total} - rows update as each finishes",
     "dashboard.collecting": "Collecting...",
     "dashboard.collected": "Collection done ({count} accounts)",
     "data.title": "Data folder",

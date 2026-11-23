@@ -18,8 +18,9 @@ DESIGN.md 1부 3절 "00:00~24:00 (15분 간격) — 초경량 df/inode/quota 표
 
 from __future__ import annotations
 
+import logging
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
@@ -29,6 +30,8 @@ from . import quota as quota_module
 from . import tiers
 from .config import Account
 from .store import SampleRecord
+
+logger = logging.getLogger(__name__)
 
 
 class CollectorError(Exception):
@@ -281,18 +284,40 @@ def collect_all(
     accounts: List[Account],
     df_timeout_seconds: int = 10,
     quota_command: Optional[List[str]] = None,
+    on_record=None,
 ) -> List[SampleRecord]:
-    """모든 계정의 표본을 **계정 순서대로** 돌려준다 (묻는 것은 여럿이 함께)."""
+    """모든 계정의 표본을 **계정 순서대로** 돌려준다 (묻는 것은 여럿이 함께).
+
+    `on_record(record)` 를 주면 계정 하나의 `df` 가 끝나는 대로 (끝난 순서로) 부른다 -
+    창이 수집 한 바퀴(저장·알림·예측·홈 계산)를 다 기다리지 않고 그 계정 줄부터 바로
+    고친다. **부르는 것은 이 함수를 부른 스레드다** (`df` 를 묻는 일꾼 스레드가 아니다) -
+    창의 신호는 다른 작업자처럼 수집 스레드 하나에서만 나간다 (`scheduler.emit_safely`).
+    거기서 난 예외는 수집을 막지 않는다."""
 
     def one(account: Account) -> SampleRecord:
         return collect_account(
             account, df_timeout_seconds=df_timeout_seconds, quota_command=quota_command
         )
 
+    def tell(record: SampleRecord) -> None:
+        if on_record is None:
+            return
+        try:
+            on_record(record)
+        except Exception:  # 화면 쪽 사정이 수집을 막으면 안 된다
+            logger.exception("계정 하나 끝남 알리기 실패 (수집은 계속)")
+
     accounts = list(accounts)
     if len(accounts) < 2:
-        return [one(account) for account in accounts]
+        records = []
+        for account in accounts:
+            records.append(one(account))
+            tell(records[-1])
+        return records
     with ThreadPoolExecutor(
         max_workers=min(COLLECT_WORKERS, len(accounts)), thread_name_prefix="smvwp-df"
     ) as pool:
-        return list(pool.map(one, accounts))
+        futures = [pool.submit(one, account) for account in accounts]
+        for future in as_completed(futures):
+            tell(future.result())
+        return [future.result() for future in futures]

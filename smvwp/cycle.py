@@ -145,7 +145,10 @@ def _write_scan_view(data_dir: Path, config, watch: _Stopwatch) -> None:
         logger.exception("상세 스캔 결과 파일을 쓰지 못했습니다 (창은 DB 에서 읽습니다)")
 
 
-def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> List[store.SampleRecord]:
+def run_collection_cycle(data_dir: Path, config: config_module.AppConfig,
+                         on_record=None) -> List[store.SampleRecord]:
+    """`on_record` 는 계정 하나의 df 가 끝날 때마다 (`collector.collect_all`)."""
+
     settings = config.settings
     accounts = config_module.enabled_accounts(config)
 
@@ -164,6 +167,7 @@ def run_collection_cycle(data_dir: Path, config: config_module.AppConfig) -> Lis
                 accounts,
                 df_timeout_seconds=settings.df_timeout_seconds,
                 quota_command=settings.quota_command,
+                on_record=on_record,
             )
         )
 

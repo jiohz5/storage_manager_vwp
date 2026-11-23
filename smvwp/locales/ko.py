@@ -465,6 +465,7 @@ STRINGS = {
     "dashboard.hero_detail": "가장 높은 사용률 · {account}",
     "dashboard.not_collected": "아직 수집되지 않음",
     "dashboard.collect_failed": "수집 실패: {message}",
+    "dashboard.measuring": "df 확인 중 {done}/{total} - 끝난 계정부터 바로 고칩니다",
     "dashboard.collecting": "수집 중...",
     "dashboard.collected": "수집 완료 ({count}개 계정)",
     "data.title": "데이터 폴더",

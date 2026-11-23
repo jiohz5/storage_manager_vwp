@@ -149,6 +149,8 @@ COLUMN_KEYS = [
 # 넣는다 - 필요한 순간(어느 파일시스템인지 확인할 때)에만 보면 되는 값이다.
 
 # 찾기 칸: 줄이 이보다 많으면 글자마다가 아니라 멈춘 뒤 한 번 다시 그린다.
+# df 가 끝난 계정을 모아 그리는 간격 (ms). 사람 눈에는 바로이고, 몰려 와도 한 번 그린다.
+MEASURED_DRAW_MS = 150
 FILTER_IMMEDIATE_ROWS = 40
 FILTER_DELAY_MS = 200
 # 홈 표: '상세 스캔' 칸은 알약 + 옆 글이 들어갈 만큼은 늘 갖고 남는 폭을 다 받는다.
@@ -352,7 +354,16 @@ class MainWindow(QMainWindow):
             get_config=lambda: self._config,
             on_finished=self._on_collection_finished,
             on_failed=self._on_collection_failed,
+            on_measured=self._on_account_measured,
         )
+        # df 가 끝난 계정을 모아 두었다가 한 번에 그린다 (계정 100개가 0.1초 안에 몰려도
+        # 표를 100번 다시 세우지 않게).
+        self._measured_count = 0
+        self._closed = False
+        self._measured_timer = QTimer(self)
+        self._measured_timer.setSingleShot(True)
+        self._measured_timer.setInterval(MEASURED_DRAW_MS)
+        self._measured_timer.timeout.connect(self._draw_measured)
         self._freshness_reader = _FreshnessReader(
             data_dir, get_config=lambda: self._config, parent=self
         )
@@ -1907,9 +1918,34 @@ class MainWindow(QMainWindow):
             self._scan_tab.refresh()
             return
         self.status_bar_label.setText(i18n.t("dashboard.collecting"))
+        self._measured_count = 0
         self._scheduler.trigger_now()
 
+    def _on_account_measured(self, record) -> None:
+        """계정 하나의 df 가 끝났다 - 수집 한 바퀴를 기다리지 않고 그 줄부터 고친다.
+
+        예전에는 새로고침을 누르면 df 뒤의 저장·알림·FULL 예측·홈 계산(30일 표본 읽기)과
+        홈 다시 읽기까지 다 끝나야 표가 바뀌었다. df 는 계정마다 몇 초 안에 끝나는데
+        화면은 그 몇 배를 기다렸다. 추세·예측 칸은 홈을 다시 읽을 때 함께 바뀐다."""
+
+        if self._closed or record is None or not getattr(record, "account_id", None):
+            return
+        latest = dict(self._latest_samples or {})
+        latest[record.account_id] = record
+        self._latest_samples = latest
+        self._measured_count += 1
+        total = len(config_module.enabled_accounts(self._config))
+        self.status_bar_label.setText(
+            i18n.t("dashboard.measuring", done=min(self._measured_count, total), total=total))
+        if not self._measured_timer.isActive():
+            self._measured_timer.start()
+
+    def _draw_measured(self) -> None:
+        if self._latest_samples and not self._closed:
+            self._render_table(self._latest_samples)
+
     def _on_collection_finished(self, records: Optional[List[store.SampleRecord]]) -> None:
+        self._measured_count = 0
         if records is None:
             # 다른 곳(cron 등)이 방금 수집해서 건너뛰었다 (`CollectorWorker`).
             self.status_bar_label.setText(i18n.t("dashboard.collected_elsewhere"))
@@ -2148,6 +2184,9 @@ class MainWindow(QMainWindow):
                 return
 
         self._scheduler.stop()
+        # 닫힌 뒤 끝나는 df 가 숨은 창의 표를 다시 세우지 않게.
+        self._closed = True
+        self._measured_timer.stop()
         self._scan_tab.shutdown()
         # 맡겨 둔 사용 기록을 마저 쓴다 (`usage_log.record_soon`). 오래 붙잡지는 않는다.
         usage_log.flush(timeout=2.0)

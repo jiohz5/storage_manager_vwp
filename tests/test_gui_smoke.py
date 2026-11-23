@@ -344,6 +344,7 @@ class CronStatusRefreshTests(_GuiCase):
         self._settle()
 
     def tearDown(self):
+        self.tab.shutdown()
         self.tab.close()
         super().tearDown()
 
@@ -438,6 +439,8 @@ class LargeFilesTableTests(_GuiCase):
         _app().processEvents()
 
     def tearDown(self):
+        # 타이머까지 멈춘다 - 닫기만 하면 흉내 낸 스냅샷을 쥔 채 다음 시험 중에 깨어난다.
+        self.tab.shutdown()
         self.tab.close()
         super().tearDown()
 
@@ -455,6 +458,9 @@ class LargeFilesTableTests(_GuiCase):
 
         class FakeSnapshot:
             accounts = [FakeEntry()]
+            # 닫힌 탭의 야간 스캔 타이머가 다음 시험 중에 이것을 읽는다 - 없으면 슬롯
+            # 예외로 Qt 가 프로세스째 죽었다 (거꾸로 돌릴 때 0xC0000409).
+            latest_run = None
 
         FakeEntry.current_measured_kb = measured_kb
         self.tab._scan_snapshot = FakeSnapshot()
@@ -3344,6 +3350,41 @@ class DetailDirsTabTests(_GuiCase):
         self.assertEqual(dialog.dirs_page.table.rowCount(), 1)
 
 
+class RowsAsDfEndsTests(_GuiCase):
+    """새로고침: df 가 끝난 계정 줄부터 바로 - 저장·알림·예측·홈 계산을 기다리지 않는다."""
+
+    def test_a_measured_account_shows_before_the_cycle_ends(self):
+        import time
+        from datetime import datetime, timezone
+
+        from smvwp import store
+        from smvwp.gui import widgets
+        from smvwp.gui.main_window import COL_BYTE, MainWindow
+
+        window = MainWindow(self.data_dir, self.config)
+        self.addCleanup(window.close)
+        account = self.config.accounts[0]
+        record = store.SampleRecord(
+            account_id=account.account_id, collected_at=datetime.now(timezone.utc).isoformat(),
+            ok=True, filesystem="nfs4", mount_point="/ifs/x", total_kb=1000, used_kb=730,
+            avail_kb=270, byte_pct=73.0, overall_tier="normal",
+        )
+        window._scheduler._worker.measured.emit(record)
+        deadline = time.monotonic() + 2
+        bar = None
+        while time.monotonic() < deadline:
+            _app().processEvents()
+            for row in range(window.table.rowCount()):
+                if window._account_id_at_row(row) == account.account_id:
+                    widget = window.table.cellWidget(row, COL_BYTE)
+                    if isinstance(widget, widgets.UsageBar) and widget._pct == 73.0:
+                        bar = widget
+            if bar is not None:
+                break
+        self.assertIsNotNone(bar, "df 가 끝난 계정 줄이 바뀌지 않았다")
+        self.assertIn("1/", window.status_bar_label.text())
+
+
 class OneWindowAtATimeTests(_GuiCase):
     """안내 -> 계정 상세 -> 폴더 펼쳐 보기처럼 창이 겹겹이 쌓이지 않는다."""
 
@@ -3561,6 +3602,17 @@ class PathTableTests(_GuiCase):
         by_path = {self.page.paths.path_at(row): texts[row] for row in range(len(texts))}
         self.assertEqual(by_path[str(self.file)], expected)
         self.assertEqual(by_path[str(self.root / "gone.bin")], i18n.t("paths.owner.gone"))
+
+    def test_an_owner_arriving_after_the_table_is_gone_is_dropped(self):
+        """주인을 찾는 동안 표가 지워졌다 - 늦게 온 주인이 지워진 표를 만지면 PyQt 가
+        qFatal 로 프로그램째 죽였다 (시험 전체를 돌리면 0xC0000409)."""
+
+        from PyQt5 import sip
+
+        self.show()
+        paths = self.page.paths
+        sip.delete(self.page.table)
+        paths._fill_owner(str(self.file), "someone")   # 예전: RuntimeError
 
     def test_double_click_opens_mate_terminal_in_the_files_folder(self):
         from smvwp.gui import path_actions

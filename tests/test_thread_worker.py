@@ -260,7 +260,7 @@ class CollectorDefersToOthersTests(unittest.TestCase):
         mine = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
         record = store.SampleRecord(account_id="a1", collected_at=mine, ok=True)
 
-        def cycle(data_dir, config):
+        def cycle(data_dir, config, **_kwargs):
             with store.session(data_dir) as conn:
                 store.insert_sample(conn, record)
             return [record]
