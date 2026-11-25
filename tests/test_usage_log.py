@@ -191,6 +191,44 @@ class ActionNameTests(unittest.TestCase):
         for name in names:
             self.assertRegex(name, r"^[a-z]+\.[a-z]+$")
 
+class NoteTests(unittest.TestCase):
+    """데이터 폴더를 모르는 부품(경로 표)이 남기는 길 - 창이 폴더를 정해 둔다."""
+
+    def tearDown(self):
+        usage_log.use_dir(None)
+
+    def test_without_a_folder_nothing_happens(self):
+        usage_log.use_dir(None)
+        with patch("smvwp.usage_log.record_soon") as soon:
+            usage_log.note(usage_log.LIST_VIEWED)
+        soon.assert_not_called()
+
+    def test_with_a_folder_it_is_kept(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            usage_log.use_dir(Path(tmp))
+            usage_log.note(usage_log.TERMINAL_OPENED, "large")
+            self.assertTrue(usage_log.flush(timeout=5.0))
+            with scan_store.session(Path(tmp)) as conn:
+                rows = [(r["action"], r["detail"]) for r in conn.execute(
+                    "SELECT action, detail FROM usage_events")]
+        self.assertEqual(rows, [(usage_log.TERMINAL_OPENED, "large")])
+
+    def test_a_vanished_folder_is_not_made_again(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            gone = Path(tmp) / "gone"
+            usage_log.use_dir(gone)
+            with patch("smvwp.usage_log.record_soon") as soon:
+                usage_log.note(usage_log.LIST_SAVED)
+            soon.assert_not_called()
+            self.assertFalse(gone.exists())
+
+    def test_every_new_action_has_a_name_for_the_report(self):
+        for action in (usage_log.REFRESHED, usage_log.TERMINAL_OPENED, usage_log.LIST_VIEWED,
+                       usage_log.LIST_SAVED, usage_log.OWNERS_ASKED, usage_log.ACCOUNT_VIEWED):
+            self.assertIn(action, usage_log.LABELS)
+            self.assertRegex(action, r"^[a-z]+\.[a-z]+$")
+
+
 class RecordSoonTests(unittest.TestCase):
     """화면은 기록을 맡기기만 하고 기다리지 않는다 - 쓰는 것은 뒤의 스레드다."""
 

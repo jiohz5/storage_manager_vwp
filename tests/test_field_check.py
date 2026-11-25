@@ -180,6 +180,31 @@ class SearchAndServerSampleTests(_Case):
         self.assertNotIn("very_secret_project_path", text)
 
 
+class UsageTests(_Case):
+    """무엇이 실제로 쓰이나 - 다음에 무엇을 앞으로 빼고 무엇을 접을지의 근거."""
+
+    def test_used_and_unused_features_are_in_the_report_and_summary(self):
+        from smvwp import usage_log
+
+        self.fill()
+        for action, user in ((usage_log.ACCOUNT_VIEWED, "kim"), (usage_log.ACCOUNT_VIEWED, "lee"),
+                             (usage_log.ACCOUNT_VIEWED, "kim"), (usage_log.REFRESHED, "kim")):
+            usage_log.record(self.data_dir, action, user=user)
+        text = self.build()
+        part = text.split("사용 기록 (최근")[1].split("\n== ")[0]
+        self.assertIn("쓴 사람 2명", part)
+        self.assertRegex(part, r"계정 상세\s+3번\s+2명")
+        self.assertIn("안 쓰임:", part)
+        self.assertIn("주인별 정리 부탁", part.split("안 쓰임:")[1])
+        summary = text.split("== 요약 ==")[1].split("\n== ")[0]
+        self.assertIn("사용 30일: 2명 · 많이: 계정 상세 3", summary)
+
+    def test_no_records_says_so(self):
+        self.fill()
+        summary = self.build().split("== 요약 ==")[1].split("\n== ")[0]
+        self.assertIn("사용 30일: 기록 없음", summary)
+
+
 class GuiSpeedTests(_Case):
     """창이 뜨기까지 걸린 시간과 화면이 멈춘 자리 - 창 로그에서 모아 요약에."""
 
@@ -211,10 +236,10 @@ class ProgressTests(_Case):
             text = field_check.build(self.data_dir, self.config, progress=said.append)
         starts = [line for line in said if line.endswith(" ...")]
         ends = [line for line in said if "초 (지금까지" in line]
-        self.assertEqual(len(starts), 11)
-        self.assertEqual(len(ends), 11)
-        self.assertTrue(starts[0].startswith("[ 1/11] 장비"))
-        self.assertTrue(said[-1].startswith("[11/11] 로그 - "))
+        self.assertEqual(len(starts), 12)
+        self.assertEqual(len(ends), 12)
+        self.assertTrue(starts[0].startswith("[ 1/12] 장비"))
+        self.assertTrue(said[-1].startswith("[12/12] 로그 - "))
         summary = text.split("== 요약 ==")[1].split("\n== ")[0]
         self.assertIn("점검 걸린 시간:", summary)
 
@@ -237,7 +262,7 @@ class ProgressTests(_Case):
         with patch("smvwp.field_check._home", side_effect=OSError("Stale file handle")), \
                 patch("subprocess.run", side_effect=_fake_run()):
             field_check.build(self.data_dir, self.config, progress=said.append)
-        self.assertTrue(any(line.startswith("[ 5/11] 홈 결과 파일 - ") and "(실패)" in line
+        self.assertTrue(any(line.startswith("[ 5/12] 홈 결과 파일 - ") and "(실패)" in line
                             for line in said), said)
 
     def test_a_broken_terminal_does_not_stop_the_report(self):
@@ -268,7 +293,7 @@ class CommandTests(_Case):
         self.assertIn("== 요약 ==", printed)
         self.assertIn(str(target), printed)
         self.assertNotIn("== 1.", printed)   # 화면에는 요약만
-        self.assertIn("[ 4/11] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
+        self.assertIn("[ 4/12] df 한 번 묻기", printed)   # 돌리는 동안 진행 줄
         self.assertIn("점검 끝 - ", printed)
 
     def test_falls_back_to_home_when_the_folder_is_not_writable(self):

@@ -601,6 +601,7 @@ class TreeDialog(QDialog):
         return f"smvwp_{self.account_combo.currentText()}_tree"
 
     def show_list(self):
+        usage_log.note(usage_log.LIST_VIEWED, "tree")
         if self.viewer is not None:
             self.viewer.close()
         self.viewer = path_actions.ListViewer(
@@ -610,7 +611,10 @@ class TreeDialog(QDialog):
         return self.viewer
 
     def save_list(self):
-        return path_actions.save_text(self, self.list_text(), self._file_stem())
+        target = path_actions.save_text(self, self.list_text(), self._file_stem())
+        if target is not None:
+            usage_log.note(usage_log.LIST_SAVED, "tree")
+        return target
 
     def _expand_more(self) -> None:
         """보이는 것 한 단계 더 펼치기.

@@ -1077,7 +1077,7 @@ class LargeFilesPage(QWidget):
         # 두 번 누르면 그 파일이 든 폴더에서 터미널, 주인 칸, 목록 복사·저장.
         self.paths = path_actions.PathTable(
             table, LARGE_PATH, LARGE_OWNER, title=self.caption.text,
-            file_stem=lambda: f"smvwp_{self._account_name}_large")
+            file_stem=lambda: f"smvwp_{self._account_name}_large", size_column=LARGE_SIZE)
         at = layout.indexOf(self.caption)
         layout.removeWidget(self.caption)
         layout.insertLayout(at, self.paths.bar(self.caption))
@@ -1260,7 +1260,7 @@ class LargeDirsPage(QWidget):
         self._account_name = ""
         self.paths = path_actions.PathTable(
             table, DIR_PATH, DIR_OWNER, title=self.caption.text,
-            file_stem=lambda: f"smvwp_{self._account_name}_dirs")
+            file_stem=lambda: f"smvwp_{self._account_name}_dirs", size_column=DIR_SIZE)
         at = layout.indexOf(self.caption)
         layout.removeWidget(self.caption)
         layout.insertLayout(at, self.paths.bar(self.caption))

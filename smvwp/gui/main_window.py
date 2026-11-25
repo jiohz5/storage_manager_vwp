@@ -383,6 +383,8 @@ class MainWindow(QMainWindow):
         # "사람이 이 도구를 열었다"를 여기서 남긴다. 시험이 창을 만들 때마다
         # 기록이 쌓이면 집계가 사람 것이 아니게 된다.
         usage_log.record_soon(self._data_dir, usage_log.GUI_OPENED)
+        # 경로 표처럼 데이터 폴더를 모르는 부품도 남길 수 있게.
+        usage_log.use_dir(self._data_dir)
 
         if self._config.accounts:
             return
@@ -1917,6 +1919,7 @@ class MainWindow(QMainWindow):
             self._refresh_table_from_store()
             self._scan_tab.refresh()
             return
+        usage_log.record_soon(self._data_dir, usage_log.REFRESHED)
         self.status_bar_label.setText(i18n.t("dashboard.collecting"))
         self._measured_count = 0
         self._scheduler.trigger_now()

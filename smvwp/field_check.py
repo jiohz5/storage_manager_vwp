@@ -511,6 +511,49 @@ def _server_load(report: Report, data_dir: Path, lines: List[str]) -> None:
                 f"{_ago(newest, datetime.now(timezone.utc)) if newest else '없음'}")
 
 
+USAGE_DAYS = 30
+
+
+def _usage(report: Report, data_dir: Path, lines: List[str]) -> None:
+    """무엇이 실제로 쓰이나 - 다음에 무엇을 앞으로 빼고 무엇을 접을지의 근거.
+
+    보기 전용 창(데이터 폴더에 쓸 수 없는 사람)은 기록을 남기지 못한다 - 그 사람들은
+    여기 없다."""
+
+    from . import scan_store, usage_log
+
+    since = (datetime.now(timezone.utc) - timedelta(days=USAGE_DAYS)).isoformat()
+    with read_only(scan_store.db_path(data_dir)) as conn:
+        people = conn.execute(
+            "SELECT user_name, COUNT(*) AS events, COUNT(DISTINCT substr(happened_at, 1, 10)) AS days "
+            "FROM usage_events WHERE happened_at >= ? GROUP BY user_name ORDER BY events DESC",
+            (since,)).fetchall()
+        actions = conn.execute(
+            "SELECT action, COUNT(*) AS events, COUNT(DISTINCT user_name) AS users, "
+            "MAX(happened_at) AS last FROM usage_events WHERE happened_at >= ? "
+            "GROUP BY action ORDER BY events DESC", (since,)).fetchall()
+    if not people:
+        lines.append(f"! 최근 {USAGE_DAYS}일 사용 기록 없음")
+        report.note(f"사용 {USAGE_DAYS}일: 기록 없음")
+        return
+    lines.append(f"최근 {USAGE_DAYS}일 - 쓴 사람 {len(people)}명")
+    for row in people:
+        lines.append(f"  {str(row['user_name'] or '-'):<14} {row['events']:>6,}번  {row['days']:>3}일")
+    lines.append("무엇을 (횟수 · 사람 · 마지막):")
+    used = set()
+    for row in actions:
+        used.add(row["action"])
+        label = usage_log.LABELS.get(row["action"], row["action"])
+        lines.append(f"  {label:<16} {row['events']:>6,}번  {row['users']:>3}명  {_ago(row['last'], datetime.now(timezone.utc))}")
+    unused = [label for action, label in usage_log.LABELS.items() if action not in used]
+    if unused:
+        lines.append("안 쓰임: " + ", ".join(unused))
+    top = " · ".join(f"{usage_log.LABELS.get(row['action'], row['action'])} {row['events']}"
+                     for row in actions[:4])
+    report.note(f"사용 {USAGE_DAYS}일: {len(people)}명 · 많이: {top}"
+                + (f" · 안 쓰임 {len(unused)}개" if unused else ""))
+
+
 def _inventory(report: Report, data_dir: Path, config, lines: List[str]) -> None:
     from . import data_inventory
 
@@ -657,6 +700,8 @@ def build(data_dir: Path, config, progress: Optional[Callable[[str], None]] = No
          lambda lines: _search(report, data_dir, config, lines)),
     ]) + [
         ("서버 부하 표본", lambda lines: _server_load(report, data_dir, lines)),
+        (f"사용 기록 (최근 {USAGE_DAYS}일, 무엇이 실제로 쓰이나)",
+         lambda lines: _usage(report, data_dir, lines)),
         ("데이터 폴더에 쌓인 것 (보관 기간 정하기용)",
          lambda lines: _inventory(report, data_dir, config, lines)),
         ("화면 라이브러리 (PyQt5 / PySide6)", lambda lines: _qt(report, lines)),

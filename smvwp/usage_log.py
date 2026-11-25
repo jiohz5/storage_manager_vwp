@@ -63,6 +63,36 @@ ACCOUNT_VIEWED = "account.detail"
 GUIDE_OPENED = "priority.open"
 # 데이터 폴더 창을 연 것.
 DATA_VIEWED = "data.open"
+# 새로고침(지금 수집)을 누른 것.
+REFRESHED = "collect.manual"
+# 경로 표에서 - 터미널을 연 것, 목록 보기, 파일로 저장 (detail 에 어느 표인지).
+TERMINAL_OPENED = "paths.terminal"
+LIST_VIEWED = "paths.list"
+LIST_SAVED = "paths.save"
+# 주인별 정리 부탁 목록을 만든 것 (detail 에 주인 수).
+OWNERS_ASKED = "paths.owners"
+
+# `diagnose` 가 보여 줄 이름. 여기 없는 행동도 세지만, 여기 있는데 한 번도 안 쓰인 것은
+# "안 쓰임" 으로 따로 보인다 - 화제에 오르지 않는 것이 가장 알고 싶은 것이다.
+LABELS = {
+    GUI_OPENED: "창 열기",
+    REFRESHED: "새로고침",
+    ACCOUNT_VIEWED: "계정 상세",
+    GUIDE_OPENED: "무엇부터 할까",
+    TREE_VIEWED: "폴더 펼쳐 보기",
+    TERMINAL_OPENED: "경로에서 터미널",
+    LIST_VIEWED: "목록 보기",
+    LIST_SAVED: "목록 저장",
+    OWNERS_ASKED: "주인별 정리 부탁",
+    SCAN_STARTED: "스캔 손으로 시작",
+    SCAN_STOPPED: "스캔 멈춤",
+    REPORT_VIEWED: "보고서",
+    ACCOUNTS_OPENED: "계정 관리 창",
+    ACCOUNT_CHANGED: "계정 바꿈",
+    LOAD_VIEWED: "서버 부하 창",
+    DATA_VIEWED: "데이터 폴더 창",
+    SEARCH_USED: "검색",
+}
 
 # 기록을 얼마나 보관하는가.
 #
@@ -163,6 +193,27 @@ def record_soon(
         if _writer is None or not _writer.is_alive():
             _writer = threading.Thread(target=_drain, name="smvwp-usage-log", daemon=True)
             _writer.start()
+
+
+# 데이터 폴더를 모르는 곳(경로 표 같은 작은 부품)이 남길 때 쓰는 폴더. 창이 정한다.
+_default_dir: Optional[Path] = None
+
+
+def use_dir(data_dir: Optional[Path]) -> None:
+    """`note` 가 쓸 데이터 폴더 (큰 창이 열릴 때)."""
+
+    global _default_dir
+    _default_dir = Path(data_dir) if data_dir is not None else None
+
+
+def note(action: str, detail: Optional[str] = None) -> None:
+    """`record_soon` 과 같되 폴더는 `use_dir` 로 정해 둔 것. 정한 적이 없거나 폴더가
+    없어졌으면 아무것도 안 한다 (기록은 부가 정보다)."""
+
+    target = _default_dir
+    if target is None or not target.is_dir():
+        return
+    record_soon(target, action, detail)
 
 
 def flush(timeout: float = 2.0) -> bool:

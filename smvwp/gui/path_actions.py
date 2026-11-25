@@ -90,6 +90,9 @@ def open_terminal(path: str, is_file: bool, parent=None) -> bool:
 
     터미널은 이 창과 따로 산다 (새 세션) - 창을 닫아도 터미널은 남는다."""
 
+    from .. import usage_log
+
+    usage_log.note(usage_log.TERMINAL_OPENED)
     folder = folder_for(path, is_file)
     command = terminal_command(folder)
     if command is not None:
@@ -162,10 +165,13 @@ class PathTable:
     - `bar()` 가 돌려주는 줄: 목록 복사·파일로 저장 단추와 짧은 안내."""
 
     def __init__(self, table, path_column: int, owner_column: int,
-                 title: Callable[[], str], file_stem: Callable[[], str]):
+                 title: Callable[[], str], file_stem: Callable[[], str],
+                 size_column: Optional[int] = None):
         self.table = table
         self.path_column = path_column
         self.owner_column = owner_column
+        # 크기 칸 (`widgets.NumericItem`, 값은 KB) - 있으면 '주인별 정리 부탁' 단추가 선다.
+        self.size_column = size_column
         self._title = title
         self._file_stem = file_stem
         self.owners = OwnerLookup(table)
@@ -285,16 +291,95 @@ class PathTable:
     def show_list(self) -> "ListViewer":
         """표 전체를 글로 펼친 창을 띄운다 (창을 막지 않는다 - 표를 보며 같이 쓴다)."""
 
+        from .. import usage_log
+
+        usage_log.note(usage_log.LIST_VIEWED, self._kind())
+        return self._show(self.report_text(), self._title(), self._file_stem())
+
+    def _show(self, text: str, title: str, stem: str) -> "ListViewer":
         if self.viewer is not None:
             self.viewer.close()
-        self.viewer = ListViewer(self.report_text(), self._title(), self._file_stem(),
-                                 self.table.window())
+        self.viewer = ListViewer(text, title, stem, self.table.window())
         self.viewer.show()
         self.viewer.raise_()
         return self.viewer
 
+    def _kind(self) -> str:
+        """어느 표인가 (`smvwp_<계정>_large` 의 끝) - 사용 기록에 계정 이름은 안 남긴다."""
+
+        return self._file_stem().rsplit("_", 1)[-1]
+
     def save_report(self) -> Optional[Path]:
-        return save_text(self.table, self.report_text(), self._file_stem())
+        from .. import usage_log
+
+        target = save_text(self.table, self.report_text(), self._file_stem())
+        if target is not None:
+            usage_log.note(usage_log.LIST_SAVED, self._kind())
+        return target
+
+    # -- 주인별 정리 부탁 --
+    def owner_groups(self) -> list:
+        """`[(주인, [(KB, 경로), ...]), ...]` - 합이 큰 주인부터, 주인 안은 큰 것부터.
+
+        아직 찾는 중('…')이거나 못 읽은('?') 것은 '주인 모름' 으로, 이미 없어진 것은 뺀다
+        (부탁할 것이 없다)."""
+
+        table = self.table
+        gone, unknown = i18n.t("paths.owner.gone"), i18n.t("paths.owners.unknown")
+        groups: Dict[str, list] = {}
+        for row in range(table.rowCount()):
+            path = self.path_at(row)
+            if not path:
+                continue
+            owner_item = table.item(row, self.owner_column)
+            owner = (owner_item.text() if owner_item is not None else "").strip()
+            if owner == gone:
+                continue
+            if owner in ("", "…", "?"):
+                owner = unknown
+            size_item = table.item(row, self.size_column) if self.size_column is not None else None
+            size_kb = int(getattr(size_item, "_value", None) or 0)
+            groups.setdefault(owner, []).append((size_kb, path))
+        ordered = []
+        for owner, items in groups.items():
+            items.sort(key=lambda pair: -pair[0])
+            ordered.append((owner, items))
+        # '주인 모름' 은 늘 맨 뒤 - 부탁할 사람이 아니다.
+        ordered.sort(key=lambda pair: (pair[0] == unknown, -sum(kb for kb, _ in pair[1])))
+        return ordered
+
+    def owners_text(self) -> str:
+        """주인마다 부탁 글 한 덩이 - 메신저·메일에 그 사람 몫만 떼어 붙이면 된다.
+
+        이 도구는 아무것도 지우지 않는다. 글도 '정리하거나, 필요하면 알려 달라' 는 부탁이다."""
+
+        from .. import formatting
+
+        groups = self.owner_groups()
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        total = sum(kb for _owner, items in groups for kb, _ in items)
+        count = sum(len(items) for _owner, items in groups)
+        out = [self._title(), i18n.t("paths.report.made", stamp=stamp), "",
+               i18n.t("paths.owners.head", people=len(groups), count=count,
+                      size=formatting.format_kb(total)),
+               i18n.t("paths.owners.note"), ""]
+        for owner, items in groups:
+            size = formatting.format_kb(sum(kb for kb, _ in items))
+            out.append(i18n.t("paths.owners.person", owner=owner, count=len(items), size=size))
+            out.append("  " + i18n.t("paths.owners.ask"))
+            width = max(text_width(formatting.format_kb(kb)) for kb, _ in items)
+            for kb, path in items:
+                text = formatting.format_kb(kb)
+                out.append("    " + " " * (width - text_width(text)) + text + "  " + path)
+            out.append("")
+        return "\n".join(out).rstrip() + "\n"
+
+    def show_owners(self) -> "ListViewer":
+        from .. import usage_log
+
+        usage_log.note(usage_log.OWNERS_ASKED, f"{self._kind()}:{len(self.owner_groups())}")
+        return self._show(self.owners_text(), f"{self._title()} - {i18n.t('paths.btn.owners')}",
+                          f"{self._file_stem()}_owners")
 
     def bar(self, caption: QLabel) -> QHBoxLayout:
         """설명 줄과 같은 줄에 안내와 단추 - 1080 화면에서 표 자리를 한 줄 더 먹지 않게."""
@@ -314,6 +399,12 @@ class PathTable:
         self.save_btn.clicked.connect(self.save_report)
         row.addWidget(self.view_btn)
         row.addWidget(self.save_btn)
+        self.owners_btn = None
+        if self.size_column is not None:
+            self.owners_btn = QPushButton(i18n.t("paths.btn.owners"))
+            self.owners_btn.setToolTip(i18n.t("paths.btn.owners_tip"))
+            self.owners_btn.clicked.connect(self.show_owners)
+            row.addWidget(self.owners_btn)
         return row
 
 

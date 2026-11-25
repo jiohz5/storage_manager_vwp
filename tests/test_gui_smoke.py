@@ -3350,6 +3350,19 @@ class DetailDirsTabTests(_GuiCase):
         self.assertEqual(dialog.dirs_page.table.rowCount(), 1)
 
 
+class RefreshCountedTests(_GuiCase):
+    def test_pressing_refresh_is_counted(self):
+        from smvwp import usage_log
+        from smvwp.gui.main_window import MainWindow
+
+        window = MainWindow(self.data_dir, self.config, view_only=False)
+        self.addCleanup(window.close)
+        with patch("smvwp.gui.main_window.usage_log.record_soon") as soon, \
+                patch.object(window._scheduler, "trigger_now"):
+            window._trigger_now()
+        self.assertIn(usage_log.REFRESHED, [call[0][1] for call in soon.call_args_list])
+
+
 class RowsAsDfEndsTests(_GuiCase):
     """새로고침: df 가 끝난 계정 줄부터 바로 - 저장·알림·예측·홈 계산을 기다리지 않는다."""
 
@@ -3602,6 +3615,47 @@ class PathTableTests(_GuiCase):
         by_path = {self.page.paths.path_at(row): texts[row] for row in range(len(texts))}
         self.assertEqual(by_path[str(self.file)], expected)
         self.assertEqual(by_path[str(self.root / "gone.bin")], i18n.t("paths.owner.gone"))
+
+    def _fill_owners(self, owners):
+        from smvwp.gui.scan_pages import LARGE_OWNER
+
+        table = self.page.table
+        for row in range(table.rowCount()):
+            path = self.page.paths.path_at(row)
+            table.item(row, LARGE_OWNER).setText(owners[path])
+
+    def test_owners_get_one_request_each_biggest_first(self):
+        """주인마다 부탁 한 덩이 (합계·경로), 합이 큰 사람부터, 주인 모름은 맨 뒤, 없어진 것은 뺌."""
+
+        from smvwp import formatting, i18n
+
+        i18n.set_language("ko")
+        small, unknown, gone = (str(self.root / name) for name in ("s.bin", "u.bin", "g.bin"))
+        with patch("smvwp.gui.path_actions.OwnerLookup.request"):
+            self.show((small, self.TB, self.TB), (unknown, 2 * self.TB, 2 * self.TB),
+                      (gone, 5 * self.TB, 5 * self.TB))
+        self._fill_owners({str(self.file): "kim", small: "lee", unknown: "…",
+                           gone: i18n.t("paths.owner.gone")})
+        groups = self.page.paths.owner_groups()
+        self.assertEqual([owner for owner, _ in groups], ["kim", "lee", i18n.t("paths.owners.unknown")])
+        text = self.page.paths.owners_text()
+        self.assertNotIn(gone, text)
+        self.assertIn(i18n.t("paths.owners.person", owner="kim", count=1,
+                             size=formatting.format_kb(3 * self.TB)), text)
+        self.assertLess(text.index("kim"), text.index("lee"))
+        self.assertIn(i18n.t("paths.owners.ask"), text)
+
+    def test_the_owner_button_opens_the_request_and_it_is_counted(self):
+        from smvwp import usage_log
+
+        self.show()
+        self._fill_owners({str(self.file): "kim"})
+        self.assertIsNotNone(self.page.paths.owners_btn)
+        with patch("smvwp.usage_log.note") as noted:
+            self.page.paths.owners_btn.click()
+        self.addCleanup(self.page.paths.viewer.close)
+        self.assertEqual(self.page.paths.viewer.text.toPlainText(), self.page.paths.owners_text())
+        self.assertEqual(noted.call_args[0][0], usage_log.OWNERS_ASKED)
 
     def test_an_owner_arriving_after_the_table_is_gone_is_dropped(self):
         """주인을 찾는 동안 표가 지워졌다 - 늦게 온 주인이 지워진 표를 만지면 PyQt 가
